@@ -6,7 +6,7 @@ order: 2
 
 # Installation
 
-Step-by-step setup for NexTool Q1 v1.0.2, including the parts that most often trip up a
+Step-by-step setup for NexTool Q1 v1.0.3, including the parts that most often trip up a
 fresh environment (Node version, Prisma client, ports, first boot).
 
 ## 1. System requirements
@@ -36,6 +36,7 @@ Key dependencies (see `package.json` for the full list):
 | `zustand` ^5 | Console + runtime-connection state stores. |
 | `tailwindcss` ^4, shadcn/ui (Radix) | Blue-gradient glassmorphism design system. |
 | `react-markdown` ^10 | Built-in documentation reader. |
+| `@dsnp/parquetjs` **1.8.9** (pinned) | Real Parquet dataset import/export (v1.0.3). Pure JS; do not substitute 1.9.x — newer tarballs ship without build artifacts. |
 
 ## 3. Environment file
 
@@ -55,9 +56,10 @@ bun run db:generate   # prisma generate  → node_modules/@prisma/client
 bun run db:push       # prisma db push   → creates all tables
 ```
 
-After `db:push` the SQLite file contains ten models: `Task`, `TaskEvent`, `ToolRecord`,
+After `db:push` the SQLite file contains twelve models: `Task`, `TaskEvent`, `ToolRecord`,
 `MemoryEntry`, `HistoryEntry`, `Setting`, `ModelRecord`, `DatasetRecord`,
-`NotificationRecord`, `GeneratedImage`. See [Project Structure](project-structure.md) for
+`NotificationRecord`, `GeneratedImage`, `TrainingJobRecord`, `BenchmarkRunRecord`. See
+[Project Structure](project-structure.md) for
 what each table stores.
 
 ## 5. Start the development server
@@ -75,7 +77,7 @@ bun run dev
 
 ```bash
 curl -s http://localhost:3000/api/system | head -c 300
-# {"ok":true,"data":{"appVersion":"1.0.2",...}}
+# {"ok":true,"data":{"appVersion":"1.0.3",...}}
 
 curl -s "http://localhost:3000/api/stream?since=0" --max-time 3
 # event: hello

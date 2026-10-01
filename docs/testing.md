@@ -6,18 +6,19 @@ order: 2
 
 # Testing
 
-NexTool Q1 v1.0.2 ships a focused **bun test** unit suite alongside `bun run lint`
+NexTool Q1 ships a focused **bun test** unit suite alongside `bun run lint`
 and the manual verification workflows below.
 
 ```bash
-bun test                     # runs tests/*.test.ts (24 tests / 58 assertions)
+bun test                     # runs tests/*.test.ts (36 tests / 91 assertions across 2 files)
 bun run lint                 # eslint over the repo
 bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ```
 
-## Unit suite — `tests/nextool-v102.test.ts`
+## Unit suite
 
-Pure-function coverage of the v1.0.2 core (no database required):
+Pure-function coverage (no database required): `tests/nextool-v102.test.ts` (v1.0.2
+core) and `tests/nextool-v103.test.ts` (v1.0.3 additions).
 
 | Area | What is verified |
 | --- | --- |
@@ -26,6 +27,10 @@ Pure-function coverage of the v1.0.2 core (no database required):
 | Tool params | `coerceParams` string→number / CSV→array coercion; `validateParams` required/enum/min-max errors |
 | Icon parsing | `pngDimensions` reads real IHDR width/height, rejects non-PNG and absurd sizes |
 | Status derivation | `deriveTaskRuntime` transitions (idle / running / planning / observing / terminal states, active tool tracking), `terminalStatusLine` cursor blinks **only** while a tool runs (spec §7-11), `deriveChecklist` plan + event fallback and null-percent honesty (spec §62-65) |
+| **v1.0.3 Parquet adapter** | `@dsnp/parquetjs` capability probe reports the real package; real encode/decode round-trip through the adapter; per-row validation errors (missing category/request, non-object `expectedParams` JSON, invalid split) carry the row index |
+| **v1.0.3 icon aliases** | `favicon-16x16.png`→`icon-16.png`, `favicon-32x32.png`→`icon-32.png`, `android-chrome-*`→sized icons, `apple-touch-icon-*`→`apple-touch-icon.png`; aliased content still passes real PNG dimension validation against the canonical size |
+| **v1.0.3 parallel config** | task-config and settings zod schemas accept `parallelToolCalls` / `maxParallelToolCalls` (int 1–8) |
+| **v1.0.3 checklist states** | each `PlanStep` status maps to the documented glyph state; a finishing step becomes completed dynamically (not hardcoded) |
 
 The `tests/` directory also contains shell scripts that verify the **sandbox
 infrastructure** (fake-`bun` harness around `db:push`, python-runtime
@@ -85,13 +90,14 @@ nextool benchmark -d smoke-ds -m heuristic-fallback
 nextool model export -m current -f tfjs -o ./exports/model.zip
 nextool model import ./exports/model.zip      # round-trip; real TFJS load check
 
-# parquet stays honest
-nextool dataset import data.parquet -n x -v 1.0.0
-# → error: Parquet import is not supported by the current engine (JSON only) …
+# parquet round-trip (v1.0.3 — the adapter is real)
+nextool dataset import data.parquet -n x -v 1.0.0        # binary import via @dsnp/parquetjs
+nextool dataset export x --format parquet -o ./out.parquet  # binary export (--output required)
+curl -s http://localhost:3000/api/models | grep -o '"parquet":true'
 ```
 
 Expected: a `tc-…` model registered by training, benchmark metrics over the labeled
-examples, a writable zip in `exports/`, and the explicit parquet rejection.
+examples, a writable zip in `exports/`, and a real Parquet import/export round-trip.
 
 ## Manual browser workflow (the release gate used for v1.0.x)
 
@@ -123,14 +129,15 @@ examples, a writable zip in `exports/`, and the explicit parquet rejection.
 9. **Memory / Live State** — add/delete memory entries; inject crash/degrade/recover
    and watch fleet + status pill flip.
 10. **Settings → Branding & icons** — upload an icons.zip (missing favicon.ico → explicit
-    rejection; wrong-sized `icon-192.png` → per-file reason), preview, Apply, favicon
-    swaps to the packaged one; DELETE discards a staged package.
+    rejection; wrong-sized `icon-192.png` → per-file reason; `favicon-16x16.png`-style
+    names accepted via aliases; manifest/metadata files listed as skipped), preview,
+    Apply, favicon swaps to the packaged one; DELETE discards a staged package.
 11. **Docs view** — this documentation index renders (37 pages), search filters, pages
     open.
 12. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
     connection pill reflects real SSE state when you kill the dev server mid-session.
 
-## Regression checklist (v1.0.2 focus areas)
+## Regression checklist (v1.0.2 focus areas, still valid in v1.0.3)
 
 - Dynamic runtime status: no hardcoded `nextool@runtime:~$` prompt or static "Running";
   `[running]: Tool called <tool>` cursor behavior matches actual executions.
@@ -142,12 +149,19 @@ examples, a writable zip in `exports/`, and the explicit parquet rejection.
 - Benchmark honesty: `paramAccuracy` `-`/null without `expectedParams` or for
   classifiers; suite fixed to `tool-selection`.
 - Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
-  version` all read 1.0.2; engine stays llm-core 1.0.0.
+  version` all read 1.0.3; engine stays llm-core 1.0.0.
+- Parallel batching (v1.0.3): a multi-step plan with independent steps emits
+  `planner.parallel_batch`, executions share a `batchId` (grouped card in Task Preview),
+  a failing sibling does not cancel the others (`planner.partial_failure`), and
+  `parallelToolCalls: false` runs everything sequentially.
+- Task output (v1.0.3): on a completed task the Live Checklist/Terminal area is gone and
+  the *Final task output* section shows the recorded summary + metric tiles; the plan
+  section renders as the animated checklist.
 
-## Known gaps (by design in v1.0.2)
+## Known gaps (by design)
 
-- No unit/integration tests for `loop.ts` state machines, the js-runner sandbox,
-  executor races, training/benchmark engines, or settings clamping — these are covered
+- `loop.ts` state machines, the executor race paths, training/benchmark engines and
+  settings clamping have no dedicated unit tests — these are covered
   only by the manual workflows above.
 - No CI pipeline configuration in the repo.
 - No load/soak testing tooling.

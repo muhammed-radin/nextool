@@ -13,10 +13,10 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.2** — release name: *"Runtime UX, Tool IDE, Training & Benchmarking, Model Packaging, CLI, Timeline & Final UI Refinement"* |
-| **Model version** | **llm-core 1.0.0** (unchanged in v1.0.2; the release adds tooling around it — trained classifier checkpoints carry their own versions) |
+| **Application version** | **1.0.3** — release name: *"Task Output Cleanup, Checklist State, Monaco Fix, Parquet Support, Icons & Parallel Tool Configuration"* |
+| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2/v1.0.3 add tooling around it; trained classifier checkpoints carry their own versions) |
 | **Realtime transport** | SSE (`/api/stream`) |
-| **Honest unavailability** | Parquet adapter: not installed · WebSocket transport: not installed · Training pause/resume: not supported |
+| **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
 ## All pages
 
@@ -36,7 +36,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | AI Core | [CoreModule](core-module.md) | Tool matching, extractive/constructive params, output schema, engines. |
 | AI Core | [Models](models.md) | llm-core 1.0.0, fallback engine, adapter states, trained checkpoints, export/import. |
 | AI Core | [Model Format](model-format.md) | Export layouts (tfjs zip + `.nextool` package), metadata, import compatibility checks. |
-| AI Core | [Datasets](datasets.md) | JSON import format, splits, export, versioning; parquet status. |
+| AI Core | [Datasets](datasets.md) | JSON + Parquet import/export, splits, versioning; the real Parquet adapter (`@dsnp/parquetjs`). |
 | AI Core | [Training](training.md) | The real TF.js training engine: architecture, config ranges, job lifecycle, checkpoint output, honest limits. |
 | AI Core | [Evaluation](evaluation.md) | Pre-engine evaluation notes and the manual procedure (kept for history). |
 | AI Core | [Benchmarks](benchmarks.md) | The real `tool-selection` benchmark: model keys, split preference, exact metric definitions, history. |
@@ -55,7 +55,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Frontend | [UI Design System](ui.md) | Blue-gradient glassmorphism layers, typography, do-not rules. |
 | Frontend | [Mobile & Responsive](mobile.md) | Bottom nav, safe areas, breakpoints, touch targets, priority layouts. |
 | Operations | [Deployment](deployment.md) | Env vars, standalone build/start, proxies, CLI availability, model/icon artifacts. |
-| Operations | [CLI](cli.md) | v1.0.2 `nextool` reference: train, benchmark, model, dataset, tool, runtime, version. |
+| Operations | [CLI](cli.md) | v1.0.2 `nextool` reference: train, benchmark, model, dataset (JSON + Parquet), tool, runtime, version. |
 | Operations | [Testing](testing.md) | Manual verification workflows + lint; no automated suite (stated). |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
@@ -63,34 +63,58 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
 
-## What's new in v1.0.2
+## What's new in v1.0.3
 
-- **Tool IDE + `js-function` tools** — author a JavaScript tool in the console (Monaco,
-  schema-driven IntelliSense, References pane), test it against the real `node:vm`
-  sandbox, and save it into the live registry (create/edit/rename/duplicate/delete).
-  Sandbox exposes only `params`, `context`, a capped `console` and ES builtins — no
-  `require`/`process`/`fetch`/timers, honestly documented. See
-  [Tool Development](tool-development.md).
-- **Real training** — TensorFlow.js is installed (`@tensorflow/tfjs` 4.22.0, CPU
-  backend). `nextool train` / the Training view run a real hashed bag-of-words → dense
-  softmax classifier per dataset and register a runnable `tfjs-trained-classifier`
-  checkpoint with per-epoch metrics, logs and cancellation. No pause — stated. See
-  [Training](training.md).
-- **Real benchmarking** — the `tool-selection` suite runs the actual decision unit
-  (llm-core, heuristic-fallback or a trained classifier) per labeled example and
-  persists metrics + per-case results. See [Benchmarks](benchmarks.md).
-- **Model packaging** — export trained checkpoints as native tfjs zips or `.nextool`
-  packages; import with a genuine TFJS load-validation (25 MiB cap, traversal-safe).
-  See [Model Format](model-format.md).
+- **Real Parquet interchange** — the Parquet adapter is installed (`@dsnp/parquetjs`
+  **1.8.9**, pinned — see [Datasets](datasets.md)). `POST /api/datasets/import` accepts
+  multipart `.parquet` uploads, `GET /api/datasets/{id}/export?format=parquet` returns a
+  binary download, the CLI reads/writes `.parquet`, and `/api/models` now reports
+  `adapters.parquet: true`. Columnar Parquet is the efficient interchange format for
+  larger datasets; JSON stays the human-readable default.
+- **Parallel tool calls configuration** — new explicit `parallelToolCalls` (default on)
+  and `maxParallelToolCalls` (1–8, default 4) settings, overridable per task. The goal
+  loop batches ≥ 2 consecutive independent action steps (same `parallelGroup`) and
+  executes them concurrently via `executeParallelBatch` — capped waves, one sibling
+  failing never cancels the others, `planner.parallel_batch` / `planner.partial_failure`
+  events, and batch provenance on executions ("parallel batch" group cards in Task
+  Preview). See [Configuration](configuration.md), [Planner](planner.md),
+  [Tool Runtime](tool-runtime.md).
+- **Task output cleanup** — the Live Checklist/Terminal area in Task Preview exists only
+  while the task is active; on a terminal state it is removed entirely and replaced by a
+  **Final task output** section (runtime-recorded summary, result status/steps/tool
+  calls/duration tiles, artifacts, full FinalResult JSON). The mobile Timeline terminal
+  hides after completion too. See [Frontend](frontend.md).
+- **Plan is a live checklist** — the Task Preview plan section uses the same
+  `deriveChecklist` states and animated `ChecklistItems` as the Live checklist
+  (`[✓] [-] [ ] [!] [~]`), and plan/checklist refresh immediately when tool/task events
+  arrive over SSE (no waiting for the 2.5 s poll).
+- **Tool IDE Monaco fix** — the Function editor gets definite heights at every
+  breakpoint (420 px mobile/tablet; `lg` fills the available viewport with a 480 px
+  floor) — it no longer collapses to ~1 px on mobile.
+- **Icons: favicon-generator aliases** — the icons ZIP upload also accepts common
+  favicon-generator filenames (`favicon-16x16.png` → `icon-16.png`, `android-chrome-*`,
+  `apple-touch-icon-*.png`, …); `site.webmanifest`/`manifest.json`/`browserconfig.xml`
+  entries are skipped and returned in a new `ignored` list instead of rejected. Real PNG
+  dimension validation and the staged → preview → activate flow are unchanged
+  (see [Deployment](deployment.md) and [API](api.md)).
+
+### What v1.0.2 delivered (condensed)
+
+- **Tool IDE + `js-function` tools** — Monaco authoring, schema-driven IntelliSense,
+  real `node:vm` sandbox test runs, full registry CRUD (see
+  [Tool Development](tool-development.md)).
+- **Real training & benchmarking** — `@tensorflow/tfjs` 4.22.0 installed: hashed
+  bag-of-words → dense softmax classifier per dataset, per-epoch metrics/logs,
+  cancellation; the `tool-selection` benchmark runs the actual decision unit per labeled
+  example (see [Training](training.md) / [Benchmarks](benchmarks.md)).
+- **Model packaging** — export native tfjs zips or `.nextool` packages; import with real
+  TFJS load-validation (see [Model Format](model-format.md)).
 - **CLI** — `nextool train / benchmark / model / dataset / tool / runtime / version`,
-  sharing the exact service layer with the web console. See [CLI](cli.md).
-- **Runtime UX** — dynamic terminal status derived from the real event stream
-  (`[running]: Tool called …`, no hardcoded prompt), Live Mode checklist/timeline with
-  honest progress, *Preview as Terminal* toggle, one consistent JSON tree viewer,
-  global overflow/blank-space cleanup.
-- **Branding & icons** — upload an icons.zip in Settings; real validation (favicon.ico
-  required, PNG IHDR dimension checks, size caps), staged → preview → Apply, served
-  from `public/icons/<packageId>/` via `generateMetadata`.
+  sharing the service layer with the console (see [CLI](cli.md)).
+- **Runtime UX** — event-derived terminal status, animated checklist/timeline,
+  *Preview as Terminal* toggle, one consistent JSON tree viewer.
+- **Branding & icons** — icons.zip upload with real PNG validation, staged → preview →
+  Apply, served via `generateMetadata`.
 
 ### Carried over from v1.0.1
 

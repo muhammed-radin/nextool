@@ -65,6 +65,8 @@ actual call sites.
 | --- | --- | --- | --- |
 | `planner.plan` | 5 | Plan stored on the task. | `{ goal, steps: PlanStep[] }` |
 | `planner.plan_built` | 6 | Plan produced (LLM or deterministic fallback; message includes engine + ms). | `{ goal, steps }` |
+| `planner.parallel_batch` | 5 | v1.0.3: ≥ 2 independent same-group steps announced for concurrent execution (`"N independent tool call(s) detected — executing concurrently (cap M)"`). | `{ batchId, parallelGroup, tools, maxParallelToolCalls }` |
+| `planner.partial_failure` | 4 | v1.0.3: some but not all calls of a parallel batch failed — independent survivors continued. | `{ batchId }` |
 | `planner.retry` | 4 | Tool failed; one retry with error-as-observation. | `{ tool, error }` |
 | `subgoal.created` | 5 / 3 | Dynamic subgoal (5), recovery or feedback-revised subgoal (3). | `{ subgoal: Subgoal }` |
 
@@ -89,7 +91,7 @@ actual call sites.
 
 | Type | Pri | Purpose | data |
 | --- | --- | --- | --- |
-| `tool.started` | 6 | Execution begins. | `{ executionId, tool, params }` |
+| `tool.started` | 6 | Execution begins. Inside a parallel batch the message carries a `(parallel batch)` suffix. | `{ executionId, tool, params }` + `batchId`/`parallelGroup` when batched (v1.0.3) |
 | `tool.completed` | 6 | Execution finished OK. | full ToolExecution |
 | `tool.failed` | 5 | Execution failed (unknown tool, invalid params, handler error). | full ToolExecution |
 | `tool.timeout` | 4 | Execution exceeded timeout. | full ToolExecution |

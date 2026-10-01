@@ -293,6 +293,8 @@ export interface IconUploadResult {
   manifest: BrandingManifest;
   accepted: { file: string; width: number | null; height: number | null; bytes: number }[];
   rejected: { file: string; reason: string }[];
+  /** v1.0.3: well-known non-icon entries that were intentionally skipped. */
+  ignored?: { file: string; reason: string }[];
 }
 
 export const activateIconPackage = (packageId: string) =>
@@ -351,8 +353,35 @@ export const listDatasets = () => apiFetch<DatasetInfo[]>('/api/datasets');
 export const importDataset = (payload: DatasetImportPayload) =>
   apiFetch<DatasetInfo>('/api/datasets/import', body(payload));
 
-export const exportDatasetUrl = (id: string) =>
-  `/api/datasets/${encodeURIComponent(id)}/export?format=json`;
+/**
+ * v1.0.3 — multipart dataset import (.parquet or .json file upload).
+ * The .parquet path is decoded by the REAL Parquet adapter server-side.
+ */
+export const importDatasetFile = async (
+  file: File,
+  meta: { name?: string; version?: string; note?: string } = {},
+) => {
+  const form = new FormData();
+  form.set('file', file);
+  if (meta.name) form.set('name', meta.name);
+  if (meta.version) form.set('version', meta.version);
+  if (meta.note) form.set('note', meta.note);
+  let res: Response;
+  try {
+    res = await fetch('/api/datasets/import', { method: 'POST', body: form });
+  } catch {
+    throw new ApiClientError('Network unreachable — runtime may be offline', 'network_error', 0);
+  }
+  const json = (await res.json().catch(() => null)) as ApiEnvelope<DatasetInfo> | null;
+  if (!res.ok || !json || json.ok !== true) {
+    const err = json && 'error' in json ? json.error : undefined;
+    throw new ApiClientError(err?.message ?? `Import rejected (HTTP ${res.status})`, err?.code ?? 'http_error', res.status);
+  }
+  return json.data;
+};
+
+export const exportDatasetUrl = (id: string, format: 'json' | 'parquet' = 'json') =>
+  `/api/datasets/${encodeURIComponent(id)}/export?format=${format}`;
 
 export interface DatasetExport {
   dataset: DatasetInfo;

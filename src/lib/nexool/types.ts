@@ -64,6 +64,10 @@ export interface ToolExecution {
   startedAt: string;
   completedAt?: string;
   durationMs?: number;
+  /** v1.0.3: set when this call ran inside a parallel batch (Task Preview groups these). */
+  batchId?: string;
+  /** v1.0.3: planner parallelGroup the call belonged to. */
+  parallelGroup?: number;
 }
 
 // ---------- CoreModule ----------
@@ -146,6 +150,11 @@ export interface TaskConfig {
   taskTimeoutMs?: number; // default 120000
   toolTimeoutMs?: number; // default 30000
   liveIntervalMs?: number; // live mode scheduled tick interval, default 60000
+  /** v1.0.3: explicit parallel tool execution policy (default true — independent
+   *  plan steps sharing a parallelGroup may execute concurrently). */
+  parallelToolCalls?: boolean;
+  /** v1.0.3: hard cap on concurrently executing tool calls (default 4, max 8). */
+  maxParallelToolCalls?: number;
   sessionId?: string;
   context?: Record<string, unknown>;
 }
@@ -367,6 +376,10 @@ export interface NexToolSettings {
   toolTimeoutMs: number;
   liveIntervalMs: number;
   useMemory: boolean;
+  /** v1.0.3: runtime default for the explicit parallel tool call policy. */
+  parallelToolCalls: boolean;
+  /** v1.0.3: runtime default cap for concurrently executing tool calls. */
+  maxParallelToolCalls: number;
   logLevel: 'info' | 'debug' | 'error';
   realTimeTransport: 'sse'; // websocket adapter not installed in this environment (honest state)
 }

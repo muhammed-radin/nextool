@@ -50,6 +50,8 @@ export const taskConfigSchema = z
     taskTimeoutMs: z.number().int().min(5_000).max(3_600_000),
     toolTimeoutMs: z.number().int().min(1_000).max(300_000),
     liveIntervalMs: z.number().int().min(1_000).max(3_600_000),
+    parallelToolCalls: z.boolean().optional(),
+    maxParallelToolCalls: z.number().int().min(1).max(8).optional(),
     sessionId: z.string().trim().max(200).optional(),
     context: jsonObject.optional(),
   })
@@ -210,6 +212,8 @@ export const settingsSchema = z
     toolTimeoutMs: z.number().int().min(1_000).max(300_000),
     liveIntervalMs: z.number().int().min(1_000).max(3_600_000),
     useMemory: z.boolean(),
+    parallelToolCalls: z.boolean(),
+    maxParallelToolCalls: z.number().int().min(1).max(8),
     logLevel: z.enum(['info', 'debug', 'error']),
     realTimeTransport: z.literal('sse'),
   })

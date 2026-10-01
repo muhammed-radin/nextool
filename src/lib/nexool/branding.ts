@@ -46,6 +46,39 @@ export interface IconUploadResult {
   manifest: BrandingManifest;
   accepted: IconAsset[];
   rejected: { file: string; reason: string }[];
+  /** v1.0.3: well-known non-icon entries that were intentionally skipped (not an error). */
+  ignored: { file: string; reason: string }[];
+}
+
+/**
+ * v1.0.3 — common favicon-generator filenames mapped onto the canonical
+ * icon-<size>.png names, so a standard favicon.io / realfavicongenerator ZIP
+ * uploads without renaming. The alias is applied AFTER real PNG dimension
+ * validation against the canonical size (content must still match).
+ */
+const NAME_ALIASES: [RegExp, string][] = [
+  [/^favicon-16x16\.png$/i, 'icon-16.png'],
+  [/^favicon-32x32\.png$/i, 'icon-32.png'],
+  [/^android-chrome-192x192\.png$/i, 'icon-192.png'],
+  [/^android-chrome-512x512\.png$/i, 'icon-512.png'],
+  [/^apple-touch-icon.*\.png$/i, 'apple-touch-icon.png'],
+  [/^apple-touch-icon-precomposed\.png$/i, 'apple-touch-icon.png'],
+];
+
+/** Well-known non-icon metadata files that are skipped instead of rejected. */
+const IGNORED_ENTRIES = new Set(['site.webmanifest', 'manifest.json', 'browserconfig.xml']);
+
+/**
+ * v1.0.3 — testable pure helper: map a favicon-generator filename onto its
+ * canonical icon name (icon-<size>.png / apple-touch-icon.png). Non-aliased
+ * names pass through unchanged.
+ */
+export function canonicalIconName(baseName: string): string {
+  const lower = baseName.toLowerCase();
+  for (const [pattern, target] of NAME_ALIASES) {
+    if (pattern.test(lower)) return target;
+  }
+  return baseName;
 }
 
 /**
@@ -71,6 +104,7 @@ export async function stageIconPackage(zipBytes: Uint8Array): Promise<IconUpload
   const packageId = `icons-${Date.now().toString(36)}`;
   const accepted: IconAsset[] = [];
   const rejected: { file: string; reason: string }[] = [];
+  const ignored: { file: string; reason: string }[] = [];
   let totalBytes = 0;
 
   const expectedIconSizes = [16, 32, 48, 72, 96, 128, 144, 152, 192, 384, 512];
@@ -82,6 +116,13 @@ export async function stageIconPackage(zipBytes: Uint8Array): Promise<IconUpload
       continue;
     }
     const lower = baseName.toLowerCase();
+    // v1.0.3: well-known metadata files are skipped, not rejected.
+    if (IGNORED_ENTRIES.has(lower) || lower.endsWith('.webmanifest') || lower.endsWith('.xml')) {
+      ignored.push({ file: entryName, reason: 'Manifest/metadata entry — not an icon; skipped.' });
+      continue;
+    }
+    // v1.0.3: canonicalize common generator names (favicon-32x32.png → icon-32.png …).
+    const canonical = canonicalIconName(baseName);
     const isPng = lower.endsWith('.png');
     const isIco = lower.endsWith('.ico');
     if (!isPng && !isIco) {
@@ -105,25 +146,34 @@ export async function stageIconPackage(zipBytes: Uint8Array): Promise<IconUpload
         rejected.push({ file: entryName, reason: 'Not a valid PNG (missing/corrupt IHDR header).' });
         continue;
       }
-      // Recognized naming: icon-<size>.png or apple-touch-icon.png
-      const sizeMatch = /^icon-(\d{2,3})\.png$/i.exec(lower);
+      // Recognized naming: icon-<size>.png or apple-touch-icon.png (aliases
+      // above were canonicalized first, so content is validated against the
+      // CANONICAL declared size).
+      const sizeMatch = /^icon-(\d{2,3})\.png$/i.exec(canonical.toLowerCase());
       if (sizeMatch) {
         const declared = Number(sizeMatch[1]);
         if (dims.width !== declared || dims.height !== declared) {
-          rejected.push({ file: entryName, reason: `icon-${declared}.png must be exactly ${declared}x${declared}px (found ${dims.width}x${dims.height}).` });
+          rejected.push({ file: entryName, reason: `maps to icon-${declared}.png but must be exactly ${declared}x${declared}px (found ${dims.width}x${dims.height}).` });
           continue;
         }
         if (!expectedIconSizes.includes(declared)) {
           rejected.push({ file: entryName, reason: `Unexpected icon size ${declared}px — allowed: ${expectedIconSizes.join(', ')}.` });
           continue;
         }
-      } else if (lower !== 'apple-touch-icon.png') {
+      } else if (canonical.toLowerCase() !== 'apple-touch-icon.png') {
         rejected.push({ file: entryName, reason: 'PNG must be named icon-<size>.png (e.g. icon-192.png) or apple-touch-icon.png.' });
         continue;
       }
     }
 
-    accepted.push({ file: baseName, width: dims?.width ?? null, height: dims?.height ?? null, bytes: bytes.byteLength });
+    // v1.0.3: two source files can map to the same canonical name (e.g.
+    // apple-touch-icon.png + apple-touch-icon-180x180.png) — keep the first.
+    if (accepted.some((a) => a.file === canonical)) {
+      ignored.push({ file: entryName, reason: `duplicate of ${canonical} — skipped.` });
+      continue;
+    }
+
+    accepted.push({ file: canonical, width: dims?.width ?? null, height: dims?.height ?? null, bytes: bytes.byteLength });
   }
 
   const hasFavicon = accepted.some((a) => a.file.toLowerCase() === 'favicon.ico');
@@ -142,7 +192,12 @@ export async function stageIconPackage(zipBytes: Uint8Array): Promise<IconUpload
   const dir = path.join(ICONS_ROOT, packageId);
   await mkdir(dir, { recursive: true });
   for (const asset of accepted) {
-    const entry = Object.entries(entries).find(([n]) => (n.split('/').pop() ?? n) === asset.file);
+    // accepted[].file is the CANONICAL name; find the original entry it came from.
+    const entry = Object.entries(entries).find(([n]) => (n.split('/').pop() ?? n) === asset.file)
+      ?? Object.entries(entries).find(([n]) => {
+        const orig = (n.split('/').pop() ?? n).toLowerCase();
+        return NAME_ALIASES.some(([p, t]) => t.toLowerCase() === asset.file.toLowerCase() && p.test(orig));
+      });
     if (entry) await writeFile(path.join(dir, asset.file), entry[1]);
   }
 
@@ -163,7 +218,7 @@ export async function stageIconPackage(zipBytes: Uint8Array): Promise<IconUpload
     create: { key: BRAND_KEY, value: JSON.stringify({ ...manifest, packageId }) },
   });
 
-  return { packageId, manifest, accepted, rejected };
+  return { packageId, manifest, accepted, rejected, ignored };
 }
 
 /** Activate the staged package (used by generateMetadata). */

@@ -128,6 +128,9 @@ model HistoryEntry {
   result    String? // JSON
   status    String // completed | failed | timeout | cancelled
   timestamp DateTime @default(now())
+  // v1.0.3 — parallel execution provenance (null for sequential calls)
+  batchId       String?
+  parallelGroup Int?
 
   @@index([taskId, timestamp])
 }

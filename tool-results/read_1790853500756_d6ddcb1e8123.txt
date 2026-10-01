@@ -1,0 +1,633 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * NexTool v1.0.2 — Tool IDE (spec §13-31).
+     5→ *
+     6→ * Developer-grade editor for js-function tools:
+     7→ *  - Monaco Editor (JS) with schema-driven IntelliSense (params.<name>),
+     8→ *    runtime reference IntelliSense, error markers, minimap, find/replace.
+     9→ *  - Structured layout: header (name · save · test · actions) + left column
+    10→ *    (Settings / Schema / References / Metadata) + right column (Monaco).
+    11→ *    Mobile: tabbed Details / Schema / Function / References / Test (§80).
+    12→ *  - Save validates schema + syntax server-side and updates the REAL registry.
+    13→ *  - Test executes the actual function in the controlled sandbox and shows
+    14→ *    status, duration, result (JSON tree), error and logs.
+    15→ */
+    16→
+    17→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    18→import dynamic from 'next/dynamic';
+    19→import { toast } from 'sonner';
+    20→import { Badge } from '@/components/ui/badge';
+    21→import { Button } from '@/components/ui/button';
+    22→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+    23→import { Input } from '@/components/ui/input';
+    24→import { Label } from '@/components/ui/label';
+    25→import { Skeleton } from '@/components/ui/skeleton';
+    26→import { Switch } from '@/components/ui/switch';
+    27→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+    28→import { Textarea } from '@/components/ui/textarea';
+    29→import { cn } from '@/lib/utils';
+    30→import { JsonTree } from '../json-tree';
+    31→import {
+    32→  ApiClientError, deleteTool, registerJsTool, testTool, updateTool,
+    33→} from '@/lib/nexool/client';
+    34→import type { ToolEntry } from '@/lib/nexool/api-contract';
+    35→import type { ToolParamDef, ToolSchema } from '@/lib/nexool/types';
+    36→import { buildToolExtraLib, getReferenceEntries } from '@/lib/nexool/tool-runtime-declarations';
+    37→import { ErrorCard, SectionTitle, TechLabel, fmtMs, statusTone } from '../ui-bits';
+    38→import {
+    39→  AlertTriangle, Braces, Copy, FileCode2, Loader2, Play, Save, Trash2, Wrench,
+    40→} from 'lucide-react';
+    41→
+    42→// Monaco is client-only + heavy — load it lazily with a glass skeleton.
+    43→const MonacoEditor = dynamic(() => import('@monaco-editor/react').then((m) => m.default), {
+    44→  ssr: false,
+    45→  loading: () => <Skeleton className="h-full min-h-[260px] w-full rounded-md" />,
+    46→});
+    47→import type { Monaco, BeforeMount, OnMount } from '@monaco-editor/react';
+    48→
+    49→const DEFAULT_SOURCE = `async function execute(params, context) {
+    50→  context.log('tool invoked', params);
+    51→
+    52→  // Tool implementation — sandbox exposes only documented runtime references.
+    53→  // ES builtins (JSON, Math, Date, Array...) are available.
+    54→
+    55→  return {
+    56→    success: true,
+    57→    result: { echoed: params },
+    58→  };
+    59→}
+    60→`;
+    61→
+    62→interface ToolTestState {
+    63→  running: boolean;
+    64→  status?: string;
+    65→  durationMs?: number;
+    66→  result?: unknown;
+    67→  error?: { code: string; message: string } | null;
+    68→  logs?: string[];
+    69→  paramsEcho?: Record<string, unknown>;
+    70→}
+    71→
+    72→interface ToolEditorProps {
+    73→  /** Existing tool name when editing; null for a new tool. */
+    74→  toolName: string | null;
+    75→  /** Full registry entry (loaded by the parent before opening the editor). */
+    76→  initial: ToolEntry | null;
+    77→  onSaved: (tool: ToolEntry) => void;
+    78→  onDeleted: (name: string) => void;
+    79→  onClose: () => void;
+    80→}
+    81→
+    82→export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, onClose }: ToolEditorProps) {
+    83→  const isNew = toolName === null;
+    84→
+    85→  const [name, setName] = useState(initial?.name ?? '');
+    86→  const [description, setDescription] = useState(initial?.description ?? '');
+    87→  const [purpose, setPurpose] = useState(initial?.purpose ?? '');
+    88→  const [category, setCategory] = useState(initial?.category ?? 'utility');
+    89→  const [toolVersion, setToolVersion] = useState(initial?.toolVersion ?? '1.0.0');
+    90→  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+    91→  const [source, setSource] = useState(initial?.functionSource ?? DEFAULT_SOURCE);
+    92→  const [schemaText, setSchemaText] = useState(() => JSON.stringify(schemaToEditable(initial?.schema) ?? emptySchema(), null, 2));
+    93→  const [schemaError, setSchemaError] = useState<string | null>(null);
+    94→
+    95→  const [saving, setSaving] = useState(false);
+    96→  const [dirty, setDirty] = useState(false);
+    97→  const [test, setTest] = useState<ToolTestState | null>(null);
+    98→  const [testParams, setTestParams] = useState('{}');
+    99→  const [deleteOpen, setDeleteOpen] = useState(false);
+   100→  const monacoInstanceRef = useRef<Monaco | null>(null);
+   101→
+   102→  const parsedSchema = useMemo<ToolSchema | null>(() => parseSchemaText(schemaText).schema, [schemaText]);
+   103→
+   104→  const markDirty = () => setDirty(true);
+   105→
+   106→  // ---- schema parsing / validation (v1.0.2 §23/§24) ----
+   107→
+   108→  useEffect(() => {
+   109→    const parsed = parseSchemaText(schemaText);
+   110→    setSchemaError(parsed.error);
+   111→  }, [schemaText]);
+   112→
+   113→  const save = async () => {
+   114→    if (!/^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*$/.test(name.trim())) {
+   115→      toast.error('Invalid tool name', { description: 'Use namespace.action, e.g. utility.summarize' });
+   116→      return;
+   117→    }
+   118→    const parsed = parseSchemaText(schemaText);
+   119→    if (parsed.error || !parsed.schema) {
+   120→      toast.error('Schema is invalid', { description: parsed.error ?? 'Fix the schema before saving.' });
+   121→      return;
+   122→    }
+   123→    setSaving(true);
+   124→    try {
+   125→      if (isNew) {
+   126→        const entry = await registerJsTool({
+   127→          name: name.trim(),
+   128→          description: description.trim() || undefined,
+   129→          purpose: purpose.trim() || undefined,
+   130→          category: category.trim() || 'utility',
+   131→          toolVersion: toolVersion.trim() || undefined,
+   132→          schema: parsed.schema,
+   133→          functionSource: source,
+   134→          enabled,
+   135→        });
+   136→        toast.success('Tool registered', { description: `${entry.name} is now available to the CoreModule.` });
+   137→        setDirty(false);
+   138→        onSaved(entry);
+   139→      } else if (toolName) {
+   140→        const entry = await updateTool(toolName, {
+   141→          renameTo: name.trim() !== toolName ? name.trim() : undefined,
+   142→          description: description.trim() || undefined,
+   143→          purpose: purpose.trim() || undefined,
+   144→          category: category.trim() || 'utility',
+   145→          toolVersion: toolVersion.trim() || undefined,
+   146→          schema: parsed.schema,
+   147→          functionSource: source,
+   148→          enabled,
+   149→        });
+   150→        toast.success('Tool updated', { description: `${entry.name} saved to the registry.` });
+   151→        setDirty(false);
+   152→        onSaved(entry);
+   153→      }
+   154→    } catch (e) {
+   155→      toast.error(isNew ? 'Registration rejected' : 'Save failed', {
+   156→        description: e instanceof ApiClientError ? e.message : 'Unknown error',
+   157→      });
+   158→    } finally {
+   159→      setSaving(false);
+   160→    }
+   161→  };
+   162→
+   163→  const runTest = async () => {
+   164→    let params: Record<string, unknown>;
+   165→    try {
+   166→      params = JSON.parse(testParams || '{}');
+   167→    } catch {
+   168→      toast.error('Test params must be valid JSON');
+   169→      return;
+   170→    }
+   171→    setTest({ running: true });
+   172→    try {
+   173→      // Unsaved changes are tested against the CURRENT editor source (§27/§29:
+   174→      // a real sandboxed execution — never a mock result).
+   175→      const result = await testTool({ functionSource: source, params });
+   176→      setTest({
+   177→        running: false,
+   178→        status: result.status,
+   179→        durationMs: result.durationMs,
+   180→        result: result.result,
+   181→        error: result.error,
+   182→        logs: result.logs,
+   183→        paramsEcho: params,
+   184→      });
+   185→    } catch (e) {
+   186→      setTest({ running: false, status: 'failed', error: { code: 'REQUEST_FAILED', message: e instanceof ApiClientError ? e.message : 'Test request failed' } });
+   187→    }
+   188→  };
+   189→
+   190→  const doDelete = async () => {
+   191→    if (!toolName) return;
+   192→    try {
+   193→      await deleteTool(toolName);
+   194→      toast.success('Tool deleted', { description: `${toolName} removed from the registry.` });
+   195→      onDeleted(toolName);
+   196→    } catch (e) {
+   197→      toast.error('Delete failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   198→    } finally {
+   199→      setDeleteOpen(false);
+   200→    }
+   201→  };
+   202→
+   203→  const duplicateTool = async () => {
+   204→    const base = name.trim().replace(/^([a-z0-9-]+)\..*$/, '$1') || 'custom';
+   205→    setName(`${base}.copy`);
+   206→    setDirty(true);
+   207→    toast.info('Renamed for duplicate', { description: 'Adjust the name, then Save to register the copy.' });
+   208→  };
+   209→
+   210→  // ---- Monaco setup (schema-driven IntelliSense, §18-21) ----
+   211→
+   212→  const extraLib = useMemo(() => buildToolExtraLib(parsedSchema), [parsedSchema]);
+   213→
+   214→  const onEditorMount = useCallback<BeforeMount>((monaco: Monaco) => {
+   215→    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+   216→      noSemanticValidation: false,
+   217→      noSyntaxValidation: false,
+   218→    });
+   219→    monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
+   220→      target: monaco.languages.typescript.ScriptTarget.ES2020,
+   221→      allowNonTsExtensions: true,
+   222→      checkJs: false,
+   223→      lib: ['es2020'],
+   224→    });
+   225→    monaco.languages.typescript.javascriptDefaults.addExtraLib(extraLib, 'nextool-runtime.d.ts');
+   226→
+   227→    // NexTool dark-glass editor theme (consistent with the visual system §18).
+   228→    monaco.editor.defineTheme('nextool-dark', {
+   229→      base: 'vs-dark',
+   230→      inherit: true,
+   231→      rules: [
+   232→        { token: 'comment', foreground: '64748b', fontStyle: 'italic' },
+   233→        { token: 'keyword', foreground: '7dd3fc' },
+   234→        { token: 'string', foreground: '86efac' },
+   235→        { token: 'number', foreground: 'fbbf24' },
+   236→        { token: 'type', foreground: '67e8f9' },
+   237→        { token: 'delimiter', foreground: '94a3b8' },
+   238→      ],
+   239→      colors: {
+   240→        'editor.background': '#0a1120',
+   241→        'editorGutter.background': '#0a1120',
+   242→        'editor.lineHighlightBackground': '#13203655',
+   243→        'editorLineNumber.foreground': '#3b4a63',
+   244→        'editorLineNumber.activeForeground': '#7dd3fc',
+   245→        'editorCursor.foreground': '#38bdf8',
+   246→        'editorIndentGuide.background1': '#1c2942',
+   247→        'editorWidget.background': '#0d1526',
+   248→        'editorSuggestWidget.background': '#0d1526',
+   249→        'editorSuggestWidget.selectedBackground': '#16233d',
+   250→        'scrollbarSlider.background': '#24355266',
+   251→      },
+   252→    });
+   253→    monaco.editor.setTheme('nextool-dark');
+   254→  }, [extraLib]);
+   255→
+   256→  const onRuntimeMount = useCallback<OnMount>((_editor, monaco: Monaco) => {
+   257→    monacoInstanceRef.current = monaco;
+   258→    monaco.languages.typescript.javascriptDefaults.addExtraLib(extraLib, 'nextool-runtime.d.ts');
+   259→  }, [extraLib]);
+   260→
+   261→  // Re-apply extraLib when the schema changes (schema-driven IntelliSense §20).
+   262→  useEffect(() => {
+   263→    const monaco = monacoInstanceRef.current;
+   264→    if (!monaco?.languages?.typescript?.javascriptDefaults) return;
+   265→    monaco.languages.typescript.javascriptDefaults.addExtraLib(extraLib, 'nextool-runtime.d.ts');
+   266→  }, [extraLib]);
+   267→
+   268→  const references = useMemo(() => getReferenceEntries(parsedSchema), [parsedSchema]);
+   269→
+   270→  const inputCls = 'min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm';
+   271→
+   272→  // ---- layout: header + (desktop split | mobile tabs) ----
+   273→
+   274→  const settingsPanel = (
+   275→    <div className="space-y-3">
+   276→      <div className="space-y-1.5">
+   277→        <Label htmlFor="tool-name">Tool name <span className="text-muted-foreground">(namespace.action)</span> <span className="text-rose-400">*</span></Label>
+   278→        <Input id="tool-name" value={name} onChange={(e) => { setName(e.target.value); markDirty(); }} placeholder="utility.summarize" className={inputCls} />
+   279→      </div>
+   280→      <div className="space-y-1.5">
+   281→        <Label htmlFor="tool-desc">Description</Label>
+   282→        <Input id="tool-desc" value={description} onChange={(e) => { setDescription(e.target.value); markDirty(); }} className={inputCls} />
+   283→      </div>
+   284→      <div className="space-y-1.5">
+   285→        <Label htmlFor="tool-purpose">Purpose <span className="text-muted-foreground">(guides CoreModule matching)</span></Label>
+   286→        <Input id="tool-purpose" value={purpose} onChange={(e) => { setPurpose(e.target.value); markDirty(); }} className={inputCls} />
+   287→      </div>
+   288→      <div className="grid grid-cols-2 gap-3">
+   289→        <div className="space-y-1.5">
+   290→          <Label htmlFor="tool-cat">Category</Label>
+   291→          <Input id="tool-cat" value={category} onChange={(e) => { setCategory(e.target.value); markDirty(); }} className={inputCls} />
+   292→        </div>
+   293→        <div className="space-y-1.5">
+   294→          <Label htmlFor="tool-ver">Version</Label>
+   295→          <Input id="tool-ver" value={toolVersion} onChange={(e) => { setToolVersion(e.target.value); markDirty(); }} className={inputCls} />
+   296→        </div>
+   297→      </div>
+   298→      <div className="flex items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+   299→        <div className="min-w-0">
+   300→          <Label htmlFor="tool-enabled" className="text-sm">Enabled</Label>
+   301→          <p className="text-[11px] text-muted-foreground">Disabled tools are hidden from the CoreModule</p>
+   302→        </div>
+   303→        <Switch id="tool-enabled" checked={enabled} onCheckedChange={(v) => { setEnabled(v); markDirty(); }} aria-label="Tool enabled" />
+   304→      </div>
+   305→      {!isNew && toolName ? (
+   306→        <p className="font-mono text-[10px] text-muted-foreground">
+   307→          registered as <span className="text-sky-300">{toolName}</span> · {initial?.stats.callCount ?? 0} calls
+   308→        </p>
+   309→      ) : null}
+   310→    </div>
+   311→  );
+   312→
+   313→  const schemaPanel = (
+   314→    <div className="space-y-2">
+   315→      <div className="flex items-center justify-between gap-2">
+   316→        <Label htmlFor="tool-schema">Input schema (ToolParamDef[] JSON)</Label>
+   317→        {schemaError === null ? (
+   318→          <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 font-mono text-[10px] text-emerald-300">valid</Badge>
+   319→        ) : (
+   320→          <Badge variant="outline" className="border-rose-400/40 bg-rose-400/10 font-mono text-[10px] text-rose-300">invalid</Badge>
+   321→        )}
+   322→      </div>
+   323→      <Textarea
+   324→        id="tool-schema"
+   325→        value={schemaText}
+   326→        onChange={(e) => { setSchemaText(e.target.value); markDirty(); }}
+   327→        rows={10}
+   328→        className={cn('border-white/[0.09] bg-white/[0.04] font-mono text-xs', schemaError && 'border-rose-400/40')}
+   329→        aria-invalid={!!schemaError}
+   330→      />
+   331→      {schemaError ? (
+   332→        <p role="alert" className="rounded-md border border-rose-400/30 bg-rose-400/5 px-2.5 py-1.5 font-mono text-[11px] text-rose-300">
+   333→          {schemaError}
+   334→        </p>
+   335→      ) : (
+   336→        <SchemaTable schema={parsedSchema} />
+   337→      )}
+   338→      <p className="text-[11px] text-muted-foreground">
+   339→        Schema drives CoreModule parameter generation AND the editor&apos;s IntelliSense.
+   340→      </p>
+   341→    </div>
+   342→  );
+   343→
+   344→  const referencesPanel = (
+   345→    <div className="space-y-2">
+   346→      <TechLabel>runtime references — the real sandbox API</TechLabel>
+   347→      <div className="space-y-1.5">
+   348→        {references.map((r) => (
+   349→          <div key={r.name} className="glass-card rounded-md px-3 py-2">
+   350→            <p className="break-words font-mono text-xs text-sky-200">{r.name} <span className="text-cyan-300/70">: {r.type}</span></p>
+   351→            <p className="mt-0.5 break-words text-[11px] text-muted-foreground">{r.description}</p>
+   352→          </div>
+   353→        ))}
+   354→      </div>
+   355→      <p className="text-[11px] text-muted-foreground">
+   356→        The sandbox exposes ONLY these references — no require/process/fetch/timers.
+   357→        See docs/tool-development.md for the full guide.
+   358→      </p>
+   359→    </div>
+   360→  );
+   361→
+   362→  const metadataPanel = (
+   363→    <div className="space-y-2 text-[11px] text-muted-foreground">
+   364→      <TechLabel>metadata</TechLabel>
+   365→      <p>environment: <span className="font-mono text-foreground/90">js-function</span></p>
+   366→      <p>execution: sandboxed node:vm · sync 4s cap · async 10s cap · result ≤ 64 KiB</p>
+   367→      <p>production runs record stats to the registry; test runs do not.</p>
+   368→      {!isNew && initial ? (
+   369→        <p className="break-words">stats: {initial.stats.callCount} calls · {initial.stats.successCount} ok · {initial.stats.failureCount + initial.stats.timeoutCount} fail · avg {fmtMs(initial.stats.avgMs)}</p>
+   370→      ) : null}
+   371→    </div>
+   372→  );
+   373→
+   374→  const testPanel = (
+   375→    <div className="space-y-3">
+   376→      <div className="space-y-1.5">
+   377→        <Label htmlFor="test-params">Input parameters (JSON)</Label>
+   378→        <Textarea id="test-params" value={testParams} onChange={(e) => setTestParams(e.target.value)} rows={5} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" />
+   379→      </div>
+   380→      <div className="flex flex-wrap items-center gap-2">
+   381→        <Button className="min-h-11 flex-1 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90 sm:flex-none" onClick={() => void runTest()} disabled={test?.running}>
+   382→          {test?.running ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Play className="size-4" aria-hidden />} Test Tool
+   383→        </Button>
+   384→        <p className="text-[11px] text-muted-foreground">
+   385→          Runs the current editor source in the sandbox with <span className="font-mono text-foreground/80">mode:&quot;test&quot;</span>.
+   386→        </p>
+   387→      </div>
+   388→
+   389→      {test && !test.running ? (
+   390→        <div className="space-y-2" data-testid="tool-test-result">
+   391→          <div className="flex flex-wrap items-center gap-2">
+   392→            <Badge variant="outline" className={cn('font-mono text-[11px]', statusTone(test.status) === 'ok' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' : statusTone(test.status) === 'err' ? 'border-rose-400/30 bg-rose-400/10 text-rose-300' : 'border-white/[0.09] text-muted-foreground')}>
+   393→              {test.status}
+   394→            </Badge>
+   395→            {test.durationMs !== undefined ? <span className="font-mono text-xs text-muted-foreground">{fmtMs(test.durationMs)}</span> : null}
+   396→            <span className="font-mono text-[10px] text-slate-500">mode: test (no production side effects from sandbox tools)</span>
+   397→          </div>
+   398→          {test.error ? (
+   399→            <p role="alert" className="break-words rounded-md border border-rose-400/30 bg-rose-400/5 px-3 py-2 font-mono text-xs text-rose-300">
+   400→              {test.error.code}: {test.error.message}
+   401→            </p>
+   402→          ) : null}
+   403→          {test.logs && test.logs.length > 0 ? (
+   404→            <div className="glass-inset nextool-scroll max-h-32 overflow-y-auto rounded-md p-2.5">
+   405→              {test.logs.map((line, i) => (
+   406→                <p key={i} className="break-words font-mono text-[11px] leading-relaxed text-sky-100/70">{line}</p>
+   407→              ))}
+   408→            </div>
+   409→          ) : null}
+   410→          <div>
+   411→            <p className="mb-1"><TechLabel className="text-[9px]">result</TechLabel></p>
+   412→            <JsonTree value={test.result ?? null} maxHeight={280} />
+   413→          </div>
+   414→        </div>
+   415→      ) : null}
+   416→    </div>
+   417→  );
+   418→
+   419→  const editorPanel = (
+   420→    <div className="flex min-h-[320px] flex-col overflow-hidden rounded-md border border-white/[0.09] lg:h-[560px]" data-testid="monaco-editor">
+   421→      <MonacoEditor
+   422→        height="100%"
+   423→        defaultLanguage="javascript"
+   424→        language="javascript"
+   425→        value={source}
+   426→        theme="nextool-dark"
+   427→        onChange={(v) => { setSource(v ?? ''); markDirty(); }}
+   428→        beforeMount={onEditorMount}
+   429→        onMount={onRuntimeMount}
+   430→        options={{
+   431→          minimap: { enabled: true, scale: 1 },
+   432→          fontSize: 13,
+   433→          lineNumbers: 'on',
+   434→          folding: true,
+   435→          formatOnPaste: true,
+   436→          automaticLayout: true,
+   437→          scrollBeyondLastLine: false,
+   438→          tabSize: 2,
+   439→          wordWrap: 'on',
+   440→          renderWhitespace: 'selection',
+   441→        }}
+   442→      />
+   443→    </div>
+   444→  );
+   445→
+   446→  return (
+   447→    <div className="space-y-4">
+   448→      {/* Header — name / save / test / actions (§15) */}
+   449→      <div className="glass-panel flex flex-col gap-3 rounded-lg p-4 md:flex-row md:items-center md:justify-between">
+   450→        <div className="flex min-w-0 items-center gap-3">
+   451→          <span className="bg-primary-gradient-soft glow-blue flex size-10 shrink-0 items-center justify-center rounded-lg ring-1 ring-sky-400/25">
+   452→            <Wrench className="size-5 text-sky-300" aria-hidden />
+   453→          </span>
+   454→          <div className="min-w-0">
+   455→            <h2 className="truncate text-sm font-semibold text-foreground">
+   456→              {isNew ? 'New Tool' : `Edit ${toolName}`}
+   457→            </h2>
+   458→            <p className="text-xs text-muted-foreground">Tool IDE — sandboxed JavaScript function editor</p>
+   459→          </div>
+   460→          {dirty ? (
+   461→            <Badge variant="outline" className="ml-1 shrink-0 border-amber-400/30 bg-amber-400/10 font-mono text-[10px] text-amber-300">unsaved</Badge>
+   462→          ) : null}
+   463→        </div>
+   464→        <div className="flex flex-wrap items-center gap-2">
+   465→          {!isNew ? (
+   466→            <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" onClick={duplicateTool}>
+   467→              <Copy className="size-3.5" aria-hidden /> Duplicate
+   468→            </Button>
+   469→          ) : null}
+   470→          <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" onClick={() => void runTest()} disabled={test?.running}>
+   471→            {test?.running ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Play className="size-3.5" aria-hidden />} Test
+   472→          </Button>
+   473→          {!isNew ? (
+   474→            <Button variant="outline" size="sm" className="min-h-9 border-rose-500/40 text-rose-300 hover:bg-rose-500/10" onClick={() => setDeleteOpen(true)}>
+   475→              <Trash2 className="size-3.5" aria-hidden /> Delete
+   476→            </Button>
+   477→          ) : null}
+   478→          <Button size="sm" className="min-h-9 gap-1.5 bg-primary-gradient text-primary-foreground hover:opacity-90" onClick={() => void save()} disabled={saving || (schemaError !== null)}>
+   479→            {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Save className="size-3.5" aria-hidden />} Save
+   480→          </Button>
+   481→          <Button variant="ghost" size="sm" className="min-h-9 text-muted-foreground" onClick={onClose}>Close</Button>
+   482→        </div>
+   483→      </div>
+   484→
+   485→      {/* Mobile: stacked tabs (§80) */}
+   486→      <div className="lg:hidden">
+   487→        <Tabs defaultValue="function" className="gap-3">
+   488→          <TabsList className="glass-card nextool-scroll h-auto w-full justify-start gap-1 overflow-x-auto rounded-lg p-1" aria-label="Tool editor sections">
+   489→            {([
+   490→              ['details', 'Details'],
+   491→              ['schema', 'Schema'],
+   492→              ['function', 'Function'],
+   493→              ['references', 'References'],
+   494→              ['test', 'Test'],
+   495→            ] as const).map(([v, label]) => (
+   496→              <TabsTrigger key={v} value={v} className="flex-none min-h-9 px-3 text-xs data-[state=active]:bg-primary-gradient-soft data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-sky-400/25 dark:data-[state=active]:text-sky-100">
+   497→                {label}
+   498→              </TabsTrigger>
+   499→            ))}
+   500→          </TabsList>
+   501→          <TabsContent value="details" className="mt-3 space-y-4 outline-none">
+   502→            <section className="glass-panel rounded-lg p-4">{settingsPanel}</section>
+   503→            <section className="glass-panel rounded-lg p-4">{metadataPanel}</section>
+   504→          </TabsContent>
+   505→          <TabsContent value="schema" className="mt-3 outline-none">
+   506→            <section className="glass-panel rounded-lg p-4">{schemaPanel}</section>
+   507→          </TabsContent>
+   508→          <TabsContent value="function" className="mt-3 outline-none">
+   509→            {editorPanel}
+   510→          </TabsContent>
+   511→          <TabsContent value="references" className="mt-3 outline-none">
+   512→            <section className="glass-panel rounded-lg p-4">{referencesPanel}</section>
+   513→          </TabsContent>
+   514→          <TabsContent value="test" className="mt-3 outline-none">
+   515→            <section className="glass-panel rounded-lg p-4">{testPanel}</section>
+   516→          </TabsContent>
+   517→        </Tabs>
+   518→      </div>
+   519→
+   520→      {/* Desktop split layout (§15) */}
+   521→      <div className="hidden gap-4 lg:grid lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+   522→        <div className="space-y-4">
+   523→          <section className="glass-panel rounded-lg p-4">{settingsPanel}</section>
+   524→          <section className="glass-panel rounded-lg p-4">{schemaPanel}</section>
+   525→          <section className="glass-panel rounded-lg p-4">{metadataPanel}</section>
+   526→          <section className="glass-panel rounded-lg p-4">{referencesPanel}</section>
+   527→        </div>
+   528→        <div className="space-y-4">
+   529→          <section className="glass-panel rounded-lg p-4">
+   530→            <SectionTitle icon={<FileCode2 className="size-4 text-sky-300" aria-hidden />} title="Function" desc="async function execute(params, context) — IntelliSense comes from your schema." />
+   531→            <div className="mt-3">{editorPanel}</div>
+   532→          </section>
+   533→          <section className="glass-panel rounded-lg p-4">
+   534→            <SectionTitle icon={<Braces className="size-4 text-sky-300" aria-hidden />} title="Test Tool" desc="Real sandboxed execution of the current source." />
+   535→            <div className="mt-3">{testPanel}</div>
+   536→          </section>
+   537→        </div>
+   538→      </div>
+   539→
+   540→      {/* Delete confirm */}
+   541→      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+   542→        <DialogContent className="glass-strong sm:max-w-md">
+   543→          <DialogHeader>
+   544→            <DialogTitle className="flex items-center gap-2 text-rose-300"><AlertTriangle className="size-4" aria-hidden /> Delete {toolName}?</DialogTitle>
+   545→            <DialogDescription>
+   546→              The tool is removed from the registry and stops being available to the CoreModule. This cannot be undone.
+   547→            </DialogDescription>
+   548→          </DialogHeader>
+   549→          <DialogFooter>
+   550→            <Button variant="outline" className="min-h-11" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+   551→            <Button variant="destructive" className="min-h-11" onClick={() => void doDelete()}>Delete tool</Button>
+   552→          </DialogFooter>
+   553→        </DialogContent>
+   554→      </Dialog>
+   555→    </div>
+   556→  );
+   557→}
+   558→
+   559→// ---------- helpers ----------
+   560→
+   561→function emptySchema(): ToolSchema {
+   562→  return { type: 'object', properties: [] };
+   563→}
+   564→
+   565→function schemaToEditable(schema: ToolSchema | undefined): ToolSchema | null {
+   566→  if (!schema) return null;
+   567→  return { type: 'object', properties: schema.properties ?? [] };
+   568→}
+   569→
+   570→function parseSchemaText(text: string): { schema: ToolSchema | null; error: string | null } {
+   571→  if (!text.trim()) return { schema: emptySchema(), error: null };
+   572→  let parsed: unknown;
+   573→  try {
+   574→    parsed = JSON.parse(text);
+   575→  } catch (err) {
+   576→    return { schema: null, error: `Invalid JSON — ${err instanceof Error ? err.message : 'parse error'}` };
+   577→  }
+   578→  const body = Array.isArray(parsed) ? { type: 'object', properties: parsed } : parsed;
+   579→  const obj = body as { type?: string; properties?: unknown };
+   580→  if (obj.type !== 'object') return { schema: null, error: 'schema.type must be "object".' };
+   581→  if (!Array.isArray(obj.properties)) return { schema: null, error: 'schema.properties must be an array of param definitions.' };
+   582→  const props: ToolParamDef[] = [];
+   583→  for (const raw of obj.properties) {
+   584→    const p = raw as Partial<ToolParamDef> & Record<string, unknown>;
+   585→    if (!p || typeof p.name !== 'string' || !p.name.trim()) return { schema: null, error: 'Every param needs a "name".' };
+   586→    if (!['string', 'number', 'boolean', 'object', 'array'].includes(String(p.type))) {
+   587→      return { schema: null, error: `Param ${p.name}: unsupported type "${String(p.type)}" (string|number|boolean|object|array).` };
+   588→    }
+   589→    if (p.enumValues && !Array.isArray(p.enumValues)) return { schema: null, error: `Param ${p.name}: enumValues must be an array.` };
+   590→    props.push({
+   591→      name: p.name.trim(),
+   592→      type: p.type as ToolParamDef['type'],
+   593→      required: !!p.required,
+   594→      description: typeof p.description === 'string' ? p.description : '',
+   595→      generation: p.generation as ToolParamDef['generation'],
+   596→      enumValues: p.enumValues as string[] | undefined,
+   597→      min: typeof p.min === 'number' ? p.min : undefined,
+   598→      max: typeof p.max === 'number' ? p.max : undefined,
+   599→      default: p.default,
+   600→    });
+   601→  }
+   602→  return { schema: { type: 'object', properties: props }, error: null };
+   603→}
+   604→
+   605→function SchemaTable({ schema }: { schema: ToolSchema | null }) {
+   606→  const props = schema?.properties ?? [];
+   607→  if (props.length === 0) return <p className="text-[11px] text-muted-foreground">No parameters defined.</p>;
+   608→  return (
+   609→    <div className="nextool-scroll overflow-x-auto rounded-md border border-white/[0.07]">
+   610→      <table className="w-full min-w-[280px] text-left text-[11px]">
+   611→        <thead>
+   612→          <tr className="text-muted-foreground">
+   613→            <th className="px-2 py-1.5 font-medium">name</th>
+   614→            <th className="px-2 py-1.5 font-medium">type</th>
+   615→            <th className="px-2 py-1.5 font-medium">req</th>
+   616→            <th className="px-2 py-1.5 font-medium">notes</th>
+   617→          </tr>
+   618→        </thead>
+   619→        <tbody className="font-mono">
+   620→          {props.map((p) => (
+   621→            <tr key={p.name} className="border-t border-white/[0.06] align-top">
+   622→              <td className="px-2 py-1.5 text-foreground/90">{p.name}</td>
+   623→              <td className="px-2 py-1.5 text-cyan-300/90">{p.type}</td>
+   624→              <td className="px-2 py-1.5">{p.required ? <span className="text-rose-400">*</span> : '—'}</td>
+   625→              <td className="px-2 py-1.5 text-muted-foreground">{p.enumValues?.length ? `enum: ${p.enumValues.join(' | ')}` : p.description || '—'}</td>
+   626→            </tr>
+   627→          ))}
+   628→        </tbody>
+   629→      </table>
+   630→    </div>
+   631→  );
+   632→}
+   633→

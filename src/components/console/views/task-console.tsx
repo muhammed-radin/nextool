@@ -7,7 +7,7 @@
  * controls, wrapping quick-fill chips, prominent full-width submit on mobile).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,10 +20,11 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useConsoleStore } from '../console-store';
-import { ApiClientError, createTask, listTools } from '@/lib/nexool/client';
+import { ApiClientError, createTask, listTasks, listTools } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
-import { EmptyState, ErrorCard, SectionTitle, TechLabel } from '../ui-bits';
-import { AlertTriangle, ChevronDown, Loader2, Send, Sparkles, TerminalSquare, Wrench } from 'lucide-react';
+import type { TaskSummary } from '@/lib/nexool/types';
+import { EmptyState, ErrorCard, SectionTitle, StatusChip, TechLabel, TimeAgo } from '../ui-bits';
+import { AlertTriangle, ChevronDown, Loader2, Send, Sparkles, TerminalSquare, Wrench, Zap } from 'lucide-react';
 
 const REASONING_CAPTIONS: Record<number, string> = {
   1: 'ultra-fast — minimal deliberation',
@@ -48,7 +49,10 @@ const DEFAULTS = {
   taskTimeoutMs: 120000,
   toolTimeoutMs: 30000,
   liveIntervalMs: 60000,
+  maxParallelToolCalls: 4,
 };
+
+const MAX_PARALLEL_CAP = 8;
 
 export default function TaskConsoleView() {
   const openTaskPreview = useConsoleStore((s) => s.openTaskPreview);
@@ -59,6 +63,10 @@ export default function TaskConsoleView() {
   const [liveConfirmed, setLiveConfirmed] = useState(false);
   const [reasoningLevel, setReasoningLevel] = useState(3);
   const [useMemory, setUseMemory] = useState(true);
+  // v1.0.3 §18/§24: explicit parallel tool call policy for THIS task (the
+  // runtime default lives in Settings; this toggle is passed through to the
+  // execution engine and actually changes runtime behavior).
+  const [parallelToolCalls, setParallelToolCalls] = useState(true);
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [limits, setLimits] = useState({ ...DEFAULTS });
   const [tools, setTools] = useState<ToolEntry[] | null>(null);
@@ -66,6 +74,10 @@ export default function TaskConsoleView() {
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [validation, setValidation] = useState<string | null>(null);
+  // v1.0.3 §26-29: the Tasks page ends naturally with REAL content — recent
+  // tasks (click → preview) or a meaningful empty state instead of blank space.
+  const [recentTasks, setRecentTasks] = useState<TaskSummary[] | null>(null);
+  const [recentError, setRecentError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -76,6 +88,20 @@ export default function TaskConsoleView() {
       alive = false;
     };
   }, []);
+
+  const loadRecent = useCallback(async () => {
+    try {
+      const data = await listTasks({ limit: 8 });
+      setRecentTasks(data);
+      setRecentError(null);
+    } catch (e) {
+      setRecentError(e instanceof ApiClientError ? e.message : 'Task history unavailable');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRecent();
+  }, [loadRecent]);
 
   const toolGroups = useMemo(() => {
     const groups = new Map<string, ToolEntry[]>();
@@ -110,6 +136,9 @@ export default function TaskConsoleView() {
     for (const [k, v] of Object.entries(limits)) {
       if (!Number.isFinite(v) || v <= 0) return `${k} must be a positive number.`;
     }
+    if (parallelToolCalls && (limits.maxParallelToolCalls < 1 || limits.maxParallelToolCalls > MAX_PARALLEL_CAP)) {
+      return `maxParallelToolCalls must be between 1 and ${MAX_PARALLEL_CAP}.`;
+    }
     return null;
   };
 
@@ -136,6 +165,10 @@ export default function TaskConsoleView() {
           maxIterations: limits.maxIterations,
           taskTimeoutMs: limits.taskTimeoutMs,
           toolTimeoutMs: limits.toolTimeoutMs,
+          // v1.0.3 §25: parallel policy travels inside the task config object
+          // and is applied by the execution engine for this task.
+          parallelToolCalls,
+          maxParallelToolCalls: parallelToolCalls ? limits.maxParallelToolCalls : 1,
           ...(mode === 'live' ? { liveIntervalMs: limits.liveIntervalMs } : {}),
         },
       });
@@ -145,6 +178,7 @@ export default function TaskConsoleView() {
       setName('');
       setMode('goal');
       setLiveConfirmed(false);
+      void loadRecent();
     } catch (e) {
       const msg = e instanceof ApiClientError ? e.message : 'Task submission failed';
       toast.error('Task submission failed', { description: msg });
@@ -267,12 +301,24 @@ export default function TaskConsoleView() {
           </div>
         </div>
 
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 py-2.5">
+          <div className="min-w-0">
+            <Label htmlFor="task-parallel" className="flex items-center gap-1.5 text-sm">
+              <Zap className="size-3.5 text-sky-300" aria-hidden /> Parallel tool calls
+            </Label>
+            <p className="text-[11px] text-muted-foreground">
+              Independent plan steps may execute concurrently — dependent steps always stay sequential.
+            </p>
+          </div>
+          <Switch id="task-parallel" checked={parallelToolCalls} onCheckedChange={setParallelToolCalls} aria-label="Parallel tool calls" />
+        </div>
+
         {/* Execution limits */}
         <Collapsible open={limitsOpen} onOpenChange={setLimitsOpen}>
           <CollapsibleTrigger className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 text-left text-sm text-foreground/90 hover:bg-white/[0.06]">
             <span>Execution limits</span>
             <span className="flex items-center gap-2">
-              <span className="hidden text-[11px] text-muted-foreground sm:inline">defaults: 20 subtools · 100 safety · 30 iters</span>
+              <span className="hidden text-[11px] text-muted-foreground sm:inline">defaults: 20 subtools · 100 safety · 30 iters{parallelToolCalls ? ` · ${limits.maxParallelToolCalls || DEFAULTS.maxParallelToolCalls} parallel` : ''}</span>
               <ChevronDown className={cn('size-4 text-sky-300/70 transition-transform', limitsOpen && 'rotate-180')} aria-hidden />
             </span>
           </CollapsibleTrigger>
@@ -284,6 +330,7 @@ export default function TaskConsoleView() {
                 ['maxIterations', 'Max iterations', DEFAULTS.maxIterations],
                 ['taskTimeoutMs', 'Task timeout (ms)', DEFAULTS.taskTimeoutMs],
                 ['toolTimeoutMs', 'Tool timeout (ms)', DEFAULTS.toolTimeoutMs],
+                ...(parallelToolCalls ? ([['maxParallelToolCalls', 'Max parallel calls', DEFAULTS.maxParallelToolCalls]] as const) : []),
                 ...(mode === 'live' ? ([['liveIntervalMs', 'Live tick interval (ms)', DEFAULTS.liveIntervalMs]] as const) : []),
               ] as [keyof typeof DEFAULTS, string, number][]).map(([key, label, def]) => (
                 <div key={key} className="space-y-1">
@@ -386,6 +433,54 @@ export default function TaskConsoleView() {
           </Button>
         </div>
       </form>
+
+      {/* v1.0.3 §26-29 — Recent tasks: the page ends naturally with REAL
+          execution history (no reserved blank area below the form). Zero
+          tasks → a meaningful empty state pointing at the actual action. */}
+      <section aria-label="Recent tasks" className="space-y-3" data-testid="recent-tasks">
+        <SectionTitle
+          icon={<TerminalSquare className="size-4 text-sky-300" aria-hidden />}
+          title="Recent tasks"
+          desc="Latest executions — click a task to open its live preview."
+        />
+        {recentError ? (
+          <ErrorCard title="Task history unavailable" message={recentError} onRetry={() => void loadRecent()} />
+        ) : recentTasks === null ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+          </div>
+        ) : recentTasks.length === 0 ? (
+          <EmptyState
+            icon={<TerminalSquare className="size-6" aria-hidden />}
+            title="No tasks yet"
+            hint="Create your first NexTool task with the form above to see execution history here."
+          />
+        ) : (
+          <div className="glass-panel rounded-lg p-2">
+            <ul className="space-y-1">
+              {recentTasks.map((t) => (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    onClick={() => openTaskPreview(t.id)}
+                    className="glass-card glass-card-hover flex w-full items-center gap-3 rounded-md px-3 py-2 text-left outline-ring/50 focus-visible:ring-2"
+                    aria-label={`Open task ${t.name || t.request}`}
+                  >
+                    <StatusChip status={t.status} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs text-foreground/90">{t.name || t.request}</span>
+                      <span className="block truncate font-mono text-[10px] text-muted-foreground">
+                        {t.mode} · L{t.reasoningLevel} · {t.steps} steps · {t.toolCalls} tools
+                      </span>
+                    </span>
+                    <TimeAgo iso={t.createdAt} className="shrink-0 font-mono text-[10px] text-muted-foreground" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -38,12 +38,12 @@ nextool-q1/
 
 | Path | Purpose |
 | --- | --- |
-| `package.json` | `nextool-q1` v1.0.2. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (new in v1.0.2), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view`, `commander` (CLI), `fflate` (zip packaging). |
-| `next.config.ts` | `output: "standalone"` (production server bundle), `reactStrictMode: false`, `typescript.ignoreBuildErrors: true`. |
+| `package.json` | `nextool-q1` v1.0.3. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (v1.0.2), `@dsnp/parquetjs` **1.8.9 pinned** (v1.0.3 Parquet adapter), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view`, `commander` (CLI), `fflate` (zip packaging). |
+| `next.config.ts` | `output: "standalone"` (production server bundle), `reactStrictMode: false`, `typescript.ignoreBuildErrors: true`, `serverExternalPackages: ["@dsnp/parquetjs"]` (v1.0.3 — the Parquet adapter is required from node_modules at runtime, not bundled). |
 | `tsconfig.json` | Standard Next.js TS config with `@/*` path alias → `src/*`. |
 | `.env` | Only `DATABASE_URL`. Never committed, values never documented. |
 | `Caddyfile` | Sandbox infrastructure (local reverse proxy) — not part of the application. |
-| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions. |
+| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions, v1.0.3 updates. |
 | `scripts/nextool.ts` | The CLI (`nextool train / benchmark / model / dataset / tool / runtime / version`). Directly imports the same service modules the API routes use. |
 | `tests/*.sh` | Sandbox-infrastructure verification scripts (e.g. a fake-bun harness for `db:push`); they test the hosting environment, not the application. No `*.test.ts` files exist. |
 
@@ -59,7 +59,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `TrainingJobRecord` | v1.0.2 training jobs: dataset lineage, status, config, per-epoch metrics + logs, finalMetrics, modelRecordId | `training/engine.ts` |
 | `BenchmarkRunRecord` | v1.0.2 benchmark runs: modelKey, dataset lineage, metrics, per-case results, durationMs | `training/benchmark.ts` |
 | `MemoryEntry` | persistent memory: unique key, JSON value, tags, source | `memory.store` tool, feedback loop, `/api/memory` |
-| `HistoryEntry` | one row per tool execution (params/result JSON, status) | `tools/executor.ts` |
+| `HistoryEntry` | one row per tool execution (params/result JSON, status; v1.0.3 `batchId` + `parallelGroup` for parallel-batch provenance) | `tools/executor.ts` |
 | `Setting` | global settings JSON under key `nextool`; branding manifest under `branding.icons` | `settings.ts`, `branding.ts` |
 | `ModelRecord` | registered model packages (manifests, trained checkpoints, imports) | `training/engine.ts`, `/api/models/load`, `/api/models/import` |
 | `DatasetRecord` | imported datasets: split sizes, examples JSON, categories | `/api/datasets/import` |
@@ -72,7 +72,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | --- | --- | --- |
 | `types.ts` | All domain types: ToolDefinition, CoreModuleOutput, MainState, TaskConfig, NexToolEvent, GlobalLiveState, ContextComposition, SystemStats, ApiEnvelope… | (binding contract) |
 | `api-contract.ts` | REST contract comment + DTOs (`TaskDetail`, `ToolEntry`, `MemoryEntryDTO`…) | `types.ts` |
-| `version.ts` | `APP_VERSION` 1.0.2, `RELEASE_NAME`, `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0, SSE constants | everything reads this |
+| `version.ts` | `APP_VERSION` 1.0.3, `RELEASE_NAME`, `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0, SSE constants | everything reads this |
 | `eventbus.ts` | Global event manager: `emitEvent`, `subscribe`, `recentEvents`, `queryEvents`, SSE controller registry, runtime metrics (`coreCalls`, latency series) | db, types |
 | `settings.ts` | `DEFAULT_SETTINGS`, cached `getSettings`, clamping `updateSettings` | db |
 | `schemas.ts` | zod schemas for every mutating endpoint (tasks, tools incl. `registerJsToolSchema`/`updateToolSchema`/`testToolSchema`, training, benchmark, memory, datasets, settings) | zod |
@@ -91,7 +91,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `core/heuristic.ts` | Deterministic fallback matcher: token overlap scoring (threshold 0.18), typo normalization, naive param extraction | types |
 | `tools/registry.ts` | `BUILTIN_TOOLS` (15 definitions), DB seeding, handler resolution, dynamic + js-function registration (`registerJsTool`, `updateTool`, `deleteTool`), stats | db, tools/* |
 | `tools/js-runner.ts` | v1.0.2 `node:vm` sandbox for `js-function` tools: compile/validate, 4 s sync + 10 s async caps, serializable-result enforcement (64 KiB / depth 12), capped log capture | node:vm |
-| `tools/executor.ts` | Tool runtime: param coercion/validation, timeout + abort race, stats, history, events; `executeToolsParallel` | registry, handler |
+| `tools/executor.ts` | Tool runtime: param coercion/validation, timeout + abort race, stats, history, events; `executeToolsParallel`; v1.0.3 `executeParallelBatch` (capped waves, batch provenance) | registry, handler |
 | `tools/handler.ts` | `ToolHandler` type, `HandlerContext`, `ToolFailure` error class | types |
 | `tools/builtin.ts` | Real handlers: system.info, math.evaluate (safe parser), text.analyze, time.now, uuid.generate, echo.echo, delay.wait | node:os, node:crypto |
 | `tools/virtual.ts` | server.list / server.health / server.restart / service.restart against the virtual fleet | environment |
@@ -101,6 +101,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `training/engine.ts` | v1.0.2 REAL TF.js trainer: hashed bag-of-words vectorization, dense classifier, per-epoch persistence, checkpoint registration | @tensorflow/tfjs, db |
 | `training/benchmark.ts` | v1.0.2 REAL benchmark engine: runs llm-core / heuristic-fallback / a trained classifier per example, computes metrics, persists per-case results | @tensorflow/tfjs, core, db |
 | `training/model-package.ts` | v1.0.2 packaging: export tfjs zip / `.nextool` package, import + TFJS load-validation, 25 MiB cap, traversal-safe unzip | fflate, @tensorflow/tfjs, db |
+| `datasets/parquet.ts` | v1.0.3 Parquet dataset adapter: `encodeParquetDataset` / `decodeParquetDataset` (one flat row per example, per-row validation with row index), `parquetAdapterInfo()` honest capability probe (cached once per process) | @dsnp/parquetjs 1.8.9 |
 | `stream/sse.ts` | `buildEventStream` — hello frame, replay from in-memory recent events, live push, 15 s keepalive | eventbus |
 
 ## src/app — routes

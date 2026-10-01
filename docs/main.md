@@ -66,11 +66,12 @@ Every iteration of the goal loop:
 
 1. Checks stop flag → `taskTimeoutMs` → `maxIterations` / `safetyLimit`.
 2. Picks an objective: the active subgoal, else the first pending plan step (plus its
-   parallel-group siblings).
+   consecutive same-`parallelGroup` siblings).
 3. If the plan is exhausted and no subgoal is active, asks the LLM for the next dynamic
    subgoal (`proposeNextSubgoal`, 10 s timeout); if none is needed the task completes.
-4. Executes — parallel group (≥ 2 consecutive pending action steps with the same
-   `parallelGroup`, capped by `maxSubtoolCalls`, all decisions must yield `tool_call`) or
+4. Executes — parallel batch (≥ 2 consecutive pending action steps with the same
+   `parallelGroup`, gated by `parallelToolCalls`, capped by `maxParallelToolCalls` 1–8,
+   dispatched through `executeParallelBatch`; all decisions must yield `tool_call`) or
    sequential `decideAndExecute`.
 5. Handles the decision status (`clarification_required` / `cannot_execute` / `stop` /
    `no_tool` / `tool_call` with one retry on failure).

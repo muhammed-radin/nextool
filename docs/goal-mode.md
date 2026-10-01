@@ -63,9 +63,12 @@ sequenceDiagram
    produces extractive/constructive parameters (see
    [CoreModule](../ai-core/core-module.md)).
 4. **Execute** — through the tool runtime with `toolTimeoutMs`, abort signal, stats and
-   history. ≥ 2 consecutive pending action steps sharing a `parallelGroup` execute
-   **in parallel** (each gets its own decision; if any is not a `tool_call`, the group
-   falls back to sequential handling). The batch is capped by `maxSubtoolCalls`.
+   history. With `parallelToolCalls` on (default), ≥ 2 consecutive pending action steps
+   sharing a `parallelGroup` execute **concurrently** via `executeParallelBatch` — one
+   decision per step (if any is not a `tool_call`, the group falls back to sequential
+   handling), concurrency capped by `maxParallelToolCalls` (1–8, default 4), one sibling
+   failing never cancels the others. Sequential execution remains the fallback and the
+   `parallelToolCalls: false` path.
 5. **Observe** — `interpret` produces an operational sentence; the observation is stored
    (ring of 30), emitted (`observer.observed`) and fed into the next decision.
 6. **Update state** — plan steps marked completed/failed/skipped, counters persisted,
@@ -112,8 +115,9 @@ informational) rather than inventing an answer.
 
 `reasoningLevel` (observer switches to heuristic verification at ≤ 2), `enabledTools`
 (allow-list enforced post-decision), `maxIterations`, `safetyLimit`, `maxSubtoolCalls`,
-`taskTimeoutMs`, `toolTimeoutMs`, `useMemory`, `autoExecuteSubtools` — all documented in
-[Configuration](../getting-started/configuration.md).
+`taskTimeoutMs`, `toolTimeoutMs`, `useMemory`, `autoExecuteSubtools`,
+`parallelToolCalls` + `maxParallelToolCalls` (v1.0.3 concurrency policy) — all
+documented in [Configuration](../getting-started/configuration.md).
 
 ## See also
 

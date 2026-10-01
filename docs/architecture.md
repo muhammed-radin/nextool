@@ -134,8 +134,10 @@ persisted state; the in-memory handles (and thus live scheduling) are gone.
 
 - **Not a chatbot** — the LLM is used only for structured decisions (plan JSON, CoreModule
   JSON, observer verdicts, subgoal proposals), never for free-form chat replies.
-- **Honest states** — unavailable capabilities are labeled unavailable (TF.js/Parquet
-  adapters, WebSocket transport), never faked.
+- **Honest states** — capabilities are reported truthfully: adapter booleans on
+  `/api/models` come from real import probes (TF.js, Parquet), genuinely unavailable
+  features are labeled unavailable (WebSocket transport, training pause/resume), and
+  nothing is faked.
 - **Envelope contract** — every REST endpoint returns
   `{ ok: true, data }` or `{ ok: false, error: { code, message } }`.
 - **No throw across the tool boundary** — `executeTool` always resolves with a structured

@@ -82,7 +82,7 @@ GET  /api/state                        -> GlobalLiveState  (+ servers, runtime s
 POST /api/env/event  { type:"server.crash"|"server.degrade"|"server.recover", serverId? } -> GlobalLiveState
 
 GET  /api/tasks?status=&mode=&limit=   -> TaskSummary[]
-POST /api/tasks { request, config? }   -> TaskDetail   (starts async execution)
+POST /api/tasks { request, config? }   -> TaskDetail   (starts async execution; config may include parallelToolCalls + maxParallelToolCalls — v1.0.3)
 GET  /api/tasks/:id                    -> TaskDetail
 POST /api/tasks/:id/stop               -> TaskDetail   (cancels goal/live task + active execution)
 POST /api/tasks/:id/event { type, payload? } -> NexToolEvent   (inject runtime event; wakes live mode)
@@ -130,12 +130,12 @@ POST /api/notifications/read-all       -> { ok: true }
 
 GET  /api/images?limit=                -> GeneratedImageDTO[]
 
-GET  /api/models                       -> { engine: ActiveEngineInfo, packages: ModelPackageInfo[], adapters: { tfjs: false, nextoolManifest: true, parquet: false } }
+GET  /api/models                       -> { engine: ActiveEngineInfo, packages: ModelPackageInfo[], adapters: { tfjs: true, nextoolManifest: true, parquet: true } }
 POST /api/models/load { manifest }     -> ModelPackageInfo  (validates .nextool JSON manifest: name, version, format:"nextool", architecture, compatibility — rejects invalid with 400)
 
 GET  /api/datasets                     -> DatasetInfo[]
-POST /api/datasets/import              -> DatasetInfo  (DatasetImportPayload; computes train/val/test split counts)
-GET  /api/datasets/:id/export?format=json -> { dataset: DatasetInfo, examples: DatasetExample[] }
+POST /api/datasets/import              -> DatasetInfo  (JSON body OR multipart file=.parquet/.json — v1.0.3; computes train/val/test split counts)
+GET  /api/datasets/:id/export?format=json|parquet -> { dataset, examples } | binary .parquet download (v1.0.3)
 DELETE /api/datasets/:id               -> { deleted: true }
 
 GET  /api/settings                     -> NexToolSettings

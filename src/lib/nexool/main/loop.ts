@@ -6,7 +6,7 @@ import { db } from '@/lib/db';
 import { emitEvent } from '../eventbus';
 import { getSettings } from '../settings';
 import { getEnabledToolDefs } from '../tools/registry';
-import { executeTool } from '../tools/executor';
+import { executeTool, executeParallelBatch } from '../tools/executor';
 import { decide } from '../core/coremodule';
 import { buildPlan } from './planner';
 import { interpret, checkGoalComplete } from './observer';
@@ -60,6 +60,8 @@ export interface ResolvedTaskConfig extends TaskConfig {
   taskTimeoutMs: number;
   toolTimeoutMs: number;
   liveIntervalMs: number;
+  parallelToolCalls: boolean;
+  maxParallelToolCalls: number;
 }
 
 function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<typeof getSettings>>): ResolvedTaskConfig {
@@ -80,6 +82,8 @@ function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<t
     taskTimeoutMs: clampNum(stored.taskTimeoutMs, settings.taskTimeoutMs, 5_000, 3_600_000),
     toolTimeoutMs: clampNum(stored.toolTimeoutMs, settings.toolTimeoutMs, 1_000, 300_000),
     liveIntervalMs: clampNum(stored.liveIntervalMs, settings.liveIntervalMs, 1_000, 3_600_000),
+    parallelToolCalls: stored.parallelToolCalls ?? settings.parallelToolCalls,
+    maxParallelToolCalls: clampNum(stored.maxParallelToolCalls, settings.maxParallelToolCalls, 1, 8),
     sessionId: stored.sessionId,
     context: stored.context,
   };
@@ -240,8 +244,12 @@ function recordExecution(ctx: RunContext, tool: string, result: ActionResult): v
 }
 
 async function persistState(ctx: RunContext): Promise<void> {
+  // v1.0.3 §2/§31: keep the plan COLUMN in sync with state.plan — previously
+  // only the state JSON advanced, so Task.plan stayed stale at "pending" and
+  // the UI checklist never reflected real step completion.
   await persistTask(ctx.taskId, {
     state: JSON.stringify(ctx.state),
+    plan: JSON.stringify(ctx.state.plan),
     steps: ctx.state.iterationCount,
     toolCalls: ctx.state.toolCallCount,
   });
@@ -393,26 +401,56 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
     }
     ctx.state.iterationCount += 1;
 
-    // PARALLEL EXECUTION (spec §10): ≥2 consecutive pending action steps sharing parallelGroup
-    if (!ctx.state.activeSubgoal && group.length >= 2 && ctx.config.autoExecuteSubtools) {
-      const cap = Math.min(group.length, ctx.config.maxSubtoolCalls);
+    // PARALLEL EXECUTION (v1.0.3 §18-23): the explicit `parallelToolCalls` config
+    // enables concurrent execution of ≥2 independent consecutive action steps
+    // (same parallelGroup). Concurrency is capped at maxParallelToolCalls; the
+    // dependency graph is preserved because only CONSECUTIVE same-group steps
+    // batch together — anything after a group boundary is a later, dependent wave.
+    if (!ctx.state.activeSubgoal && ctx.config.parallelToolCalls && group.length >= 2 && ctx.config.autoExecuteSubtools) {
+      const cap = Math.min(group.length, ctx.config.maxParallelToolCalls);
       const slice = group.slice(0, cap);
+      const batchId = `batch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const parallelGroup = group[0].parallelGroup ?? 0;
+      void emitEvent({
+        taskId: ctx.taskId, type: 'planner.parallel_batch', source: 'planner',
+        message: `${slice.length} independent tool call(s) detected — executing concurrently (cap ${ctx.config.maxParallelToolCalls}).`,
+        data: { batchId, parallelGroup, tools: slice.map((s) => s.title), maxParallelToolCalls: ctx.config.maxParallelToolCalls },
+        priority: 5,
+      });
       const decisions = await Promise.all(
         slice.map(async (step) => ({ step, decision: await decideForStep(ctx, step) })),
       );
       if (decisions.every((d) => d.decision.status === 'tool_call' && d.decision.tool)) {
-        const executions = await Promise.all(
-          decisions.map((d) =>
-            executeTool(d.decision.tool as string, d.decision.params, {
-              timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId, signal: ctx.handle.abortController.signal,
-            }),
-          ),
+        const executions = await executeParallelBatch(
+          batchId,
+          decisions.map((d) => ({
+            tool: d.decision.tool as string,
+            params: d.decision.params,
+            parallelGroup,
+          })),
+          {
+            timeoutMs: ctx.config.toolTimeoutMs,
+            taskId: ctx.taskId,
+            signal: ctx.handle.abortController.signal,
+            maxParallel: ctx.config.maxParallelToolCalls,
+          },
         );
+        let failed = 0;
         executions.forEach((execution, i) => {
           const observation = interpret(execution.tool, execution, { goal: ctx.goal });
           recordExecution(ctx, execution.tool, { execution, observation });
           markStepByExecution(ctx.state.plan, decisions[i].step.id, execution.status);
+          if (execution.status === 'failed' || execution.status === 'timeout') failed += 1;
         });
+        if (failed > 0 && failed < executions.length) {
+          // §22: one sibling failing never cancels the independent survivors —
+          // record the partial failure and keep going.
+          void emitEvent({
+            taskId: ctx.taskId, type: 'planner.partial_failure', source: 'planner',
+            message: `${failed} of ${executions.length} parallel call(s) failed — independent calls continued.`,
+            data: { batchId }, priority: 4,
+          });
+        }
         await persistState(ctx);
         if (await verifyGoal(ctx)) {
           return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Goal verified.' };

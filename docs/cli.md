@@ -114,20 +114,21 @@ compatibility-checked (weights must actually load into TF.js) before registratio
 
 | Command | Options | Does |
 | --- | --- | --- |
-| `dataset import <file>` | `-n, --name` *(required)* · `-v, --version` *(required)* · `--note <text>` | Imports `{ name, version, examples[] }` or a bare examples array. Prints split counts (train/val/test/unsplit). |
-| `dataset export <ref>` | `-o, --output <path>` (stdout when omitted) · `--dataset-version` | Writes the JSON export (same shape as the HTTP export). |
+| `dataset import <file>` | `-n, --name` *(required)* · `-v, --version` *(required)* · `--note <text>` | Imports a `.json` file (`{ name, version, examples[] }` or a bare examples array) or a **binary `.parquet` file** (v1.0.3 — decoded by the real `@dsnp/parquetjs` adapter, validated per row). Prints split counts (train/val/test/unsplit). |
+| `dataset export <ref>` | `-o, --output <path>` (stdout when omitted) · `--format <json\|parquet>` (default `json`) · `--dataset-version` | Writes the export. `json` keeps the HTTP-export shape; `parquet` encodes a binary `.parquet` file (**`--output` required** for parquet) and prints the byte size. |
 | `dataset list` | `--json` | id, name, version, format, split sizes. |
 | `dataset info <ref>` | — | Split sizes, categories, note. |
 
 ```bash
 nextool dataset import ds.json -n my-ds -v 1.0.0
+nextool dataset import data.parquet -n my-ds-parquet -v 1.0.0
 nextool dataset export my-ds -o ./my-ds.json
+nextool dataset export my-ds-parquet --format parquet -o ./out.parquet
 ```
 
-**Parquet is rejected explicitly** — a `.parquet` file fails with *"Parquet import is
-not supported by the current engine (JSON only) — the parquet adapter is not
-installed."* The parquet adapter is genuinely not installed (see
-[Datasets](../ai-core/datasets.md)).
+Parquet runs through the same adapter module as the HTTP API and console
+(`src/lib/nexool/datasets/parquet.ts`, `@dsnp/parquetjs` 1.8.9) — a row-level problem
+fails with the exact row index (see [Troubleshooting](troubleshooting.md)).
 
 ## `tool` — registry operations
 
@@ -166,7 +167,7 @@ HTTP-dependent behaviors care about the running console.
 nextool version
 ```
 
-Prints the three separate version lines: application version (1.0.2), model version
+Prints the three separate version lines: application version (1.0.3), model version
 (llm-core 1.0.0, the decision unit) and dataset version (latest imported dataset, or
 `- none imported`).
 

@@ -14,7 +14,7 @@ a zustand store. No routing library, no other pages.
 
 `src/components/console/console-app.tsx` composes:
 
-- **Header** (glass shell): brand button (logo + `Q1 v1.0.2` tech badge),
+- **Header** (glass shell): brand button (logo + `Q1 v1.0.3` tech badge),
   `RuntimeConnectionStatus` pill, notification bell with unread badge and dropdown.
 - **Navigation**: desktop glass sidebar (12 items + a conditional *Task Preview* entry
   showing the short id once a task is selected); mobile bottom nav (see
@@ -31,11 +31,11 @@ a zustand store. No routing library, no other pages.
 | View | File | Purpose |
 | --- | --- | --- |
 | Dashboard | `dashboard.tsx` | Metric cards, latency area chart, recent tasks → preview, recent events. |
-| Task Console | `task-console.tsx` | Create tasks: request, mode + live opt-in, L1–6, memory switch, limits, tool multi-select. |
-| Task Preview | `task-preview.tsx` | Dedicated per-task screen: badges, stop/send-event/feedback dialogs, live checklist/timeline, executions, MainState JSON, 5 context panels, events timeline, runtime terminal (+ *Preview as Terminal* toggle). |
+| Task Console | `task-console.tsx` | Create tasks: request, mode + live opt-in, L1–6, memory switch, limits (incl. v1.0.3 "Parallel tool calls" toggle + "Max parallel calls" in Execution limits), tool multi-select. |
+| Task Preview | `task-preview.tsx` | Dedicated per-task screen: badges, stop/send-event/feedback dialogs, live checklist/timeline **while the task is active** (removed + replaced by *Final task output* on terminal states — v1.0.3), plan-as-checklist, parallel-batch grouping, executions, MainState JSON, 5 context panels, events timeline, runtime terminal (+ *Preview as Terminal* toggle). |
 | Live Monitor | `live-monitor.tsx` | Live tasks (3 s polls), fleet with injections, filtered event terminal, terminal preview toggle. |
 | Tools | `tools.tsx` | Registry grid, enable switches, stats, schema accordions, register dialog; v1.0.2 grid actions (New Tool / Edit / Duplicate / Test / Enable/Disable / Delete). |
-| Tool IDE | `tool-editor.tsx` | v1.0.2: Monaco JS editor (`nextool-dark` theme), schema editor, IntelliSense, References pane, test panel — see [Tool Development](../tools/tool-development.md). |
+| Tool IDE | `tool-editor.tsx` | v1.0.2: Monaco JS editor (`nextool-dark` theme), schema editor, IntelliSense, References pane, test panel — see [Tool Development](../tools/tool-development.md). v1.0.3: definite editor heights at every breakpoint (420 px mobile/tablet; `lg` fills the viewport with a 480 px floor) — the editor no longer collapses on mobile. |
 | Training | `training.tsx` | v1.0.2: dataset + config picker, per-epoch metrics table, streamed log lines, job history, cancel/delete. |
 | Benchmark | `benchmark.tsx` | v1.0.2: dataset + model-key picker, metrics cards, per-case results table, run history. |
 | Memory | `memory.tsx` | Persistent Memory CRUD vs Live State explainer. |
@@ -43,9 +43,9 @@ a zustand store. No routing library, no other pages.
 | Events | `events.tsx` | Filterable event stream: source, type search, priority ≥ slider, expandable rows. |
 | History | `history.tsx` | 100-entry table, filters, expandable params/result. |
 | Models | `models.tsx` | Active engine card, adapters panel, packages + manifests, load dialog, export dropdown + import model dialog (v1.0.2). |
-| Datasets | `datasets.tsx` | Split bars, import dialog with preview counts, export, delete. |
+| Datasets | `datasets.tsx` | Split bars, example-schema panel, import dialog (JSON paste/file **or binary `.parquet` upload** — cyan selected-file panel, multipart), separate **JSON** and **Parquet** export buttons per card, cyan parquet format badge, delete. |
 | Docs | `docs.tsx` | Built-in documentation reader (search, category index, two-pane). |
-| Settings | `settings.tsx` | Bound settings form, unsaved-changes badge, SSE transport locked note; v1.0.2 *Branding & icons* section (upload → validate → preview → Apply). |
+| Settings | `settings.tsx` | Bound settings form, unsaved-changes badge, SSE transport locked note; v1.0.3 "Parallel tool calls by default" + "Max parallel calls"; v1.0.2 *Branding & icons* section (upload → validate → preview → Apply; skipped entries listed). |
 
 Shared widgets live in `ui-bits.tsx` (StatusChip, SourceDot, TypeChip, EventRow,
 JsonBlock, MetricCard, SectionTitle, EmptyState, ErrorCard, SkeletonBlock, PulsingDot,
@@ -76,6 +76,34 @@ bar all consume it (single source of truth; pages cannot invent statuses).
   visualization to a terminal; **OFF is the default** and the choice persists in
   `localStorage` (`nextool.previewAsTerminal`). Both views consume the same runtime
   state, so the toggle changes presentation only.
+
+## Task Preview v1.0.3 — live-area lifecycle, final output, plan checklist
+
+- **Live area exists only while the task is active.** The Live Checklist / Live
+  Terminal section renders only for `queued` / `running` / `waiting`. On a terminal
+  state (`completed` / `failed` / `cancelled` / `stopped`) it is removed **entirely** —
+  no empty container, no blank gap. The mobile Timeline tab's terminal is hidden after
+  completion too (the events timeline remains).
+- **Final task output section** takes its place on terminal states: the
+  runtime-recorded `FinalResult` summary, four metric tiles (result status, steps, tool
+  calls, duration), artifacts badges (when the result carries an `artifacts` array) and
+  the full final-result JSON tree. Real data only — `—` when a value is absent.
+  Historical sections (plan, executions, state, context, events timeline) remain.
+- **Plan section is a live checklist** — the Plan card renders the same animated
+  `ChecklistItems` component as the Live checklist, with states derived from the actual
+  plan + event stream via `deriveChecklist` (`[✓]` completed, `[-]` running,
+  `[ ]` pending, `[!]` failed, `[~]` waiting/skipped) and framer-motion transitions
+  (moving highlight on the running step, completion pulse, spring glyph on state
+  change). One state source — plan and checklist cannot disagree.
+- **Immediate SSE-driven refresh** — tool/task events (`tool.completed/failed/timeout/
+cancelled`, `task.started/completed/failed/cancelled`, `planner.plan/parallel_batch/
+partial_failure`, `subgoal.created`) trigger an instant detail + executions refresh,
+  so plan/checklist update the moment the runtime reports a transition instead of
+  waiting for the 2.5 s poll.
+- **Parallel batch grouping** — executions returned by
+  `GET /api/tasks/{id}/executions` carry `batchId`/`parallelGroup`; consecutive
+  executions sharing a `batchId` render inside one labeled group card:
+  "parallel batch · N concurrent".
 
 ## JSON tree viewer (v1.0.2)
 
@@ -116,10 +144,12 @@ Refresh helpers guard against overlapping in-flight requests; errors surface as
    error.code || 'http_error', status)`.
 5. Success → returns `env.data` directly (callers never see the envelope).
 
-Typed helpers exist for all 30 endpoints (`getSystemStats`, `createTask`, `stopTask`,
-`sendTaskFeedback`, `getTaskContext`, `registerTool`, `toggleTool` (URL-encodes dotted
-names), `addMemory`, `listHistory`, `getModels`, `loadModel`, `importDataset`,
-`exportDatasetUrl`, `getDocsIndex`, `getDocPage`, …). Result DTOs: `DocsIndex` /
+Typed helpers cover the whole endpoint surface (`getSystemStats`, `createTask`,
+`stopTask`, `sendTaskFeedback`, `getTaskContext`, `getTaskExecutions`, `registerTool`,
+`toggleTool` (URL-encodes dotted names), `addMemory`, `listHistory`, `getModels`,
+`loadModel`, `importDataset`, `importDatasetFile` (v1.0.3 multipart upload for binary
+`.parquet` files), `exportDatasetUrl` (json | parquet), `updateSettings`,
+`getDocsIndex`, `getDocPage`, …). Result DTOs: `DocsIndex` /
 `DocPage` for the docs system, `ModelsInfo` for models.
 
 ## Streaming hooks

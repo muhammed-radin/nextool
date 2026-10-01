@@ -41,6 +41,8 @@ const DEFAULTS: Draft = {
   toolTimeoutMs: 30000,
   liveIntervalMs: 60000,
   useMemory: true,
+  parallelToolCalls: true,
+  maxParallelToolCalls: 4,
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -174,7 +176,7 @@ function BrandingSection() {
           {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ImageUp className="size-4" aria-hidden />} Upload icons.zip…
         </Button>
         <p className="break-words text-[11px] text-muted-foreground">
-          Expected entries: <span className="font-mono">favicon.ico</span>, <span className="font-mono">icon-16..512.png</span>, <span className="font-mono">apple-touch-icon.png</span> (≤ 2 MiB/file).
+          Expected entries: <span className="font-mono">favicon.ico</span>, <span className="font-mono">icon-16..512.png</span>, <span className="font-mono">apple-touch-icon.png</span> (≤ 2 MiB/file). Common generator names (favicon-32x32.png, android-chrome-192x192.png, …) are recognized and mapped automatically.
         </p>
       </div>
 
@@ -201,6 +203,16 @@ function BrandingSection() {
               <span className="font-mono text-[9px] text-muted-foreground">favicon.ico</span>
             </div>
           </div>
+          {staged.ignored && staged.ignored.length > 0 ? (
+            <div className="rounded-md border border-white/[0.09] bg-white/[0.03] p-2">
+              <p className="text-[11px] font-medium text-slate-300">Skipped entries ({staged.ignored.length})</p>
+              <ul className="mt-1 space-y-0.5">
+                {staged.ignored.slice(0, 6).map((r) => (
+                  <li key={r.file} className="break-words font-mono text-[10px] text-muted-foreground">{r.file}: {r.reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {staged.rejected.length > 0 ? (
             <div className="rounded-md border border-amber-400/30 bg-amber-400/[0.06] p-2">
               <p className="text-[11px] font-medium text-amber-300">Rejected entries ({staged.rejected.length})</p>
@@ -427,6 +439,22 @@ export default function SettingsView() {
               <NumberField id="set-tasktimeout" label="Task timeout (ms)" value={draft.taskTimeoutMs} onChange={(v) => set('taskTimeoutMs', v)} hint="default 120000" />
               <NumberField id="set-tooltimeout" label="Tool timeout (ms)" value={draft.toolTimeoutMs} onChange={(v) => set('toolTimeoutMs', v)} hint="default 30000" />
               <NumberField id="set-liveinterval" label="Live tick interval (ms)" value={draft.liveIntervalMs} onChange={(v) => set('liveIntervalMs', v)} hint="default 60000" />
+            </div>
+            {/* v1.0.3 §24: the parallel tool call policy — runtime defaults
+                here; tasks may override per task in the Task Console. */}
+            <div className="mt-4 grid gap-4 rounded-md border border-white/[0.08] bg-white/[0.03] p-3 sm:grid-cols-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <Label htmlFor="set-parallel" className="text-sm">Parallel tool calls by default</Label>
+                  <p className="text-[11px] text-muted-foreground">Independent plan steps run concurrently — dependencies stay sequential</p>
+                </div>
+                <Switch id="set-parallel" checked={draft.parallelToolCalls} onCheckedChange={(v) => set('parallelToolCalls', v)} aria-label="Parallel tool calls by default" />
+              </div>
+              {draft.parallelToolCalls ? (
+                <NumberField id="set-maxparallel" label="Max parallel calls" value={draft.maxParallelToolCalls} onChange={(v) => set('maxParallelToolCalls', Math.min(Math.max(v, 1), 8))} hint="default 4 · cap 8" />
+              ) : (
+                <p className="self-center text-[11px] text-muted-foreground">Parallel execution disabled — tools run strictly one after another.</p>
+              )}
             </div>
           </section>
 

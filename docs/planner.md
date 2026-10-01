@@ -55,18 +55,29 @@ chars).
 | `planner.plan_built` | planner | 6 | After a successful LLM plan — message includes step count, `llm`, and elapsed ms; `data` carries `{ goal, steps }`. |
 | `planner.plan_built` | planner | 6 | Same type for the fallback path — message says `deterministic fallback`. |
 | `planner.plan` | planner | 5 | Emitted by `loop.runTask` once the plan is stored — message `Plan created: N step(s) for goal "…"`. |
+| `planner.parallel_batch` | planner | 5 | v1.0.3: a parallel batch was formed — message `"N independent tool call(s) detected — executing concurrently (cap M)"`; `data` carries `{ batchId, parallelGroup, tools, maxParallelToolCalls }`. |
+| `planner.partial_failure` | planner | 4 | v1.0.3: some but not all calls of a parallel batch failed — the independent survivors were NOT cancelled; `data` carries `{ batchId }`. |
 | `subgoal.created` | planner | 5 / 3 | Dynamic subgoals (goal loop), recovery subgoals (repair passes), and feedback-revised subgoals. |
 
 ## How the loop consumes the plan
 
 - `firstPendingIndex` finds the first `pending | in_progress` step.
 - `parallelGroupSteps` collects the consecutive pending **action** steps sharing that
-  step's `parallelGroup`; a group of ≥ 2 is executed in parallel (each step gets its own
-  CoreModule decision, then all executions run concurrently via `Promise.all`). If any
-  decision in the group is not a `tool_call`, the group is reset to `pending` and handled
-  sequentially instead.
+  step's `parallelGroup`. With `parallelToolCalls` enabled (default) and a group of
+  **≥ 2**:
+  1. a `batchId` is minted and `planner.parallel_batch` announces the batch (with the
+     configured `maxParallelToolCalls` cap),
+  2. each step gets its own CoreModule decision,
+  3. if **every** decision is a `tool_call`, all calls execute concurrently via
+     `executeParallelBatch` (capped waves — see [Tool Runtime](../tools/tool-runtime.md));
+     otherwise the group is reset to `pending` and handled sequentially instead.
+- `parallelToolCalls: false` skips the parallel branch entirely — strictly sequential
+  execution in plan order.
+- Dependent steps never share a group, so they can never batch — the next group/step is
+  a later iteration (a later wave in effect).
 - `markStepByExecution` maps an execution status onto a step: `completed → completed`,
-  `cancelled → skipped`, anything else → `failed`.
+  `cancelled → skipped`, anything else → `failed`. If some but not all batch calls fail,
+  `planner.partial_failure` is emitted and the survivors keep going.
 - When the plan is exhausted but the goal is not yet verified, the loop requests a dynamic
   subgoal from the LLM (10 s timeout, strict JSON `{"done":true}` or
   `{"title","reason"}`); `done` completes the task honestly.

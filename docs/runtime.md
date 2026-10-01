@@ -39,7 +39,7 @@ polls the detail every 2.5 s while a task is active and merges SSE events on top
 | --- | --- | --- |
 | Created | Row written (`queued`), config clamped, handle registered. | `task.created` (6) |
 | Started | Status `running`, tool defs loaded, plan built + stored. | `task.started` (5), `planner.plan_built` (6), `planner.plan` (5) |
-| Iterating | CoreModule decides, tools execute, observer interprets, state persists. | `core.decision` (4), `tool.started/completed/…` (4–6), `observer.observed` (6) |
+| Iterating | CoreModule decides, tools execute (independent steps concurrently in capped parallel batches — v1.0.3), observer interprets, state persists. | `core.decision` (4), `planner.parallel_batch` (5), `planner.partial_failure` (4), `tool.started/completed/…` (4–6), `observer.observed` (6) |
 | Waiting (live) | Parked between cycles. | `task.waiting` (7), `observer.scheduled_tick` (9) |
 | Terminated | `FinalResult` written, status set. | `task.completed` / `task.failed` / `task.cancelled` (3) |
 
@@ -49,7 +49,8 @@ polls the detail every 2.5 s while a task is active and merges SSE events on top
 | --- | --- | --- | --- |
 | `maxIterations` | 30 | 1–200 | Goal loop returns `limit_reached` → task `failed`, errorState `SAFETY_LIMIT`. |
 | `safetyLimit` (total tool calls) | 100 | 1–500 | Same as above; `maxSubtoolCalls` is also capped by it at creation. |
-| `maxSubtoolCalls` | 20 | 1–200 | Caps how many parallel-group steps execute in one batch. |
+| `maxSubtoolCalls` | 20 | 1–200 | Caps subtool auto-execution; also a creation-time clamp against `safetyLimit`. |
+| `maxParallelToolCalls` (v1.0.3) | 4 | 1–8 | Hard cap on concurrently executing tool calls; overflow runs in later waves. `parallelToolCalls: false` disables batching entirely. |
 | `taskTimeoutMs` | 120 000 | 5 000–3 600 000 | Goal loop returns `TIMEOUT` → `failed`. Live Mode uses it as the **per-cycle** deadline for event-driven observation. |
 | `toolTimeoutMs` | 30 000 | 1 000–300 000 (executor floor 250 ms) | Single execution → status `timeout`, error code `TIMEOUT`. |
 | Request length | — | ≤ 4000 chars | Rejected at creation (`TASK_CREATE_FAILED`). |

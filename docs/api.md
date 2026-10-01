@@ -6,9 +6,10 @@ order: 1
 
 # API Reference
 
-Every HTTP endpoint in NexTool Q1 v1.0.2. All routes are Next.js route handlers
+Every HTTP endpoint in NexTool Q1 v1.0.3. All routes are Next.js route handlers
 (`runtime = 'nodejs'`, `dynamic = 'force-dynamic'`) under `src/app/api/`. JSON in/out,
-except the SSE stream, the model export download (zip) and the icons upload (multipart).
+except the SSE stream, the model export download (zip), the dataset Parquet export
+(binary), the icons upload (multipart) and the multipart dataset import variant.
 Mutating endpoints validate bodies with zod schemas (`src/lib/nexool/schemas.ts`) —
 field-level failures return 400 `INVALID_PARAMS`/`INVALID_REQUEST`.
 
@@ -25,7 +26,7 @@ Every response is an `ApiEnvelope`:
 
 Error codes used by routes: `INVALID_PARAMS`, `INVALID_REQUEST`, `TASK_CREATE_FAILED`,
 `NOT_FOUND` (404), `REGISTER_FAILED`, `ALREADY_EXISTS` (409), `READ_ONLY` (403),
-`INVALID_MANIFEST`, `INVALID_EXAMPLES`, `PARQUET_UNAVAILABLE`, `BENCHMARK_FAILED`,
+`INVALID_MANIFEST`, `INVALID_EXAMPLES`, `PARQUET_EXPORT_FAILED`, `BENCHMARK_FAILED`,
 `EXPORT_FAILED`, `ICONS_INVALID`, `DOC_NOT_FOUND` (404), plus per-domain 500 codes
 (`TRAINING_*`, `BENCHMARK_*`, `ICONS_*`). The frontend client adds
 `network_error` / `bad_json` / `http_error` locally.
@@ -70,14 +71,16 @@ queued/running/waiting/completed/failed/stopped; `mode` goal|live.
 ### POST /api/tasks
 Create + start a task (async). Request: `{ "request": string (≤4000 chars),
 "config"?: Partial<TaskConfig>, "mode"?, "reasoningLevel"? }` — top-level
-`mode`/`reasoningLevel` merge into config. Response: 201 `TaskDetail`
+`mode`/`reasoningLevel` merge into config. `config` is zod-validated and may include
+the v1.0.3 parallel policy fields `parallelToolCalls` (boolean) and
+`maxParallelToolCalls` (int 1–8). Response: 201 `TaskDetail`
 (summary + config, state, plan, finalResult, error, sessionId).
 Errors: `INVALID_REQUEST` (empty request), `TASK_CREATE_FAILED` (validation, e.g. too
 long).
 
 ```bash
 curl -X POST http://localhost:3000/api/tasks -H 'Content-Type: application/json' \
-  -d '{"request":"Check the health of server api-01","config":{"mode":"goal","reasoningLevel":4}}'
+  -d '{"request":"Check the health of server api-01","config":{"mode":"goal","parallelToolCalls":true,"maxParallelToolCalls":4}}'
 ```
 
 ### GET /api/tasks/{id}
@@ -115,7 +118,10 @@ timestamp. Returns `NexToolEvent[]`.
 
 ### GET /api/tasks/{id}/executions
 The task's tool executions reconstructed from history (ascending, ≤200), execution ids
-`hist_…`. Errors: none beyond empty array for unknown ids (returns `[]`).
+`hist_…`. Since v1.0.3 each execution additionally carries `batchId` (string) and
+`parallelGroup` (int) when it ran inside a parallel batch — Task Preview groups
+consecutive executions sharing a `batchId` into one "parallel batch · N concurrent"
+card. Errors: none beyond empty array for unknown ids (returns `[]`).
 
 ---
 
@@ -216,8 +222,9 @@ default 50, clamp 1–200.
 
 ### GET /api/models
 `{ engine: ActiveEngineInfo, packages: ModelPackageInfo[], adapters:
-{ tfjs: true, nextoolManifest: true, parquet: false } }` — TensorFlow.js is installed
-since v1.0.2 (CPU backend); parquet remains honestly unavailable.
+{ tfjs: true, nextoolManifest: true, parquet: true } }` — TensorFlow.js is installed
+since v1.0.2 (CPU backend) and the Parquet adapter since v1.0.3 (`@dsnp/parquetjs`
+1.8.9; capability comes from the real `parquetAdapterInfo()` import probe).
 
 ### POST /api/models/load
 Validate + register a `.nextool` manifest: `{ "manifest": { name, version, format:
@@ -306,9 +313,17 @@ Multipart upload of an icons ZIP (`file` field, ≤ 8 MiB). Validated for real: 
 `.png`/`.ico` with safe names, PNG IHDR dimension parsing, `icon-<size>.png` must be
 exactly `<size>×<size>` (sizes 16/32/48/72/96/128/144/152/192/384/512),
 `apple-touch-icon.png` optional, ≤ 2 MiB per file, `favicon.ico` required in the zip
-root. Accepted files are staged under `public/icons/<packageId>/` with
-`status: "staged"`. Response: 201 `{ packageId, manifest, accepted, rejected }` —
-rejected entries carry per-file reasons. Errors: `ICONS_INVALID` (400).
+root. Since v1.0.3, common favicon-generator filenames are **aliased** to canonical
+names after validation (`favicon-16x16.png` → `icon-16.png`, `favicon-32x32.png` →
+`icon-32.png`, `android-chrome-192x192.png` → `icon-192.png`, `android-chrome-512x512.png`
+→ `icon-512.png`, `apple-touch-icon-<anything>.png` → `apple-touch-icon.png`), and
+well-known metadata files (`site.webmanifest`, `manifest.json`, `browserconfig.xml`)
+are skipped instead of rejected. Duplicate canonical names keep the first occurrence
+(extras reported as `ignored`). Accepted files are staged under
+`public/icons/<packageId>/` with `status: "staged"`. Response: 201
+`{ packageId, manifest, accepted, rejected, ignored }` — `rejected` entries carry
+per-file failure reasons, `ignored` entries carry the skip reason. Errors:
+`ICONS_INVALID` (400).
 
 ### PATCH /api/icons
 Activate the staged package: `{ action: "activate", packageId }` → the active manifest
@@ -327,14 +342,22 @@ Response: `{ discarded: boolean }`.
 ### GET /api/datasets — `DatasetInfo[]` (split sizes, categories), newest first.
 
 ### POST /api/datasets/import
-`{ name, version, examples: [{ category, request, expectedTool?, expectedParams?,
-split? }], note? }` → 201 `DatasetInfo`. Splits default to `train`; cap 5000 examples.
-Errors: `INVALID_PARAMS`, `INVALID_EXAMPLES` (per-item issues).
+Two content types (v1.0.3):
 
-### GET /api/datasets/{id}/export?format=json (alias: GET /api/datasets/{id})
-`{ dataset: DatasetInfo, examples: DatasetExample[] }`. `format=parquet` → 400
-`PARQUET_UNAVAILABLE` (adapter not installed); other formats → `INVALID_PARAMS`;
-unknown id → `NOT_FOUND`.
+- `application/json` — `{ name, version, examples: [{ category, request, expectedTool?,
+  expectedParams?, split? }], note? }` → 201 `DatasetInfo`. Splits default to `train`;
+  cap 5000 examples. Errors: `INVALID_PARAMS`, `INVALID_EXAMPLES` (per-item issues).
+- `multipart/form-data` — `file` (a `.parquet` or `.json` file, ≤ 25 MiB) plus optional
+  `name`/`version`/`note` form fields. `.parquet` is decoded by the real Parquet adapter
+  (`@dsnp/parquetjs`) and validated with the same rules; the record's `format` reflects
+  the import format (`parquet` | `json`). Decode/validation failures → 400
+  `INVALID_PARAMS` with the adapter's message (e.g. `Parquet row 3: …`).
+
+### GET /api/datasets/{id}/export?format=json|parquet (alias: GET /api/datasets/{id})
+`format=json` (default) → `{ dataset: DatasetInfo, examples: DatasetExample[] }`.
+`format=parquet` → binary download (`application/octet-stream`, `Content-Disposition:
+attachment; filename="<name>-v<version>.parquet"`); encoding failure → 500
+`PARQUET_EXPORT_FAILED`. Other formats → `INVALID_PARAMS`; unknown id → `NOT_FOUND`.
 
 ### DELETE /api/datasets/{id} — `{ deleted: true }` or `NOT_FOUND`.
 
@@ -345,19 +368,21 @@ unknown id → `NOT_FOUND`.
 ### GET /api/settings — current `NexToolSettings` (cache bypassed).
 ### PUT /api/settings
 Partial update; values are clamped server-side (see
-[Configuration](../getting-started/configuration.md) for ranges). Returns the saved
-settings. Note: an invalid-type body is treated as `{}` (no-op save).
+[Configuration](../getting-started/configuration.md) for ranges). Accepts the v1.0.3
+parallel policy fields `parallelToolCalls` (boolean) and `maxParallelToolCalls`
+(int 1–8). Returns the saved settings. Note: an invalid-type body is treated as `{}`
+(no-op save).
 
 ```bash
 curl -X PUT http://localhost:3000/api/settings -H 'Content-Type: application/json' \
-  -d '{"maxIterations":40,"liveIntervalMs":20000}'
+  -d '{"maxIterations":40,"liveIntervalMs":20000,"parallelToolCalls":true,"maxParallelToolCalls":4}'
 ```
 
 ---
 
 ## Documentation
 
-### GET /api/docs — `{ version: "1.0.2", count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: "1.0.3", count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`
@@ -390,6 +415,8 @@ enveloped). Not used by the console.
 | `taskTimeoutMs` | 5 000–3 600 000 | |
 | `toolTimeoutMs` | 1 000–300 000 | executor floor 250 ms |
 | `liveIntervalMs` | 1 000–3 600 000 | |
+| `parallelToolCalls` | boolean | v1.0.3 — default true (settings); `false` = strictly sequential |
+| `maxParallelToolCalls` | 1–8 | v1.0.3 — default 4; calls beyond the cap run in later waves |
 | `sessionId`, `context` | free-form | |
 
 For payload/response schemas of the domain objects (`TaskDetail`, `NexToolEvent`,

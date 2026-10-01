@@ -50,14 +50,14 @@ times out, or returns unparseable output — every such decision is tagged with
 `GET /api/models` returns:
 
 ```json
-{ "adapters": { "tfjs": true, "nextoolManifest": true, "parquet": false } }
+{ "adapters": { "tfjs": true, "nextoolManifest": true, "parquet": true } }
 ```
 
 | Adapter | Installed? | Meaning |
 | --- | --- | --- |
 | TensorFlow.js (`tfjs`) | **Yes — since v1.0.2** (`@tensorflow/tfjs` 4.22.0, CPU/pure-JS backend in Node). | Real training (`runTrainingJob`), real classifier inference (`tf.loadLayersModel(tf.io.fromMemory)` + `tf.predict` in the benchmark engine), and real load-validation on import. |
 | `.nextool` manifest validator | Yes | `POST /api/models/load` validates and registers manifests (status `registered`); the v1.0.2 import path additionally accepts binary packages. |
-| Parquet | **No — not installed.** | Dataset import/export is JSON-only; parquet requests get an honest 400 `PARQUET_UNAVAILABLE`, and `nextool dataset import` rejects `.parquet` explicitly (see [Datasets](datasets.md)). |
+| Parquet | **Yes — since v1.0.3** (`@dsnp/parquetjs` 1.8.9, pinned; pure JS, Node/Bun). | Binary Parquet dataset import/export through `src/lib/nexool/datasets/parquet.ts`; the boolean comes from `parquetAdapterInfo()`, a real dynamic-import probe (one per process). See [Datasets](datasets.md). |
 
 ## Trained classifier checkpoints (v1.0.2)
 

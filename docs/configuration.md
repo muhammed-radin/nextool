@@ -29,6 +29,8 @@ clamp ranges enforced by `updateSettings`.
 | `taskTimeoutMs` | number (ms) | `120000` | 5000 | 3600000 | Wall-clock budget for a task (per live cycle in Live Mode). |
 | `toolTimeoutMs` | number (ms) | `30000` | 1000 | 300000 | Per-tool-execution timeout (executor clamps 250–300000). |
 | `liveIntervalMs` | number (ms) | `60000` | 1000 | 3600000 | Scheduled tick interval for Live Mode. |
+| `parallelToolCalls` | boolean | `true` | — | — | v1.0.3: runtime default for concurrent execution of independent tool calls (task config overrides). |
+| `maxParallelToolCalls` | number | `4` | 1 | 8 | v1.0.3: hard cap on concurrently executing tool calls (waves handle the rest). |
 | `useMemory` | boolean | `true` | — | — | Whether the context bundle loads persistent memory entries. |
 | `logLevel` | `'info' \| 'debug' \| 'error'` | `info` | — | — | Coarse log level; invalid values revert to `info`. |
 | `realTimeTransport` | `'sse'` | `sse` | — | — | Locked to `sse`. A WebSocket adapter is **not installed** in this environment; the Settings UI shows it as locked with a note. |
@@ -46,6 +48,35 @@ curl -X PUT http://localhost:3000/api/settings \
   -H 'Content-Type: application/json' \
   -d '{"maxIterations":50,"liveIntervalMs":20000}'
 ```
+
+### Parallel tool calls (v1.0.3)
+
+Two fields control whether truly independent tool calls execute concurrently:
+
+| Field | Where | Default | Notes |
+| --- | --- | --- | --- |
+| `parallelToolCalls` | runtime settings + per-task config | `true` | When `false`, the parallel branch is skipped entirely — execution is strictly sequential. |
+| `maxParallelToolCalls` | runtime settings + per-task config | `4` | Integer 1–8 (clamped). Hard cap on concurrency — no unlimited parallelism. |
+
+Where to configure:
+
+- **Per task** — `config.parallelToolCalls` / `config.maxParallelToolCalls` in
+  `POST /api/tasks` (zod-validated: `maxParallelToolCalls` int 1–8). Task-level values
+  override the runtime defaults; unset fields fall back to the settings.
+- **Task Console UI** — "Parallel tool calls" toggle + "Max parallel calls" number
+  field in the *Execution limits* group (per task).
+- **Settings UI** — "Parallel tool calls by default" + "Max parallel calls" under the
+  runtime defaults (persisted via `PUT /api/settings`, which accepts both fields).
+
+Example task config:
+
+```json
+{"mode":"goal","parallelToolCalls":true,"maxParallelToolCalls":4}
+```
+
+Semantics live in [Planner](planner.md) (group batching) and
+[Tool Runtime](../tools/tool-runtime.md) (`executeParallelBatch`: waves, caps, failure
+isolation).
 
 ## Per-task config (TaskConfig)
 
@@ -67,10 +98,14 @@ provided** — it defaults to `settings.defaultMode` but is never auto-switched 
 | `taskTimeoutMs` | number | `settings.taskTimeoutMs` | 5000–3600000. |
 | `toolTimeoutMs` | number | `settings.toolTimeoutMs` | 1000–300000. |
 | `liveIntervalMs` | number | `settings.liveIntervalMs` | 1000–3600000. |
+| `parallelToolCalls` | boolean | `settings.parallelToolCalls` | v1.0.3: `false` forces strictly sequential execution. |
+| `maxParallelToolCalls` | number | `settings.maxParallelToolCalls` | v1.0.3: clamped 1–8 at merge time. |
 | `sessionId` | string? | — | Free-form session correlation. |
 | `context` | object? | — | Arbitrary initial context. |
 
 If `maxSubtoolCalls > safetyLimit`, creation clamps it down to `safetyLimit`.
+`maxParallelToolCalls` is clamped to 1–8 when the config is merged at loop start
+(`loop.ts` `mergeConfig`) — beyond the cap, calls run in later waves, never wider.
 
 ## Where limits bite (runtime behavior)
 

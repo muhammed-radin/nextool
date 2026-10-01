@@ -1,7 +1,7 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.2",
-  "description": "NexTool Q1 v1.0.2 — specialized AI task-processing, planning, observation, automation and tool-execution runtime with operations console, Tool IDE, training, benchmarking and CLI",
+  "version": "1.0.3",
+  "description": "NexTool Q1 v1.0.3 \u2014 specialized AI task-processing, planning, observation, automation and tool-execution runtime with operations console, Tool IDE, training, benchmarking, Parquet datasets, parallel tool execution and CLI",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
@@ -18,6 +18,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@dsnp/parquetjs": "1.8.9",
     "@hookform/resolvers": "^5.1.1",
     "@mdxeditor/editor": "^3.39.1",
     "@monaco-editor/react": "^4.7.0",

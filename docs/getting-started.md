@@ -82,7 +82,7 @@ on the first registry query.
 curl -s http://localhost:3000/api/system | head -c 400
 ```
 
-A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.2", ... } }`
+A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.3", ... } }`
 with runtime status `online`. The console header shows a connection pill that reads
 **Connected** once the SSE stream (`/api/stream`) is live.
 
@@ -98,9 +98,10 @@ curl -s http://localhost:3000/api/models | head -c 400
 ```
 
 The `adapters` field honestly reports what is installed in this environment:
-`{ "tfjs": true, "nextoolManifest": true, "parquet": false }` — TensorFlow.js is
-installed since v1.0.2 (training + classifier inference work); the Parquet adapter is
-**not installed**; the `.nextool` manifest validator is available.
+`{ "tfjs": true, "nextoolManifest": true, "parquet": true }` — TensorFlow.js is
+installed since v1.0.2 (training + classifier inference work) and the Parquet adapter
+since v1.0.3 (`@dsnp/parquetjs` 1.8.9, binary dataset import/export); the `.nextool`
+manifest validator is available.
 
 ## Run your first task (Goal Mode)
 

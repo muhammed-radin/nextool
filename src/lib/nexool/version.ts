@@ -15,9 +15,9 @@
  */
 
 export const APP_NAME = 'NexTool Q1';
-export const APP_VERSION = '1.0.2';
+export const APP_VERSION = '1.0.3';
 export const RELEASE_NAME =
-  'Runtime UX, Tool IDE, Training & Benchmarking, Model Packaging, CLI, Timeline & Final UI Refinement';
+  'Task Output Cleanup, Checklist State, Monaco Fix, Parquet Support, Icons & Parallel Tool Configuration';
 
 export const CORE_MODULE_NAME = 'llm-core';
 /** CoreModule decision-unit version — unchanged since v1.0.0 (model did not change). */

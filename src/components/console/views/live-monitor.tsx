@@ -156,7 +156,8 @@ function LiveTaskCard({ data, taskEvents, onStop, stopping, onOpen }: {
           {asTerminal === true ? (
             <RuntimeTerminal taskId={summary.id} events={taskEvents} taskStatus={summary.status} />
           ) : (
-            <TaskChecklist plan={detail?.plan} events={taskEvents} taskStatus={summary.status} />
+            // v1.0.3 §2: prefer the fresher state.plan (written on every state persist).
+            <TaskChecklist plan={detail?.state?.plan?.length ? detail.state.plan : detail?.plan} events={taskEvents} taskStatus={summary.status} />
           )}
         </CollapsibleContent>
       </Collapsible>

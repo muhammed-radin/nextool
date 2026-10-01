@@ -416,8 +416,22 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     </div>
   );
 
+  // ---- v1.0.3 §5-8: Monaco layout hierarchy fix.
+  // The previous wrapper (`min-h-[320px]` + `height="100%"`) collapsed the
+  // editor to ≈1px: a percentage height resolves against a parent whose only
+  // constraint is min-height → the inner editor computed 0px. The fix is a
+  // DEFINITE height at every breakpoint (not just desktop):
+  //   - mobile/tablet: fixed 420px usable editor area (spec §9 — reasonable
+  //     minimum height, vh-independent so the on-screen keyboard can't break it)
+  //   - lg+: fills the available viewport like a real IDE, floor 480px
+  //     (spec §6/§8 — substantial editor area for code/scroll/IntelliSense)
+  // Parents stay auto-height; the wrapper's own definite height is what
+  // `height="100%"` resolves against, and automaticLayout tracks resizes.
   const editorPanel = (
-    <div className="flex min-h-[320px] flex-col overflow-hidden rounded-md border border-white/[0.09] lg:h-[560px]" data-testid="monaco-editor">
+    <div
+      className="flex h-[420px] w-full flex-col overflow-hidden rounded-md border border-white/[0.09] lg:h-[max(480px,calc(100vh-430px))]"
+      data-testid="monaco-editor"
+    >
       <MonacoEditor
         height="100%"
         defaultLanguage="javascript"
@@ -482,7 +496,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
         </div>
       </div>
 
-      {/* Mobile: stacked tabs (§80) */}
+      {/* Mobile: stacked tabs (§80) — the Function tab keeps a real 420px editor (§9) */}
       <div className="lg:hidden">
         <Tabs defaultValue="function" className="gap-3">
           <TabsList className="glass-card nextool-scroll h-auto w-full justify-start gap-1 overflow-x-auto rounded-lg p-1" aria-label="Tool editor sections">

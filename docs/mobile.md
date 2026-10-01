@@ -81,6 +81,11 @@ task is active it polls detail every 2.5 s; the SSE timeline dedupes against RES
 backfill. From the Task Console, submitting a task navigates straight into this
 preview; on mobile the Task Preview entry also appears in the More sheet.
 
+v1.0.3 mobile specifics: the plan section renders as the animated live checklist, the
+Timeline tab's terminal disappears once the task reaches a terminal state (the events
+timeline remains), and the live checklist/terminal area is replaced by the *Final task
+output* section (summary, metric tiles, artifacts, final-result JSON).
+
 ## Live Monitor priority layout
 
 Live Mode gets the priority treatment on small screens:

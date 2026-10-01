@@ -14,6 +14,9 @@ export interface ExecuteOptions {
   timeoutMs?: number;
   taskId?: string;
   signal?: AbortSignal;
+  /** v1.0.3: batch info stamped on the execution + events when the call runs
+   *  as part of a parallel batch (dependency-aware, capped by the runtime). */
+  batch?: { batchId: string; parallelGroup: number };
 }
 
 function newExecutionId(): string {
@@ -136,13 +139,17 @@ export async function executeTool(
     params: rawParams ?? {},
     startedAt,
   };
+  if (opts.batch) {
+    execution.batchId = opts.batch.batchId;
+    execution.parallelGroup = opts.batch.parallelGroup;
+  }
 
   void emitEvent({
     taskId: opts.taskId,
     type: 'tool.started',
     source: 'tool',
-    message: `Executing ${toolName}`,
-    data: { executionId, tool: toolName, params: rawParams ?? {} },
+    message: `Executing ${toolName}${opts.batch ? ' (parallel batch)' : ''}`,
+    data: { executionId, tool: toolName, params: rawParams ?? {}, ...(opts.batch ? { batchId: opts.batch.batchId, parallelGroup: opts.batch.parallelGroup } : {}) },
     priority: 6,
   });
 
@@ -235,6 +242,8 @@ async function finalize(execution: ToolExecution, taskId?: string): Promise<void
         params: JSON.stringify(execution.params ?? {}),
         result: execution.result !== undefined ? JSON.stringify(execution.result) : null,
         status: status === 'running' || status === 'pending' ? 'failed' : status,
+        // v1.0.3: parallel provenance for Task Preview batch grouping
+        ...(execution.batchId ? { batchId: execution.batchId, parallelGroup: execution.parallelGroup ?? null } : {}),
       },
     });
   } catch (err) {
@@ -248,4 +257,33 @@ export async function executeToolsParallel(
   opts: ExecuteOptions = {},
 ): Promise<ToolExecution[]> {
   return Promise.all(calls.map((c) => executeTool(c.tool, c.params, opts)));
+}
+
+/**
+ * v1.0.3 — execute a parallel batch of independent tool calls with a hard
+ * concurrency cap. Calls beyond `maxParallel` run in waves AFTER the current
+ * wave completes (dependency-safe: no unlimited concurrency). Each call is
+ * independent — one failure never cancels its batch siblings (the runtime
+ * dependency graph decides what may continue).
+ */
+export async function executeParallelBatch(
+  batchId: string,
+  calls: { tool: string; params?: Record<string, unknown>; parallelGroup: number }[],
+  opts: ExecuteOptions & { maxParallel: number } = { maxParallel: 4 },
+): Promise<ToolExecution[]> {
+  const maxParallel = Math.min(Math.max(Math.round(opts.maxParallel), 1), 8);
+  const results: ToolExecution[] = [];
+  for (let i = 0; i < calls.length; i += maxParallel) {
+    const wave = calls.slice(i, i + maxParallel);
+    const waveResults = await Promise.all(
+      wave.map((c) =>
+        executeTool(c.tool, c.params, {
+          ...opts,
+          batch: { batchId, parallelGroup: c.parallelGroup },
+        }),
+      ),
+    );
+    results.push(...waveResults);
+  }
+  return results;
 }

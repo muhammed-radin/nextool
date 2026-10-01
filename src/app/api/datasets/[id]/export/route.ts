@@ -1,15 +1,16 @@
 /**
- * GET /api/datasets/[id]/export?format=json — export dataset examples.
- * Parquet requests receive an honest 400 (adapter not installed in this environment).
+ * GET /api/datasets/[id]/export?format=json|parquet — export dataset examples.
+ * v1.0.3: `parquet` is REAL — the examples are encoded with the Parquet
+ * adapter (@dsnp/parquetjs) and returned as a binary download. `json` keeps
+ * the original envelope response.
  */
 import { ok, fail } from '@/lib/nexool/api-helpers';
 import { db } from '@/lib/db';
+import { encodeParquetDataset } from '@/lib/nexool/datasets/parquet';
 import type { DatasetInfo, DatasetExample } from '@/lib/nexool/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const PARQUET_MESSAGE = 'Parquet adapter is not installed in this environment. JSON interchange is fully supported.';
 
 function toInfo(row: {
   id: string; name: string; version: string; format: string;
@@ -38,10 +39,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const url = new URL(req.url);
   const format = url.searchParams.get('format') ?? 'json';
 
-  if (format === 'parquet') {
-    return fail('PARQUET_UNAVAILABLE', PARQUET_MESSAGE, 400);
-  }
-  if (format !== 'json') {
+  if (format !== 'json' && format !== 'parquet') {
     return fail('INVALID_PARAMS', `Unsupported export format: ${format} (json | parquet)`, 400);
   }
 
@@ -50,6 +48,25 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
   let examples: DatasetExample[] = [];
   try { examples = JSON.parse(row.examples) as DatasetExample[]; } catch { /* keep empty */ }
+
+  if (format === 'parquet') {
+    try {
+      const bytes = await encodeParquetDataset(examples);
+      const safeName = (row.name || 'dataset').replace(/[^\w.-]+/g, '-');
+      const body = new Uint8Array(bytes);
+      return new Response(body, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(body.byteLength),
+          'Content-Disposition': `attachment; filename="${safeName}-v${row.version}.parquet"`,
+          'Cache-Control': 'no-store',
+        },
+      });
+    } catch (err) {
+      return fail('PARQUET_EXPORT_FAILED', err instanceof Error ? err.message : 'Parquet encoding failed.', 500);
+    }
+  }
 
   return ok({ dataset: toInfo(row), examples });
 }

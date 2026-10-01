@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * NexTool Q1 v1.0.2 — Command Line Interface (spec §49-56).
+ * NexTool Q1 v1.0.3 — Command Line Interface (spec §49-56).
  *
  * The CLI operates on the SAME service layer as the Web Console:
  *   CLI ─────────┐
@@ -23,6 +23,7 @@ import { executeTool } from '../src/lib/nexool/tools/executor';
 import { resolveTrainingConfig, runTrainingJob } from '../src/lib/nexool/training/engine';
 import { runBenchmark } from '../src/lib/nexool/training/benchmark';
 import { exportModel, importModelPackage, type ExportFormat } from '../src/lib/nexool/training/model-package';
+import { decodeParquetDataset, encodeParquetDataset } from '../src/lib/nexool/datasets/parquet';
 import type { TrainingLogLine } from '../src/lib/nexool/types';
 
 const program = new Command();
@@ -246,24 +247,35 @@ const datasetCmd = program.command('dataset').description('dataset operations (i
 
 datasetCmd
   .command('import <file>')
-  .description('import a JSON dataset ({ name, version, examples[] } or a bare examples array). Parquet is NOT supported by the engine (honest limitation).')
+  .description('import a dataset file: .json ({ name, version, examples[] } or a bare examples array) or .parquet (decoded by the real Parquet adapter, v1.0.3)')
   .requiredOption('-n, --name <name>', 'dataset name')
   .requiredOption('-v, --version <version>', 'dataset version')
   .option('--note <text>', 'note')
   .action(async (file: string, opts: { name: string; version: string; note?: string }) => {
-    if (file.toLowerCase().endsWith('.parquet')) {
-      fail('Parquet import is not supported by the current engine (JSON only) — the parquet adapter is not installed.');
+    const lower = file.toLowerCase();
+    if (!lower.endsWith('.json') && !lower.endsWith('.parquet')) {
+      fail('unsupported file type — use .json or .parquet');
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(readFileSync(file, 'utf8'));
-    } catch {
-      fail(`cannot parse JSON file: ${file}`);
+    let examples: { category?: string; request: string; expectedTool?: string; expectedParams?: Record<string, unknown>; split?: string }[] | undefined;
+    if (lower.endsWith('.parquet')) {
+      // v1.0.3: real Parquet import via the shared adapter (@dsnp/parquetjs).
+      try {
+        examples = await decodeParquetDataset(readFileSync(file));
+      } catch (err) {
+        fail(`parquet decode failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(file, 'utf8'));
+      } catch {
+        fail(`cannot parse JSON file: ${file}`);
+      }
+      examples = (Array.isArray(parsed) ? parsed : (parsed as { examples?: unknown }).examples) as
+        | { category?: string; request: string; expectedTool?: string; expectedParams?: Record<string, unknown>; split?: string }[]
+        | undefined;
     }
-    const examples = (Array.isArray(parsed) ? parsed : (parsed as { examples?: unknown }).examples) as
-      | { category?: string; request: string; expectedTool?: string; expectedParams?: Record<string, unknown>; split?: string }[]
-      | undefined;
-    if (!Array.isArray(examples) || examples.length === 0) fail('file must contain { examples: [...] } or a bare array of examples');
+    if (!Array.isArray(examples) || examples.length === 0) fail(lower.endsWith('.parquet') ? 'parquet file contains no usable rows' : 'file must contain { examples: [...] } or a bare array of examples');
 
     const counts = { train: 0, validation: 0, test: 0, unlabeled: 0 };
     for (const e of examples) {
@@ -277,7 +289,7 @@ datasetCmd
       data: {
         name: opts.name,
         version: opts.version,
-        format: 'json',
+        format: lower.endsWith('.parquet') ? 'parquet' : 'json',
         trainSize: counts.train,
         valSize: counts.validation,
         testSize: counts.test,
@@ -292,14 +304,29 @@ datasetCmd
 
 datasetCmd
   .command('export <ref>')
-  .description('export a dataset as JSON')
-  .option('-o, --output <path>', 'output file path (prints to stdout when omitted)')
+  .description('export a dataset as JSON (default) or binary Parquet (v1.0.3)')
+  .option('-o, --output <path>', 'output file path (prints to stdout when omitted; required for --format parquet)')
+  .option('--format <format>', 'export format: json | parquet', 'json')
   .option('--dataset-version <version>', 'disambiguate by version')
-  .action(async (ref: string, opts: { output?: string; datasetVersion?: string }) => {
+  .action(async (ref: string, opts: { output?: string; format?: string; datasetVersion?: string }) => {
     const dataset = await resolveDataset(ref, opts.datasetVersion);
+    const format = (opts.format ?? 'json').toLowerCase();
+    if (format !== 'json' && format !== 'parquet') fail('unsupported format — use json or parquet');
+    const examples = JSON.parse(dataset.examples) as { category: string; request: string; expectedTool?: string; expectedParams?: Record<string, unknown>; split?: string }[];
+
+    if (format === 'parquet') {
+      if (!opts.output) fail('--output is required for parquet export (binary file)');
+      const typed = examples.map((e) => ({ ...e, split: e.split as 'train' | 'validation' | 'test' | undefined }));
+      const bytes = await encodeParquetDataset(typed);
+      mkdirSync(path.dirname(path.resolve(opts.output)), { recursive: true });
+      writeFileSync(opts.output, bytes);
+      console.log(`[ok] exported ${dataset.name} v${dataset.version} -> ${opts.output} (parquet, ${bytes.byteLength} bytes)`);
+      process.exit(0);
+    }
+
     const payload = {
       dataset: { id: dataset.id, name: dataset.name, version: dataset.version, format: dataset.format },
-      examples: JSON.parse(dataset.examples),
+      examples,
     };
     const text = JSON.stringify(payload, null, 2);
     if (opts.output) {

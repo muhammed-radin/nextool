@@ -55,7 +55,20 @@ console/entity references match the actual UI.
 | --- | --- | --- |
 | 400 `INVALID_MANIFEST` | One or more rules failed (name, semver-like version, `format:"nextool"`, architecture object, `compatibility.runtime`) | The error message lists every failed rule; fix and re-submit (see [Model Format](../ai-core/model-format.md)). |
 | Loaded but engine still llm-core | Expected — a registered package does not replace the active engine; only trained classifiers run inside training/benchmark | Honest state; packages stay `registered` (see [Models](../ai-core/models.md)). |
-| `parquet: false` in adapters | Parquet adapter not installed in this environment | Not fixable by config; stated intentionally (`tfjs` is `true` since v1.0.2). |
+
+## Parquet dataset problems (v1.0.3)
+
+The Parquet adapter (`@dsnp/parquetjs` **1.8.9**, pinned) is real — most failures are
+data or dependency problems, and every message says which.
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `Parquet adapter is not available (…)` on import/export | The `@dsnp/parquetjs` dependency cannot be loaded in this runtime | Reinstall dependencies (`bun install`) and restart. `GET /api/models` → `adapters.parquet` shows the real capability (one import probe per process). |
+| `Cannot find module '@dsnp/parquetjs'` / library fails to load | Wrong version installed — the adapter is pinned to **1.8.9 exactly**; newer 1.9.x npm tarballs have been published **without build artifacts** (no `dist/`), so the import fails | Check `package.json`/`bun.lock` for `"@dsnp/parquetjs": "1.8.9"`; remove stray copies from `node_modules` and reinstall. Do **not** upgrade to 1.9.x. |
+| `Parquet row N: "category" and "request" are required non-empty strings.` | Data problem in the file, not a runtime fault | Fix row N: `category` and `request` are mandatory non-empty UTF8 columns. |
+| `Parquet row N: expectedParams is not a JSON object string.` | `expectedParams` holds something other than a JSON-serialized object | Store params as a JSON object string, e.g. `"{\"serverId\":\"api-01\"}"` — not a bare string, array or number. |
+| `Parquet row N: split must be one of train \| validation \| test` | Invalid `split` value in that row | Use exactly `train`, `validation` or `test` (blank defaults to `train`). |
+| Large imports/exports rejected | Caps: **5000 examples** per dataset, **25 MiB** multipart upload limit | Split the file; both caps mirror the JSON import limits. |
 
 ## DB issues
 

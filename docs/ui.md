@@ -36,7 +36,7 @@ scrollbars.
 | Role | Font | Variable / class | Usage |
 | --- | --- | --- | --- |
 | Primary interface | **Readex Pro** 300–700 | `--font-readex-pro` (`font-sans`) | Headings, body, nav, forms. |
-| Technical labels | **Michroma** 400 | `--font-michroma` (`font-tech`) | Version badges (`Q1 v1.0.2`), small-caps section labels like `Notifications`, `Runtime`, status bar markers. Michroma renders best small and uppercase with wide tracking. |
+| Technical labels | **Michroma** 400 | `--font-michroma` (`font-tech`) | Version badges (`Q1 v1.0.3`), small-caps section labels like `Notifications`, `Runtime`, status bar markers. Michroma renders best small and uppercase with wide tracking. |
 | Code | **Geist Mono** | `--font-geist-mono` (`font-mono`) | Terminal output, JSON blocks, ids, metrics, event types. |
 
 Loaded in `layout.tsx` via `next/font/google`; variables set on `<html>`. Body uses
@@ -83,7 +83,8 @@ Loaded in `layout.tsx` via `next/font/google`; variables set on `<html>`. Body u
 - **MetricCard** pairs a `TechLabel` (Michroma) with a large mono value in a
   `.glass-card`.
 - **Terminal** (`terminal.tsx`) uses `.glass-panel` chrome, `nextool-terminal`
-  scanlines, `nextool@runtime` prompt, source-colored lines, auto-scroll, blink cursor.
+  scanlines, a runtime-derived status line (no hardcoded prompt), source-colored lines,
+  auto-scroll, blink cursor.
 
 ## Mobile performance profile (< 768 px)
 

@@ -175,7 +175,9 @@ function BrandButton() {
     >
       <LogoMark />
       <span className="text-sm font-semibold tracking-tight text-foreground">{APP_NAME.replace(' Q1', '')}</span>
-      <Badge variant="outline" className="font-tech border-sky-400/30 bg-sky-400/10 text-[9px] uppercase tracking-wider text-sky-300">
+      {/* v1.0.3 §28: hidden below sm so the 320px header never overflows —
+          version stays visible in the mobile More sheet + Settings → About. */}
+      <Badge variant="outline" className="font-tech hidden border-sky-400/30 bg-sky-400/10 text-[9px] uppercase tracking-wider text-sky-300 sm:inline-flex">
         Q1 v{APP_VERSION}
       </Badge>
     </button>

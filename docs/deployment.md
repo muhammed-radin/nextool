@@ -66,7 +66,15 @@ Next server itself).
 - **Icon packages** (v1.0.2) live under `public/icons/<packageId>/` — created on first
   upload and referenced by the active branding manifest in the `Setting` table. Copy
   that directory along with the database when migrating hosts, or discard via
-  `DELETE /api/icons` + re-upload.
+  `DELETE /api/icons` + re-upload. Since v1.0.3 the ZIP may also use common
+  favicon-generator filenames — `favicon-16x16.png`/`favicon-32x32.png`,
+  `android-chrome-192x192.png`/`android-chrome-512x512.png` and
+  `apple-touch-icon-<anything>.png` are aliased to the canonical `icon-<size>.png` /
+  `apple-touch-icon.png` names after real PNG dimension validation;
+  `site.webmanifest`/`manifest.json`/`browserconfig.xml` entries are skipped (returned
+  in the upload response's `ignored` list, not rejected) and duplicate canonical names
+  keep the first. Everything else is unchanged: `favicon.ico` required, ≤ 2 MiB per
+  file, staged → preview → activate.
 - **Exports directory** (v1.0.2): `nextool model export -o ./exports/…` writes model
   packages wherever you point it (`exports/` is the convention used in the docs); these
   are plain zips — safe to archive or move between environments.
@@ -102,9 +110,10 @@ default `http://127.0.0.1:3000`). Full reference: [CLI](cli.md).
 - `.nextool` manifests registered via `POST /api/models/load` remain metadata-only
   (no weights) and are not runnable; the import path marks them with a warning.
 - Datasets live in the `DatasetRecord` table. To move them between environments, export
-  JSON (`GET /api/datasets/{id}/export?format=json`, `nextool dataset export`) and
-  re-import in the target env — the export format is exactly the import format.
-  Parquet remains unavailable (JSON only, honestly enforced).
+  (`GET /api/datasets/{id}/export?format=json` or `?format=parquet`, `nextool dataset
+  export`) and re-import in the target env — the export format is exactly the import
+  format, and the Parquet round-trip is binary-exact through the same
+  `@dsnp/parquetjs` adapter on both ends.
 
 ## Realtime behind proxies
 
@@ -127,10 +136,10 @@ Client behavior through proxies is handled by the frontend reconnect policy
 
 | Check | Expectation |
 | --- | --- |
-| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.2"`. |
+| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.3"`. |
 | `GET /api/stream` (curl, 3 s) | `event: hello` frame immediately, then `:keepalive` within 15 s. |
 | `POST /api/tasks` smoke | Queued task reaches `completed` (goal) or `waiting` (live). |
-| `nextool runtime status` | `[ok] runtime online — app v1.0.2 · engine llm-core v1.0.0`. |
+| `nextool runtime status` | `[ok] runtime online — app v1.0.3 · engine llm-core v1.0.0`. |
 | `nextool model list` | Lists registered packages without error (empty list is valid). |
 
 ## Rollback

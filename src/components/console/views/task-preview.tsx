@@ -29,10 +29,10 @@ import { ApiClientError, getTaskContext, getTaskDetail, getTaskEvents, getTaskEx
 import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { RuntimeTerminal } from '../terminal';
-import { TaskChecklist } from '../task-checklist';
-import { EmptyState, ErrorCard, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, fmtClock, fmtMs } from '../ui-bits';
+import { ChecklistItems, TaskChecklist } from '../task-checklist';
+import { EmptyState, ErrorCard, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
 import {
-  Ban, Braces, CheckCircle2, Circle, CornerDownRight, Flag, Layers, ListChecks, Loader2, MessageSquareWarning, Play, Radio, Send, Square, TerminalSquare, Wrench, XCircle,
+  Ban, Braces, CheckCircle2, Circle, CornerDownRight, Flag, Layers, ListChecks, Loader2, MessageSquareWarning, Play, Radio, Send, Square, TerminalSquare, Wrench, Zap,
 } from 'lucide-react';
 
 const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
@@ -47,12 +47,39 @@ function readTerminalPreference(): boolean {
 }
 
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting']);
+/** v1.0.3 §1: terminal states — Live Checklist/Terminal are removed once reached. */
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'stopped']);
+/** Events that should refresh task detail/plan/executions immediately (v1.0.3 §2). */
+const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|task\.(completed|failed|cancelled|started)|planner\.(plan|parallel_batch|partial_failure)|subgoal\.created)/;
 
-function PlanIcon({ step }: { step: PlanStep }) {
-  if (step.status === 'in_progress') return <Loader2 className="size-3.5 animate-spin text-sky-300" aria-hidden />;
-  if (step.status === 'completed') return <CheckCircle2 className="size-3.5 text-emerald-400" aria-hidden />;
-  if (step.status === 'failed') return <XCircle className="size-3.5 text-rose-400" aria-hidden />;
-  return <Circle className="size-3.5 text-slate-600" aria-hidden />;
+function ExecutionCard({ ex }: { ex: ToolExecution }) {
+  return (
+    <div className="glass-card rounded-md px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusChip status={ex.status} />
+        <span className="font-mono text-xs font-semibold text-foreground">{ex.tool}</span>
+        <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+          {ex.durationMs !== undefined ? fmtMs(ex.durationMs) : 'running…'} · {fmtClock(ex.startedAt)}
+        </span>
+      </div>
+      {ex.error ? <p className="mt-1 font-mono text-[11px] text-rose-300">{ex.error.code}: {ex.error.message}</p> : null}
+      <Accordion type="single" collapsible className="mt-1">
+        <AccordionItem value="io" className="border-none">
+          <AccordionTrigger className="py-1 text-[11px] text-muted-foreground hover:text-sky-300 hover:no-underline">params / result</AccordionTrigger>
+          <AccordionContent className="space-y-2 pb-1">
+            <div>
+              <p className="mb-1"><TechLabel className="text-[9px]">params</TechLabel></p>
+              <JsonBlock value={ex.params ?? {}} maxHeight="max-h-40" />
+            </div>
+            <div>
+              <p className="mb-1"><TechLabel className="text-[9px]">result</TechLabel></p>
+              <JsonBlock value={ex.result ?? null} maxHeight="max-h-40" />
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </div>
+  );
 }
 
 function ExecutionsPanel({ executions }: { executions: ToolExecution[] | null }) {
@@ -60,35 +87,39 @@ function ExecutionsPanel({ executions }: { executions: ToolExecution[] | null })
     return <div className="space-y-2">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div>;
   }
   if (executions.length === 0) return <EmptyState title="No tool calls yet" hint="Executions appear as the CoreModule dispatches tools." />;
+
+  // v1.0.3 §23 — parallel visibility: executions sharing a batchId ran
+  // CONCURRENTLY and render inside one labeled parallel-batch group instead of
+  // a fake sequential chain. Sequential calls render as before.
+  const groups: { key: string; batchId: string | null; items: ToolExecution[] }[] = [];
+  for (const ex of executions) {
+    const last = groups[groups.length - 1];
+    if (ex.batchId && last && last.batchId === ex.batchId) {
+      last.items.push(ex);
+    } else if (ex.batchId) {
+      groups.push({ key: `batch-${ex.batchId}`, batchId: ex.batchId, items: [ex] });
+    } else {
+      groups.push({ key: ex.executionId, batchId: null, items: [ex] });
+    }
+  }
+
   return (
     <div className="space-y-2">
-      {executions.map((ex) => (
-        <div key={ex.executionId} className="glass-card rounded-md px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusChip status={ex.status} />
-            <span className="font-mono text-xs font-semibold text-foreground">{ex.tool}</span>
-            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-              {ex.durationMs !== undefined ? fmtMs(ex.durationMs) : 'running…'} · {fmtClock(ex.startedAt)}
-            </span>
+      {groups.map((g) =>
+        g.batchId ? (
+          <div key={g.key} className="rounded-md border border-sky-400/25 bg-sky-400/[0.04] p-2" data-testid="parallel-batch">
+            <p className="mb-1.5 flex items-center gap-1.5 px-1">
+              <Zap className="size-3 text-sky-300" aria-hidden />
+              <span className="font-tech text-[9px] uppercase tracking-widest text-sky-300/90">parallel batch · {g.items.length} concurrent</span>
+            </p>
+            <div className="space-y-2">
+              {g.items.map((ex) => <ExecutionCard key={ex.executionId} ex={ex} />)}
+            </div>
           </div>
-          {ex.error ? <p className="mt-1 font-mono text-[11px] text-rose-300">{ex.error.code}: {ex.error.message}</p> : null}
-          <Accordion type="single" collapsible className="mt-1">
-            <AccordionItem value="io" className="border-none">
-              <AccordionTrigger className="py-1 text-[11px] text-muted-foreground hover:text-sky-300 hover:no-underline">params / result</AccordionTrigger>
-              <AccordionContent className="space-y-2 pb-1">
-                <div>
-                  <p className="mb-1"><TechLabel className="text-[9px]">params</TechLabel></p>
-                  <JsonBlock value={ex.params ?? {}} maxHeight="max-h-40" />
-                </div>
-                <div>
-                  <p className="mb-1"><TechLabel className="text-[9px]">result</TechLabel></p>
-                  <JsonBlock value={ex.result ?? null} maxHeight="max-h-40" />
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-          </Accordion>
-        </div>
-      ))}
+        ) : (
+          g.items.map((ex) => <ExecutionCard key={ex.executionId} ex={ex} />)
+        ),
+      )}
     </div>
   );
 }
@@ -167,6 +198,7 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   }, [backfill, streamEvents]);
 
   const isActive = detail ? ACTIVE_STATUSES.has(detail.status) : true;
+  const isTerminal = detail ? TERMINAL_STATUSES.has(detail.status) : false;
 
   const loadDetail = useCallback(async () => {
     try {
@@ -197,6 +229,18 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
     }, 2500);
     return () => clearInterval(t);
   }, [isActive, loadDetail, loadSide]);
+
+  // v1.0.3 §2: plan/checklist state must update IMMEDIATELY when the runtime
+  // reports a step/task transition — the live stream triggers an instant
+  // detail refresh instead of waiting for the 2.5s poll.
+  const lastStreamEvent = streamEvents.length > 0 ? streamEvents[streamEvents.length - 1] : null;
+  const lastStreamEventId = lastStreamEvent?.id ?? '';
+  const lastStreamEventType = lastStreamEvent?.type ?? '';
+  useEffect(() => {
+    if (!lastStreamEventId || !REFRESH_EVENT_RE.test(lastStreamEventType)) return;
+    void loadDetail();
+    void loadSide();
+  }, [lastStreamEventId, lastStreamEventType, loadDetail, loadSide]);
 
   const doStop = async () => {
     setStopping(true);
@@ -277,7 +321,10 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
   const state = detail.state;
   const duration = detail.durationMs ?? (detail.startedAt ? Date.now() - new Date(detail.startedAt).getTime() : undefined);
-  const planSteps = detail.plan ?? state?.plan ?? [];
+  // v1.0.3 §2: state.plan is written on every runtime state persist, so it is
+  // the fresher source for live step statuses (detail.plan can lag on tasks
+  // executed before the plan-column sync fix); fall back to detail.plan.
+  const planSteps = state?.plan?.length ? state.plan : detail.plan ?? [];
 
   // ---- shared section fragments (rendered in mobile tabs AND desktop columns) ----
 
@@ -305,25 +352,22 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
     </section>
   );
 
+  // v1.0.3 §2/§3/§4 — the Plan section IS a live checklist: states come from
+  // the actual runtime plan + event stream (deriveChecklist) and transitions
+  // animate (✓ pulse on completion, moving highlight while running, [!] on
+  // failure). Never a hardcoded checked state.
+  const planChecklist = deriveChecklist(planSteps, taskEvents);
+
   const planSection = (
     <section aria-label="Plan" className="glass-panel rounded-lg p-4">
-      <SectionTitle icon={<Play className="size-4 text-sky-300" aria-hidden />} title="Plan" desc="Steps produced by the planner." />
+      <SectionTitle icon={<Play className="size-4 text-sky-300" aria-hidden />} title="Plan" desc="Runtime-driven checklist — steps update as the task executes." />
       <div className="mt-3">
         {planSteps.length === 0 ? (
           <EmptyState title="No plan yet" hint="The planner publishes steps once the task starts executing." />
         ) : (
-          <ol className="nextool-scroll max-h-64 space-y-1.5 overflow-y-auto pr-1">
-            {planSteps.map((step) => (
-              <li key={step.id} className="glass-card flex items-start gap-2 rounded-md px-3 py-2">
-                <span className="mt-0.5"><PlanIcon step={step} /></span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs text-foreground/90">{step.title}</span>
-                  {step.detail ? <span className="block text-[11px] text-muted-foreground">{step.detail}</span> : null}
-                </span>
-                <Badge variant="outline" className="border-white/[0.09] font-mono text-[9px] uppercase text-muted-foreground">{step.kind}</Badge>
-              </li>
-            ))}
-          </ol>
+          <div className="nextool-scroll max-h-72 overflow-y-auto pr-1">
+            <ChecklistItems items={planChecklist.items} finished={isTerminal} />
+          </div>
         )}
       </div>
     </section>
@@ -395,8 +439,13 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
   // ---- v1.0.2 §67-68: Preview as Terminal toggle — checklist is the DEFAULT.
   // Both views consume the SAME runtime state (spec §68).
+  // v1.0.3 §1/§30: the whole Live Checklist/Terminal area exists ONLY while
+  // the task is actively executing. On a terminal state (completed/failed/
+  // cancelled/stopped) it disappears entirely — no empty container, no blank
+  // gap — and the Final Task Output section takes over (historical info like
+  // plan/executions/state/context/timeline remains below).
   const livePreview = (
-    <section aria-label="Live task preview" className="glass-panel rounded-lg p-4">
+    <section aria-label="Live task preview" className="glass-panel rounded-lg p-4" data-testid="live-preview">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SectionTitle
           icon={<ListChecks className="size-4 text-sky-300" aria-hidden />}
@@ -425,6 +474,79 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
       </div>
     </section>
   );
+
+  // v1.0.3 §1/§30 — Final Task Output: replaces the live area once the task
+  // reaches a terminal state. Shows the runtime-recorded FinalResult (summary,
+  // steps, tool calls, duration, artifacts) — real data only, '—' if absent.
+  const finalResult = detail.finalResult ?? null;
+  const finalResultSummary = (() => {
+    if (finalResult?.result && typeof finalResult.result === 'object' && !Array.isArray(finalResult.result)) {
+      const s = (finalResult.result as Record<string, unknown>).summary;
+      if (typeof s === 'string' && s.trim()) return s;
+    }
+    if (detail.statusDetail) return detail.statusDetail;
+    if (detail.error) return `${detail.error.code} [${detail.error.stage}]: ${detail.error.message}`;
+    return null;
+  })();
+  const finalArtifacts = (() => {
+    if (finalResult?.result && typeof finalResult.result === 'object' && !Array.isArray(finalResult.result)) {
+      const a = (finalResult.result as Record<string, unknown>).artifacts;
+      if (Array.isArray(a) && a.length > 0) return a as Record<string, unknown>[];
+    }
+    return null;
+  })();
+  const finalOutputSection = isTerminal ? (
+    <section aria-label="Final task output" className="glass-panel rounded-lg p-4" data-testid="final-task-output">
+      <SectionTitle
+        icon={<CheckCircle2 className="size-4 text-emerald-300" aria-hidden />}
+        title="Final task output"
+        desc="Recorded by the runtime when the task reached its terminal state."
+      />
+      {finalResultSummary ? (
+        <p className="mt-3 break-words rounded-md border border-white/[0.08] bg-white/[0.04] px-3 py-2.5 text-sm text-foreground/90">
+          {finalResultSummary}
+        </p>
+      ) : (
+        <p className="mt-3 text-xs text-muted-foreground">No summary was recorded for this task.</p>
+      )}
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="glass-card rounded-md px-3 py-2">
+          <TechLabel className="text-[9px]">result status</TechLabel>
+          <p className="mt-1 font-mono text-sm text-foreground">{finalResult?.status ?? detail.status}</p>
+        </div>
+        <div className="glass-card rounded-md px-3 py-2">
+          <TechLabel className="text-[9px]">steps</TechLabel>
+          <p className="mt-1 font-mono text-sm tabular-nums text-foreground">{finalResult?.steps ?? detail.steps}</p>
+        </div>
+        <div className="glass-card rounded-md px-3 py-2">
+          <TechLabel className="text-[9px]">tool calls</TechLabel>
+          <p className="mt-1 font-mono text-sm tabular-nums text-foreground">{finalResult?.toolCalls ?? detail.toolCalls}</p>
+        </div>
+        <div className="glass-card rounded-md px-3 py-2">
+          <TechLabel className="text-[9px]">duration</TechLabel>
+          <p className="mt-1 font-mono text-sm tabular-nums text-foreground">{finalResult?.durationMs !== undefined ? fmtMs(finalResult.durationMs) : duration !== undefined ? fmtMs(duration) : '—'}</p>
+        </div>
+      </div>
+      {finalArtifacts ? (
+        <div className="mt-3">
+          <TechLabel className="text-[9px]">artifacts ({finalArtifacts.length})</TechLabel>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {finalArtifacts.map((a, i) => (
+              <Badge key={i} variant="outline" className="border-white/[0.09] font-mono text-[10px] text-slate-300">
+                {String(a.type ?? 'artifact')}{typeof a.path === 'string' ? ` · ${a.path}` : ''}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="mt-3">
+        <TechLabel className="text-[9px]">final result (live JSON)</TechLabel>
+        <div className="mt-1">
+          <JsonBlock value={finalResult ?? { status: detail.status, statusDetail: detail.statusDetail ?? null, error: detail.error ?? null }} maxHeight="max-h-72" />
+        </div>
+      </div>
+    </section>
+  ) : null;
 
   return (
     <div className="space-y-4">
@@ -527,12 +649,13 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
           <TabsContent value="overview" className="mt-3 space-y-4 outline-none">
             {goalCard}
             {subgoalCard}
-            {livePreview}
+            {isTerminal ? finalOutputSection : livePreview}
             {planSection}
           </TabsContent>
           <TabsContent value="timeline" className="mt-3 space-y-4 outline-none">
             {timelineSection}
-            {terminal}
+            {/* v1.0.3 §1: the live terminal disappears once the task finishes. */}
+            {!isTerminal ? terminal : null}
           </TabsContent>
           <TabsContent value="tools" className="mt-3 space-y-4 outline-none">
             {toolsSection}
@@ -553,7 +676,7 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
         {planSection}
 
-        {livePreview}
+        {isTerminal ? finalOutputSection : livePreview}
 
         <div className="grid gap-4 lg:grid-cols-2">
           {toolsSection}

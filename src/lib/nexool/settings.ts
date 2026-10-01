@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS: NexToolSettings = {
   toolTimeoutMs: 30000,
   liveIntervalMs: 60000,
   useMemory: true,
+  parallelToolCalls: true,
+  maxParallelToolCalls: 4,
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -52,6 +54,8 @@ export async function updateSettings(partial: Partial<NexToolSettings>): Promise
   next.taskTimeoutMs = clampNum(next.taskTimeoutMs, 5_000, 3_600_000);
   next.toolTimeoutMs = clampNum(next.toolTimeoutMs, 1_000, 300_000);
   next.liveIntervalMs = clampNum(next.liveIntervalMs, 1_000, 3_600_000);
+  next.parallelToolCalls = next.parallelToolCalls !== false;
+  next.maxParallelToolCalls = clampNum(next.maxParallelToolCalls, 1, 8);
   if (next.defaultMode !== 'goal' && next.defaultMode !== 'live') next.defaultMode = 'goal';
   next.defaultReasoningLevel = clampNum(next.defaultReasoningLevel, 1, 6) as NexToolSettings['defaultReasoningLevel'];
   if (next.logLevel !== 'info' && next.logLevel !== 'debug' && next.logLevel !== 'error') next.logLevel = 'info';

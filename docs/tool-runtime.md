@@ -22,6 +22,8 @@ interface ToolExecution {
   startedAt: string;                  // ISO
   completedAt?: string;
   durationMs?: number;
+  batchId?: string;                   // v1.0.3: set when this call ran in a parallel batch
+  parallelGroup?: number;             // v1.0.3: planner group the call belonged to
 }
 ```
 
@@ -61,18 +63,43 @@ flowchart LR
    `INVALID_PARAMS`, `SERVICE_UNAVAILABLE`, `INVALID_CONFIG`, …). A timeout message
    detection flips the status to `timeout` with code `TIMEOUT`.
 
-## Parallel independent calls
+## Parallel independent calls (v1.0.3)
 
 Two layers of parallelism:
 
-- **Plan groups** — the goal loop collects ≥ 2 consecutive pending *action* steps
-  sharing a `parallelGroup`, gets one CoreModule decision per step, and executes all of
-  them concurrently (`Promise.all`) only if **every** decision is a `tool_call`;
-  otherwise the group is reset to pending and handled sequentially. Batch size capped
-  by `maxSubtoolCalls`.
-- **Executor helper** — `executeToolsParallel(calls, opts)` runs any list of calls
-  through `Promise.all` (each call still fully independent: own id, own timeout, own
-  events/history).
+- **Plan groups → `executeParallelBatch`** — when `parallelToolCalls` is on (default)
+  and `autoExecuteSubtools` allows execution, the goal loop collects ≥ 2 consecutive
+  pending *action* steps sharing a `parallelGroup`, gets one CoreModule decision per
+  step, and — only if **every** decision is a `tool_call` — executes the batch through
+  `executeParallelBatch(batchId, calls, { maxParallel, ... })`. Otherwise the group is
+  reset to pending and handled sequentially.
+- **Executor helper** — `executeToolsParallel(calls, opts)` still exists and runs any
+  list of calls through `Promise.all` (each call fully independent: own id, own timeout,
+  own events/history).
+
+### `executeParallelBatch` semantics
+
+- **Hard concurrency cap** — `maxParallel` is clamped to **1–8** (default 4). There is
+  no unlimited concurrency, ever.
+- **Waves** — the goal loop slices the group to the cap before dispatch
+  (`group.slice(0, min(group.length, maxParallelToolCalls))`), so a larger same-group
+  backlog runs across later loop iterations instead of one oversized dispatch.
+  `executeParallelBatch` itself also clamps the cap and would run any calls beyond it in
+  subsequent waves after the current wave completes — overflow is deferred, never
+  widened.
+- **Failure isolation** — `executeTool` never throws, and each call is independent:
+  one sibling failing (or timing out) never cancels the others. If some but not all
+  calls of a batch fail, the loop marks the steps individually and emits
+  `planner.partial_failure`; the survivors count.
+- **Per-call safety unchanged** — `toolTimeoutMs` still applies to every call in the
+  batch, and the task's abort signal still cancels in-flight calls.
+- **Safety limits unchanged** — `safetyLimit`/`maxSubtoolCalls` accounting is not
+  relaxed by batching; every call still counts.
+- **Provenance** — every batched call gets `batchId` + `parallelGroup` on the execution,
+  a `tool.started` message with a `(parallel batch)` suffix, and the fields persisted on
+  its `HistoryEntry` row (new v1.0.3 columns) — which is what
+  `GET /api/tasks/{id}/executions` returns and what Task Preview groups into a labeled
+  "parallel batch · N concurrent" card.
 
 Dependent operations are simply steps **without** a shared group — the loop executes
 them sequentially in plan order, so step N+1 can use step N's observation as context.
@@ -100,7 +127,8 @@ event wake tries again.
 - **Event** — `tool.completed` / `tool.failed` / `tool.timeout` / `tool.cancelled` with
   the full execution as payload; the execution id lets you correlate
   `tool.started` ↔ terminal event.
-- **History** — a `HistoryEntry` row (task, action, params JSON, result JSON, status).
+- **History** — a `HistoryEntry` row (task, action, params JSON, result JSON, status,
+  and — v1.0.3 — `batchId`/`parallelGroup` for batched calls).
   This is the durable record the console's History view and the task's
   `/executions` endpoint read; it survives restarts and is written even when other
   bookkeeping fails (write failures are logged, never thrown).

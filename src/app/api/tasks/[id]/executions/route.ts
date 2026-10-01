@@ -34,6 +34,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       error: status === 'failed' || status === 'timeout' ? { code: status.toUpperCase(), message: 'See task events for details.' } : null,
       startedAt: ts,
       completedAt: ts,
+      // v1.0.3: parallel provenance — Task Preview groups consecutive rows
+      // sharing a batchId into one "parallel batch" group.
+      ...(r.batchId ? { batchId: r.batchId, parallelGroup: r.parallelGroup ?? undefined } : {}),
     };
   });
   return ok(executions);
