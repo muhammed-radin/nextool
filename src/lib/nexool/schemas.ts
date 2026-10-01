@@ -1,0 +1,217 @@
+/**
+ * NexTool Q1 v1.0.1 — centralized request validation schemas (zod).
+ *
+ * ONE validation surface shared by all mutating API routes (spec §53/§54):
+ * clear, structured validation errors; server-side clamping mirrors the
+ * settings/runtime limits; nothing from the frontend is trusted implicitly.
+ *
+ * Error codes are kept backwards compatible with the v1.0.0 contract:
+ * INVALID_REQUEST (tasks) / INVALID_PARAMS (everything else) / INVALID_MANIFEST.
+ */
+
+import { z } from 'zod';
+
+/** Collect "field: message" pairs from a zod error into one readable string. */
+export function zodMessage(error: z.ZodError): string {
+  return error.issues
+    .slice(0, 5)
+    .map((i) => `${i.path.join('.') || 'body'}: ${i.message}`)
+    .join('; ');
+}
+
+// ---------- primitives ----------
+
+const nonEmpty = (max: number) => z.string().trim().min(1).max(max);
+const eventType = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .regex(/^[a-zA-Z][a-zA-Z0-9._-]*$/, 'must start with a letter and contain only letters, digits, dot, underscore or dash');
+
+const jsonObject = z.record(z.string(), z.unknown());
+
+// ---------- tasks ----------
+
+export const taskConfigSchema = z
+  .object({
+    name: z.string().trim().max(80).optional(),
+    mode: z.enum(['goal', 'live']),
+    reasoningLevel: z.number().int().min(1).max(6),
+    enabledTools: z.array(z.string().trim().min(1).max(160)).max(200).optional(),
+    useMemory: z.boolean().optional(),
+    learnFrom: z
+      .object({ feedback: z.boolean().optional(), results: z.boolean().optional() })
+      .optional(),
+    autoExecuteSubtools: z.boolean().optional(),
+    maxSubtoolCalls: z.number().int().min(1).max(200),
+    safetyLimit: z.number().int().min(1).max(500),
+    maxIterations: z.number().int().min(1).max(200),
+    taskTimeoutMs: z.number().int().min(5_000).max(3_600_000),
+    toolTimeoutMs: z.number().int().min(1_000).max(300_000),
+    liveIntervalMs: z.number().int().min(1_000).max(3_600_000),
+    sessionId: z.string().trim().max(200).optional(),
+    context: jsonObject.optional(),
+  })
+  .partial()
+  .strict();
+
+/** POST /api/tasks — accepts { request, config? }; legacy flat mode/reasoningLevel still tolerated. */
+export const createTaskSchema = z
+  .object({
+    request: nonEmpty(8000),
+    config: taskConfigSchema.optional(),
+    mode: z.enum(['goal', 'live']).optional(),
+    reasoningLevel: z.number().int().min(1).max(6).optional(),
+  })
+  .strict();
+
+/** POST /api/tasks/:id/event */
+export const taskEventSchema = z
+  .object({
+    type: eventType,
+    payload: jsonObject.optional(),
+    priority: z.number().int().min(1).max(9).optional(),
+    source: z
+      .enum(['runtime', 'planner', 'observer', 'core', 'tool', 'environment', 'user', 'system'])
+      .optional(),
+  })
+  .strict();
+
+/** POST /api/tasks/:id/feedback */
+export const taskFeedbackSchema = z
+  .object({
+    message: nonEmpty(4000),
+    correctAction: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+
+// ---------- environment ----------
+
+/** POST /api/env/event */
+export const envEventSchema = z
+  .object({
+    type: z.enum(['server.crash', 'server.degrade', 'server.recover']),
+    serverId: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+
+// ---------- tools ----------
+
+export const toolParamDefSchema = z
+  .object({
+    name: nonEmpty(80),
+    type: z.enum(['string', 'number', 'boolean', 'object', 'array']),
+    required: z.boolean(),
+    description: nonEmpty(500),
+    generation: z.enum(['extractive', 'constructive']).optional(),
+    enumValues: z.array(z.string().trim().min(1).max(160)).max(50).optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    default: z.unknown().optional(),
+  })
+  .strict();
+
+export const toolDefinitionSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(160)
+      .regex(/^[a-zA-Z][a-zA-Z0-9_.-]*$/, 'must look like namespace.action (letters, digits, dot, dash, underscore)'),
+    description: nonEmpty(1000),
+    purpose: z.string().trim().max(1000).optional(),
+    category: nonEmpty(60),
+    environment: z.enum(['builtin', 'virtual-env', 'dynamic']),
+    schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }).strict(),
+  })
+  .strict();
+
+/** POST /api/tools/register (also POST /api/tools alias) */
+export const registerToolSchema = z
+  .object({
+    definition: toolDefinitionSchema,
+    handlerKind: z.enum(['echo', 'delay', 'http_get', 'uuid']).optional(),
+    handlerConfig: jsonObject.optional(),
+  })
+  .strict();
+
+/** POST /api/tools/:name/toggle */
+export const toggleToolSchema = z.object({ enabled: z.boolean() }).strict();
+
+// ---------- memory ----------
+
+/** POST /api/memory */
+export const memorySchema = z
+  .object({
+    key: nonEmpty(200),
+    value: z.unknown(),
+    tags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+    source: z.string().trim().max(64).optional(),
+  })
+  .strict();
+
+// ---------- datasets ----------
+
+export const datasetExampleSchema = z
+  .object({
+    category: nonEmpty(80),
+    request: nonEmpty(8000),
+    expectedTool: z.string().trim().max(160).optional(),
+    expectedParams: jsonObject.optional(),
+    split: z.enum(['train', 'validation', 'test']).optional(),
+  })
+  .strict();
+
+/** POST /api/datasets/import */
+export const datasetImportSchema = z
+  .object({
+    name: nonEmpty(120),
+    version: z
+      .string()
+      .trim()
+      .min(1)
+      .max(32)
+      .regex(/^\d+\.\d+\.\d+/, 'must be semver-like (e.g. 1.0.0)'),
+    examples: z.array(datasetExampleSchema).min(1).max(5000),
+    note: z.string().trim().max(1000).optional(),
+  })
+  .strict();
+
+// ---------- models ----------
+
+/** POST /api/models/load — shape check; .nextool semantic validation stays in the route. */
+export const modelLoadSchema = z
+  .object({
+    manifest: z
+      .object({
+        name: z.string().trim().min(1).max(160).optional(),
+        version: z.string().trim().max(32).optional(),
+        format: z.unknown().optional(),
+        architecture: z.unknown().optional(),
+        compatibility: z.unknown().optional(),
+      })
+      .passthrough(),
+  })
+  .strict();
+
+// ---------- settings ----------
+
+/** PUT /api/settings — mirrors updateSettings clamps. */
+export const settingsSchema = z
+  .object({
+    defaultMode: z.enum(['goal', 'live']),
+    defaultReasoningLevel: z.number().int().min(1).max(6),
+    maxSubtoolCalls: z.number().int().min(1).max(200),
+    safetyLimit: z.number().int().min(1).max(500),
+    maxIterations: z.number().int().min(1).max(200),
+    taskTimeoutMs: z.number().int().min(5_000).max(3_600_000),
+    toolTimeoutMs: z.number().int().min(1_000).max(300_000),
+    liveIntervalMs: z.number().int().min(1_000).max(3_600_000),
+    useMemory: z.boolean(),
+    logLevel: z.enum(['info', 'debug', 'error']),
+    realTimeTransport: z.literal('sse'),
+  })
+  .partial()
+  .strict();

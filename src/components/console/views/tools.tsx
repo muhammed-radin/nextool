@@ -3,6 +3,8 @@
 /**
  * Tools (spec §56) — tool registry grid with per-tool enable switch, stats,
  * schema accordion, and dynamic tool registration dialog.
+ * v1.0.1: blue gradient glassmorphism — glass cards, sky/cyan accents,
+ * glass-strong dialog, 1→2→3 column responsive grid, min-h-11 controls.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -41,7 +43,7 @@ function EnvironmentBadge({ environment }: { environment: ToolEntry['environment
       <TooltipProvider delayDuration={150}>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Badge variant="outline" className="border-amber-500/40 font-mono text-[10px] text-amber-300">virtual environment</Badge>
+            <Badge variant="outline" className="border-amber-400/30 bg-amber-400/10 font-mono text-[10px] text-amber-300">virtual environment</Badge>
           </TooltipTrigger>
           <TooltipContent>Runs against the simulated server fleet</TooltipContent>
         </Tooltip>
@@ -49,31 +51,31 @@ function EnvironmentBadge({ environment }: { environment: ToolEntry['environment
     );
   }
   if (environment === 'dynamic') {
-    return <Badge variant="outline" className="border-teal-500/40 font-mono text-[10px] text-teal-300">dynamic</Badge>;
+    return <Badge variant="outline" className="border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-300">dynamic</Badge>;
   }
-  return <Badge variant="outline" className="border-zinc-600 font-mono text-[10px] text-zinc-400">builtin</Badge>;
+  return <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">builtin</Badge>;
 }
 
 function ToolCard({ tool, onToggle, toggling }: { tool: ToolEntry; onToggle: (name: string, enabled: boolean) => void; toggling: boolean }) {
   const s = tool.stats;
   return (
-    <div className={cn('flex flex-col rounded-lg border bg-card p-4', !tool.enabled && 'opacity-70')}>
+    <div className={cn('glass-card flex flex-col rounded-lg p-4', !tool.enabled && 'opacity-70')}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate font-mono text-sm font-semibold text-zinc-100">{tool.name}</p>
+          <p className="truncate font-mono text-sm font-semibold text-foreground">{tool.name}</p>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline" className="border-zinc-700 font-mono text-[10px] text-zinc-400">{tool.category}</Badge>
+            <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">{tool.category}</Badge>
             <EnvironmentBadge environment={tool.environment} />
-            {tool.handlerKind ? <Badge variant="outline" className="border-zinc-700 font-mono text-[10px] text-zinc-500">handler: {tool.handlerKind}</Badge> : null}
+            {tool.handlerKind ? <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-slate-400">handler: {tool.handlerKind}</Badge> : null}
           </div>
         </div>
         <Switch checked={tool.enabled} onCheckedChange={(v) => onToggle(tool.name, v)} disabled={toggling} aria-label={`Toggle tool ${tool.name}`} />
       </div>
 
-      <p className="mt-2 text-xs text-zinc-300">{tool.description}</p>
+      <p className="mt-2 text-xs text-foreground/90">{tool.description}</p>
       {tool.purpose ? <p className="mt-1 text-[11px] italic text-muted-foreground">purpose: {tool.purpose}</p> : null}
 
-      <div className="mt-3 grid grid-cols-4 gap-2 border-t border-zinc-800/80 pt-2 font-mono text-[11px] text-zinc-400">
+      <div className="mt-3 grid grid-cols-4 gap-2 border-t border-white/[0.07] pt-2 font-mono text-[11px] tabular-nums text-slate-300">
         <span><span className="text-muted-foreground">calls</span> {s.callCount}</span>
         <span className="text-emerald-300"><span className="text-muted-foreground">ok</span> {s.successCount}</span>
         <span className="text-rose-300"><span className="text-muted-foreground">fail</span> {s.failureCount + s.timeoutCount}</span>
@@ -82,42 +84,44 @@ function ToolCard({ tool, onToggle, toggling }: { tool: ToolEntry; onToggle: (na
 
       <Accordion type="single" collapsible className="mt-2">
         <AccordionItem value="schema" className="border-none">
-          <AccordionTrigger className="py-1.5 text-[11px] text-zinc-500 hover:no-underline">Schema ({tool.schema?.properties?.length ?? 0} params)</AccordionTrigger>
+          <AccordionTrigger className="py-1.5 text-[11px] text-muted-foreground hover:no-underline">Schema ({tool.schema?.properties?.length ?? 0} params)</AccordionTrigger>
           <AccordionContent>
             {(tool.schema?.properties ?? []).length === 0 ? (
-              <p className="text-[11px] text-zinc-600">No parameters.</p>
+              <p className="text-[11px] text-muted-foreground">No parameters.</p>
             ) : (
-              <table className="w-full text-left text-[11px]">
-                <thead>
-                  <tr className="text-zinc-500">
-                    <th className="pb-1 pr-2 font-medium">name</th>
-                    <th className="pb-1 pr-2 font-medium">type</th>
-                    <th className="pb-1 font-medium">notes</th>
-                  </tr>
-                </thead>
-                <tbody className="font-mono">
-                  {(tool.schema?.properties ?? []).map((p) => (
-                    <tr key={p.name} className="border-t border-zinc-800/60 align-top">
-                      <td className="py-1 pr-2 text-zinc-200">
-                        {p.name}
-                        {p.required ? <span className="text-rose-400">*</span> : null}
-                      </td>
-                      <td className="py-1 pr-2 text-amber-300/90">{p.type}</td>
-                      <td className="py-1 text-zinc-400">
-                        {p.generation ? <span className="mr-1 rounded border border-zinc-700 px-1 text-[9px] uppercase">{p.generation}</span> : null}
-                        {p.description}
-                        {p.enumValues?.length ? (
-                          <span className="ml-1 inline-flex flex-wrap gap-1">
-                            {p.enumValues.map((v) => (
-                              <span key={v} className="rounded bg-zinc-800 px-1 text-[9px] text-zinc-300">{v}</span>
-                            ))}
-                          </span>
-                        ) : null}
-                      </td>
+              <div className="nextool-scroll overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="pb-1 pr-2 font-medium">name</th>
+                      <th className="pb-1 pr-2 font-medium">type</th>
+                      <th className="pb-1 font-medium">notes</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="font-mono">
+                    {(tool.schema?.properties ?? []).map((p) => (
+                      <tr key={p.name} className="border-t border-white/[0.06] align-top">
+                        <td className="py-1 pr-2 text-foreground/90">
+                          {p.name}
+                          {p.required ? <span className="text-rose-400">*</span> : null}
+                        </td>
+                        <td className="py-1 pr-2 text-cyan-300/90">{p.type}</td>
+                        <td className="py-1 text-muted-foreground">
+                          {p.generation ? <span className="mr-1 rounded border border-white/[0.09] px-1 text-[9px] uppercase">{p.generation}</span> : null}
+                          {p.description}
+                          {p.enumValues?.length ? (
+                            <span className="ml-1 inline-flex flex-wrap gap-1">
+                              {p.enumValues.map((v) => (
+                                <span key={v} className="rounded bg-white/[0.06] px-1 text-[9px] text-foreground/80">{v}</span>
+                              ))}
+                            </span>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </AccordionContent>
         </AccordionItem>
@@ -206,14 +210,16 @@ export default function ToolsView() {
     }
   };
 
+  const inputCls = 'min-h-11 border-white/[0.09] bg-white/[0.04] text-sm';
+
   return (
     <div className="space-y-6">
       <SectionTitle
-        icon={<Wrench className="size-4 text-emerald-400" aria-hidden />}
+        icon={<Wrench className="size-4 text-sky-300" aria-hidden />}
         title="Tools"
         desc="Registry visible to the CoreModule — dynamic matching, no hardcoded ids."
         right={
-          <Button size="sm" className="min-h-9 gap-1.5 bg-emerald-500/90 text-zinc-950 hover:bg-emerald-400" onClick={() => setRegOpen(true)}>
+          <Button size="sm" className="bg-primary-gradient min-h-9 gap-1.5 text-primary-foreground hover:opacity-90" onClick={() => setRegOpen(true)}>
             <FilePlus2 className="size-3.5" aria-hidden /> Register tool
           </Button>
         }
@@ -222,13 +228,13 @@ export default function ToolsView() {
       {error && tools === null ? (
         <ErrorCard title="Tool registry unavailable" message={error} onRetry={load} />
       ) : tools === null ? (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-44 w-full" />)}
         </div>
       ) : tools.length === 0 ? (
         <EmptyState icon={<Wrench className="size-6" aria-hidden />} title="No tools registered" hint="The runtime has not exposed any tools yet — register one or wait for startup." />
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {tools.map((tool) => (
             <ToolCard key={tool.name} tool={tool} onToggle={(n, v) => void onToggle(n, v)} toggling={toggling === tool.name} />
           ))}
@@ -236,7 +242,7 @@ export default function ToolsView() {
       )}
 
       <Dialog open={regOpen} onOpenChange={setRegOpen}>
-        <DialogContent className="border-zinc-800 bg-popover sm:max-w-lg">
+        <DialogContent className="glass-strong sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Register dynamic tool</DialogTitle>
             <DialogDescription>Registers a handler-backed tool the CoreModule can match and execute.</DialogDescription>
@@ -245,25 +251,25 @@ export default function ToolsView() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="tool-name">Name <span className="text-muted-foreground">(namespace.action)</span></Label>
-                <Input id="tool-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="utility.summarize" className="font-mono text-sm" />
+                <Input id="tool-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="utility.summarize" className={cn('font-mono', inputCls)} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="tool-category">Category</Label>
-                <Input id="tool-category" value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} className="text-sm" />
+                <Input id="tool-category" value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} className={inputCls} />
               </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tool-desc">Description</Label>
-              <Input id="tool-desc" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className="text-sm" />
+              <Input id="tool-desc" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className={inputCls} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tool-purpose">Purpose <span className="text-muted-foreground">(optional)</span></Label>
-              <Input id="tool-purpose" value={form.purpose} onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value }))} className="text-sm" />
+              <Input id="tool-purpose" value={form.purpose} onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value }))} className={inputCls} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tool-handler">Handler kind</Label>
               <Select value={form.handlerKind} onValueChange={(v) => setForm((f) => ({ ...f, handlerKind: v }))}>
-                <SelectTrigger id="tool-handler" className="min-h-10 w-full font-mono text-sm"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="tool-handler" className="min-h-11 w-full font-mono text-sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="echo">echo — returns its input</SelectItem>
                   <SelectItem value="delay">delay — sleeps then acks</SelectItem>
@@ -274,16 +280,16 @@ export default function ToolsView() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tool-handlercfg">handlerConfig (JSON)</Label>
-              <Textarea id="tool-handlercfg" value={form.handlerConfig} onChange={(e) => setForm((f) => ({ ...f, handlerConfig: e.target.value }))} rows={2} className="font-mono text-xs" placeholder="{}" />
+              <Textarea id="tool-handlercfg" value={form.handlerConfig} onChange={(e) => setForm((f) => ({ ...f, handlerConfig: e.target.value }))} rows={2} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" placeholder="{}" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tool-schema">Schema params (JSON — array of param defs)</Label>
-              <Textarea id="tool-schema" value={form.schema} onChange={(e) => setForm((f) => ({ ...f, schema: e.target.value }))} rows={6} className="font-mono text-xs" />
+              <Textarea id="tool-schema" value={form.schema} onChange={(e) => setForm((f) => ({ ...f, schema: e.target.value }))} rows={6} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" className="min-h-10" onClick={() => setRegOpen(false)}>Cancel</Button>
-            <Button className="min-h-10 bg-emerald-500/90 text-zinc-950 hover:bg-emerald-400" disabled={registering} onClick={() => void submitRegister()}>
+            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04]" onClick={() => setRegOpen(false)}>Cancel</Button>
+            <Button className="bg-primary-gradient min-h-11 text-primary-foreground hover:opacity-90" disabled={registering} onClick={() => void submitRegister()}>
               {registering ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <FilePlus2 className="size-4" aria-hidden />} Register
             </Button>
           </DialogFooter>

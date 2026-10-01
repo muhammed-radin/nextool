@@ -1,8 +1,9 @@
 /**
  * /api/memory — GET list, POST upsert, DELETE (?key=).
  */
-import { ok, fail, readJson } from '@/lib/nexool/api-helpers';
+import { ok, fail, parseBody } from '@/lib/nexool/api-helpers';
 import { db } from '@/lib/db';
+import { memorySchema } from '@/lib/nexool/schemas';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,25 +39,17 @@ export async function GET() {
   })));
 }
 
-interface Body {
-  key?: string;
-  value?: unknown;
-  tags?: string[];
-  source?: string;
-}
-
 export async function POST(req: Request) {
-  const body = await readJson<Body>(req);
-  if (!body?.key || typeof body.key !== 'string' || !body.key.trim()) {
-    return fail('INVALID_PARAMS', 'key (string) is required');
-  }
+  const parsed = await parseBody(req, memorySchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
   if (body.value === undefined) return fail('INVALID_PARAMS', 'value is required');
-  const tags = Array.isArray(body.tags) ? body.tags.map(String) : [];
+  const tags = body.tags ?? [];
   const valueJson = typeof body.value === 'string' ? body.value : JSON.stringify(body.value);
   const row = await db.memoryEntry.upsert({
-    where: { key: body.key.trim() },
+    where: { key: body.key },
     update: { value: valueJson, tags: JSON.stringify(tags), source: body.source ?? 'user' },
-    create: { key: body.key.trim(), value: valueJson, tags: JSON.stringify(tags), source: body.source ?? 'user' },
+    create: { key: body.key, value: valueJson, tags: JSON.stringify(tags), source: body.source ?? 'user' },
   });
   return ok({
     id: row.id,

@@ -1,0 +1,131 @@
+---
+title: Tool Runtime
+category: Tools
+order: 2
+---
+
+# Tool Runtime
+
+`src/lib/nexool/tools/executor.ts` is the execution engine every tool call passes
+through. Its contract: **`executeTool` never throws** — it always resolves with a
+structured `ToolExecution`, whether the call succeeded, failed, timed out, or was
+cancelled.
+
+```ts
+interface ToolExecution {
+  executionId: string;   // exec_<hrtime base36><2 rand bytes>
+  tool: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'timeout' | 'cancelled';
+  params?: Record<string, unknown>;   // post-coercion params
+  result?: unknown;
+  error?: { code: string; message: string } | null;
+  startedAt: string;                  // ISO
+  completedAt?: string;
+  durationMs?: number;
+}
+```
+
+## Execution pipeline
+
+```mermaid
+flowchart LR
+    A[executeTool] --> B{tool in registry?}
+    B -- no --> F1[failed UNKNOWN_TOOL]
+    B -- yes --> C{aborted before start?}
+    C -- yes --> F2[cancelled CANCELLED]
+    C -- no --> D[coerceParams]
+    D --> E[validateParams]
+    E -- errors --> F3[failed INVALID_PARAMS]
+    E -- ok --> G{handler resolvable?}
+    G -- no --> F4[failed NO_HANDLER]
+    G -- yes --> H[race: handler vs timeout vs abort]
+    H -- ok --> I[completed + result]
+    H -- timeout --> F5[timeout TIMEOUT]
+    H -- abort --> F6[cancelled CANCELLED]
+    H -- throw --> F7[failed TOOL_FAILURE / handler code]
+```
+
+1. **Timeout budget** — `opts.timeoutMs ?? 30_000`, hard-clamped to **250 ms –
+   300 000 ms** regardless of config.
+2. **Param coercion** (`coerceParams`) — per declared type: numbers from numeric
+   strings, `"true"/"false"` → boolean, JSON strings parsed for object/array, CSV
+   strings split into arrays. Unknown keys are dropped here.
+3. **Validation** (`validateParams`) — after coercion: unknown params are errors,
+   required params must exist, types must match (finite numbers, plain objects,
+   arrays), `min`/`max` bounds and `enumValues` membership enforced. Errors join into
+   one `INVALID_PARAMS` message.
+4. **Race** — the handler runs against both the timeout timer (unref'd) and the
+   task's `AbortSignal`, so a task stop cancels in-flight work deterministically.
+5. **Handler errors** — handlers throw `ToolFailure(message, code)`; the executor maps
+   them onto `failed` with the handler's code (`TOOL_FAILURE` default,
+   `INVALID_PARAMS`, `SERVICE_UNAVAILABLE`, `INVALID_CONFIG`, …). A timeout message
+   detection flips the status to `timeout` with code `TIMEOUT`.
+
+## Parallel independent calls
+
+Two layers of parallelism:
+
+- **Plan groups** — the goal loop collects ≥ 2 consecutive pending *action* steps
+  sharing a `parallelGroup`, gets one CoreModule decision per step, and executes all of
+  them concurrently (`Promise.all`) only if **every** decision is a `tool_call`;
+  otherwise the group is reset to pending and handled sequentially. Batch size capped
+  by `maxSubtoolCalls`.
+- **Executor helper** — `executeToolsParallel(calls, opts)` runs any list of calls
+  through `Promise.all` (each call still fully independent: own id, own timeout, own
+  events/history).
+
+Dependent operations are simply steps **without** a shared group — the loop executes
+them sequentially in plan order, so step N+1 can use step N's observation as context.
+There is no automatic dataflow between executions; dependencies are expressed through
+plan order and the context bundle.
+
+## Failure, cancel and retry semantics
+
+| Outcome | Execution status | Error code | Event | Retry? |
+| --- | --- | --- | --- | --- |
+| Unknown tool | failed | `UNKNOWN_TOOL` | `tool.failed` (5) | No |
+| Invalid params | failed | `INVALID_PARAMS` | `tool.failed` (5) | No |
+| No handler bound | failed | `NO_HANDLER` | `tool.failed` (5) | No |
+| Handler threw | failed | handler code | `tool.failed` (5) | **Once** in Goal Mode (fresh decision with the error as observation; `planner.retry` event). Second failure ends the task (`TOOL_FAILURE`). |
+| Timeout | timeout | `TIMEOUT` | `tool.timeout` (4) | Same single retry rule. |
+| Task stop / abort | cancelled | `CANCELLED` | `tool.cancelled` (5) | No — stop wins. |
+
+In Live Mode there is no retry machinery: failed cycles are logged and the next tick or
+event wake tries again.
+
+## After every execution (finalize)
+
+- **Stats** — `completed | failed | timeout` increment the tool's counters and
+  cumulative ms on `ToolRecord` (durable, per-tool, surfaced in `/api/tools`).
+- **Event** — `tool.completed` / `tool.failed` / `tool.timeout` / `tool.cancelled` with
+  the full execution as payload; the execution id lets you correlate
+  `tool.started` ↔ terminal event.
+- **History** — a `HistoryEntry` row (task, action, params JSON, result JSON, status).
+  This is the durable record the console's History view and the task's
+  `/executions` endpoint read; it survives restarts and is written even when other
+  bookkeeping fails (write failures are logged, never thrown).
+
+## Execution ids
+
+- Live executions: `exec_<high-resolution time base36><2 hex bytes>` — unique per call,
+  present in both the `tool.started` and terminal event payloads.
+- History-derived records (the `/api/tasks/{id}/executions` endpoint reconstructs
+  executions from history rows): ids look like `hist_<HistoryEntry.id>`; error fields
+  for those are reconstructed (`{ code: 'FAILED' | 'TIMEOUT', message: 'See task
+  events for details.' }`) since history rows don't store structured errors.
+
+## Notes and edges
+
+- `params` recorded on the execution are the **coerced** values — what the handler
+  actually received.
+- A `tool_call` decision whose tool got disabled mid-task is caught earlier by the
+  CoreModule gate (→ `cannot_execute`), but the executor would still answer
+  `UNKNOWN_TOOL`/`NO_HANDLER` as defense in depth.
+- Cancellation before start is possible: if the abort signal fires between decision and
+  execution, the execution resolves `cancelled` without invoking the handler.
+
+## See also
+
+- [Tools](tools.md) — definitions, registration, handler kinds.
+- [Runtime](../architecture/runtime.md) — task-level limits and cancellation.
+- [Events](../architecture/events.md) — tool event catalog.

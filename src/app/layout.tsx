@@ -1,22 +1,35 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Readex_Pro, Michroma, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { APP_NAME, APP_VERSION } from "@/lib/nexool/version";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Primary interface typography — headings, body, navigation, forms.
+const readexPro = Readex_Pro({
+  variable: "--font-readex-pro",
   subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  display: "swap",
 });
 
+// Secondary technical typography — version badges, system indicators, metadata.
+const michroma = Michroma({
+  variable: "--font-michroma",
+  subsets: ["latin"],
+  weight: "400",
+  display: "swap",
+});
+
+// Monospace — terminal output, JSON, code.
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: "NexTool Q1 — AI Operations Console",
+  title: `${APP_NAME} — AI Operations Console`,
   description:
-    "NexTool Q1 v1.0.0 — specialized AI task-processing, decision, planning, observation, automation and tool-execution system.",
+    `${APP_NAME} v${APP_VERSION} — specialized AI task-processing, decision, planning, observation, automation and tool-execution runtime with a real-time operations console.`,
   keywords: [
     "NexTool",
     "Q1",
@@ -24,17 +37,20 @@ export const metadata: Metadata = {
     "task processing",
     "tool execution",
     "automation runtime",
-    "agent runtime",
+    "event-driven automation",
+    "live mode",
   ],
+  applicationName: APP_NAME,
   icons: {
     icon: "/logo.svg",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0b0d0e",
+  themeColor: "#050914",
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -43,10 +59,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
-      >
+    <html
+      lang="en"
+      className={`dark ${readexPro.variable} ${michroma.variable} ${geistMono.variable}`}
+      suppressHydrationWarning
+    >
+      <body className="font-sans antialiased bg-background text-foreground">
         {children}
         <Toaster />
       </body>

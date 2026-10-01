@@ -1,8 +1,10 @@
 /**
  * /api/tasks — GET list (filters status/mode/limit), POST create+start.
+ * POST body is validated with createTaskSchema (zod) — v1.0.1 §54.
  */
-import { ok, fail, readJson } from '@/lib/nexool/api-helpers';
+import { ok, fail, parseBody } from '@/lib/nexool/api-helpers';
 import { createTask, listTasks } from '@/lib/nexool/main/nexool';
+import { createTaskSchema } from '@/lib/nexool/schemas';
 import type { TaskConfig } from '@/lib/nexool/types';
 
 export const runtime = 'nodejs';
@@ -21,22 +23,16 @@ export async function GET(req: Request) {
   return ok(tasks);
 }
 
-interface CreateBody {
-  request?: string;
-  config?: Partial<TaskConfig>;
-  mode?: string;
-  reasoningLevel?: number;
-}
-
 export async function POST(req: Request) {
-  const body = await readJson<CreateBody>(req);
-  if (!body || typeof body.request !== 'string' || !body.request.trim()) {
-    return fail('INVALID_REQUEST', 'request (non-empty string) is required');
-  }
-  const config: Partial<TaskConfig> = { ...(body.config ?? {}) };
-  if (body.mode === 'goal' || body.mode === 'live') config.mode = body.mode;
+  const parsed = await parseBody(req, createTaskSchema, 'INVALID_REQUEST');
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
+
+  const config = { ...(body.config ?? {}) } as Partial<TaskConfig>;
+  if (body.mode) config.mode = body.mode;
   if (typeof body.reasoningLevel === 'number') {
-    config.reasoningLevel = Math.min(6, Math.max(1, Math.round(body.reasoningLevel))) as TaskConfig['reasoningLevel'];
+    // zod already guarantees int 1..6 — narrow the union here.
+    config.reasoningLevel = body.reasoningLevel as TaskConfig['reasoningLevel'];
   }
 
   try {

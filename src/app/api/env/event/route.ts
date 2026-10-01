@@ -1,30 +1,24 @@
 /**
  * POST /api/env/event — inject an environment event into the virtual fleet
  * and broadcast it to all live tasks so Live Mode wakes immediately.
- * Body: { type: 'server.crash' | 'server.degrade' | 'server.recover', serverId? }
+ * Body validated with envEventSchema (zod) — v1.0.1 §54.
  */
-import { ok, fail, readJson } from '@/lib/nexool/api-helpers';
+import { ok, fail, parseBody } from '@/lib/nexool/api-helpers';
 import { crashServer, degradeServer, recoverServer, getServer, listServers } from '@/lib/nexool/environment';
 import { getGlobalState, injectEvent } from '@/lib/nexool/main/nexool';
 import { db } from '@/lib/db';
+import { envEventSchema } from '@/lib/nexool/schemas';
 import type { VirtualServer } from '@/lib/nexool/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-interface Body {
-  type?: string;
-  serverId?: string;
-}
-
 export async function POST(req: Request) {
-  const body = await readJson<Body>(req);
-  if (!body?.type) return fail('INVALID_PARAMS', 'type is required (server.crash | server.degrade | server.recover)');
+  const parsed = await parseBody(req, envEventSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
 
   const type = body.type;
-  if (!['server.crash', 'server.degrade', 'server.recover'].includes(type)) {
-    return fail('INVALID_PARAMS', `Unknown environment event type: ${type}`);
-  }
 
   let serverId = body.serverId;
   if (!serverId) {

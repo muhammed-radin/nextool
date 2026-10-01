@@ -1,8 +1,12 @@
 'use client';
 
 /**
- * NexTool Q1 console shell — single-page app. The ONLY visible route is `/`;
- * all 13 screens are client-side views switched by `useConsoleStore.activeView`.
+ * NexTool Q1 v1.0.1 console shell — single-page app. The ONLY visible route is
+ * `/`; all screens are client-side views switched by `useConsoleStore.activeView`.
+ *
+ * v1.0.1: blue gradient Glassmorphism, Readex Pro + Michroma typography,
+ * mobile-first responsive shell (bottom nav Dashboard/Tasks/Live/Tools/More on
+ * <md, glass sidebar on ≥md), real runtime connection indicator.
  */
 
 import { useEffect, useState } from 'react';
@@ -15,7 +19,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/compon
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { APP_NAME, APP_VERSION } from '@/lib/nexool/version';
 import { useConsoleStore, shortId, type ConsoleView } from './console-store';
+import { RuntimeConnectionStatus } from './runtime-connection-status';
 import { GlobalStreamProvider, NotificationsProvider, SystemStatsProvider, useGlobalStream, useNotifications, useSystemStats } from './providers';
 import { fmtUptime, statusTone } from './ui-bits';
 import DashboardView from './views/dashboard';
@@ -30,9 +36,11 @@ import HistoryView from './views/history';
 import ModelsView from './views/models';
 import DatasetsView from './views/datasets';
 import SettingsView from './views/settings';
+import DocsView from './views/docs';
 import {
   Activity,
   Bell,
+  BookOpen,
   Box,
   Database,
   FileJson,
@@ -40,6 +48,7 @@ import {
   LayoutDashboard,
   ListFilter,
   Menu,
+  MoreHorizontal,
   RadioTower,
   SlidersHorizontal,
   TerminalSquare,
@@ -57,7 +66,16 @@ const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'history', label: 'History', icon: History },
   { view: 'models', label: 'Models', icon: Box },
   { view: 'datasets', label: 'Datasets', icon: FileJson },
+  { view: 'docs', label: 'Documentation', icon: BookOpen },
   { view: 'settings', label: 'Settings', icon: SlidersHorizontal },
+];
+
+/** Mobile bottom-nav primary destinations (everything else lives in "More"). */
+const MOBILE_PRIMARY: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
+  { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { view: 'task-console', label: 'Tasks', icon: TerminalSquare },
+  { view: 'live-monitor', label: 'Live', icon: RadioTower },
+  { view: 'tools', label: 'Tools', icon: Wrench },
 ];
 
 function NavLink({ view, label, icon: Icon, onNavigate }: { view: ConsoleView; label: string; icon: typeof Wrench; onNavigate?: () => void }) {
@@ -73,11 +91,13 @@ function NavLink({ view, label, icon: Icon, onNavigate }: { view: ConsoleView; l
       }}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'flex min-h-11 w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors',
-        active ? 'bg-emerald-500/10 font-medium text-emerald-300' : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200',
+        'flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors outline-ring/50 focus-visible:ring-2',
+        active
+          ? 'bg-primary-gradient-soft font-medium text-sky-100 ring-1 ring-sky-400/25'
+          : 'text-slate-300/85 hover:bg-white/[0.05] hover:text-foreground',
       )}
     >
-      <Icon className={cn('size-4 shrink-0', active ? 'text-emerald-400' : 'text-zinc-500')} aria-hidden />
+      <Icon className={cn('size-4 shrink-0', active ? 'text-sky-300' : 'text-slate-400')} aria-hidden />
       <span className="truncate">{label}</span>
     </button>
   );
@@ -92,7 +112,7 @@ function TaskPreviewNavLink({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
       <div className="mx-3 my-1">
-        <Separator className="bg-zinc-800/80" />
+        <Separator className="bg-white/[0.08]" />
       </div>
       <button
         type="button"
@@ -102,13 +122,15 @@ function TaskPreviewNavLink({ onNavigate }: { onNavigate?: () => void }) {
         }}
         aria-current={active ? 'page' : undefined}
         className={cn(
-          'mx-3 flex min-h-11 items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors',
-          active ? 'bg-emerald-500/10 font-medium text-emerald-300' : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200',
+          'mx-3 flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors outline-ring/50 focus-visible:ring-2',
+          active
+            ? 'bg-primary-gradient-soft font-medium text-sky-100 ring-1 ring-sky-400/25'
+            : 'text-slate-300/85 hover:bg-white/[0.05] hover:text-foreground',
         )}
       >
-        <TerminalSquare className="size-4 shrink-0 text-emerald-500/70" aria-hidden />
+        <TerminalSquare className="size-4 shrink-0 text-sky-300/80" aria-hidden />
         <span className="truncate">
-          Task Preview <span className="font-mono text-xs text-zinc-500">#{shortId(selectedTaskId)}</span>
+          Task Preview <span className="font-mono text-xs text-slate-400">#{shortId(selectedTaskId)}</span>
         </span>
       </button>
     </>
@@ -126,34 +148,28 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function ConnectionPill() {
-  const { status } = useGlobalStream();
-  const live = status === 'live';
-  const offline = status === 'offline';
+function LogoMark({ className }: { className?: string }) {
   return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            role="status"
-            aria-label={`Event stream ${status}`}
-            className={cn(
-              'inline-flex h-9 items-center gap-2 rounded-full border px-3 font-mono text-xs',
-              live && 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-              status === 'connecting' && 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-              offline && 'border-rose-500/30 bg-rose-500/10 text-rose-300',
-            )}
-          >
-            <span className="relative inline-flex size-2" aria-hidden>
-              <span className={cn('absolute inline-flex size-full rounded-full opacity-60', live && 'animate-ping bg-emerald-400', status === 'connecting' && 'animate-ping bg-amber-400', offline && 'bg-rose-400')} />
-              <span className={cn('relative inline-flex size-2 rounded-full', live ? 'bg-emerald-400' : status === 'connecting' ? 'bg-amber-400' : 'bg-rose-400')} />
-            </span>
-            {live ? 'live' : status}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent>Server-Sent Events stream — /api/stream</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <span className={cn('flex size-7 items-center justify-center rounded-md bg-primary-gradient glow-blue', className)}>
+      <Wrench className="size-4 text-white" aria-hidden />
+    </span>
+  );
+}
+
+function BrandButton() {
+  return (
+    <button
+      type="button"
+      onClick={() => useConsoleStore.getState().setActiveView('dashboard')}
+      className="flex items-center gap-2.5 rounded-md px-1 py-1 outline-ring/50 focus-visible:ring-2"
+      aria-label="Go to dashboard"
+    >
+      <LogoMark />
+      <span className="text-sm font-semibold tracking-tight text-foreground">{APP_NAME.replace(' Q1', '')}</span>
+      <Badge variant="outline" className="font-tech border-sky-400/30 bg-sky-400/10 text-[9px] uppercase tracking-wider text-sky-300">
+        Q1 v{APP_VERSION}
+      </Badge>
+    </button>
   );
 }
 
@@ -163,19 +179,19 @@ function NotificationBell() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative size-9" aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}>
+        <Button variant="ghost" size="icon" className="relative size-9 text-slate-300 hover:bg-white/[0.06] hover:text-foreground" aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}>
           <Bell className="size-4" aria-hidden />
           {unread > 0 ? (
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 font-mono text-[10px] font-bold text-zinc-950">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-gradient px-1 font-mono text-[10px] font-bold text-white">
               {unread > 9 ? '9+' : unread}
             </span>
           ) : null}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80 border-zinc-800 bg-popover p-0">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Notifications</span>
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-emerald-300 hover:text-emerald-200" onClick={() => void markAllRead()} disabled={loading || unread === 0}>
+      <DropdownMenuContent align="end" className="glass-strong w-80 p-0">
+        <div className="flex items-center justify-between border-b border-white/[0.08] px-3 py-2">
+          <span className="font-tech text-[10px] uppercase tracking-widest text-sky-300/80">Notifications</span>
+          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-sky-300 hover:text-sky-200" onClick={() => void markAllRead()} disabled={loading || unread === 0}>
             Mark all read
           </Button>
         </div>
@@ -189,18 +205,18 @@ function NotificationBell() {
                 type="button"
                 disabled={!n.taskId}
                 onClick={() => n.taskId && openTaskPreview(n.taskId)}
-                className={cn('flex w-full flex-col items-start gap-0.5 border-b border-zinc-800/60 px-3 py-2.5 text-left hover:bg-zinc-800/40', !n.read && 'bg-emerald-500/5')}
+                className={cn('flex w-full flex-col items-start gap-0.5 border-b border-white/[0.06] px-3 py-2.5 text-left hover:bg-white/[0.05]', !n.read && 'bg-sky-400/[0.07]')}
               >
                 <span className="flex w-full items-center gap-2">
                   <span
                     aria-hidden
                     className={cn(
                       'size-1.5 shrink-0 rounded-full',
-                      n.level === 'critical' ? 'bg-rose-400' : n.level === 'warning' ? 'bg-amber-400' : 'bg-zinc-400',
+                      n.level === 'critical' ? 'bg-rose-400' : n.level === 'warning' ? 'bg-amber-400' : 'bg-slate-400',
                     )}
                   />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-zinc-200">{n.title}</span>
-                  <span className="shrink-0 font-mono text-[10px] text-zinc-500">{new Date(n.createdAt).toLocaleTimeString('en-GB', { hour12: false })}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/95">{n.title}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-slate-400">{new Date(n.createdAt).toLocaleTimeString('en-GB', { hour12: false })}</span>
                 </span>
                 <span className="line-clamp-2 pl-3.5 text-[11px] text-muted-foreground">{n.body}</span>
               </button>
@@ -224,14 +240,14 @@ function StatusBar() {
     return () => clearInterval(t);
   }, []);
 
-  const runtimeStatus = stats?.runtimeStatus ?? (status === 'offline' ? 'offline' : 'connecting');
+  const runtimeStatus = stats?.runtimeStatus ?? (status === 'error' || status === 'disconnected' ? 'offline' : 'connecting');
   const tone = statusTone(runtimeStatus);
 
   return (
-    <footer className="mt-auto border-t border-zinc-800/80 bg-zinc-950/95">
-      <div className="mx-auto flex h-9 w-full max-w-[1600px] items-center justify-between gap-3 px-4 font-mono text-[11px] text-zinc-500">
+    <footer className="glass-shell mt-auto hidden border-t border-white/[0.07] md:block">
+      <div className="mx-auto flex h-9 w-full max-w-[1600px] items-center justify-between gap-3 px-4 font-mono text-[11px] text-slate-400">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="hidden sm:inline">RUNTIME</span>
+          <span className="font-tech text-[9px] uppercase tracking-widest text-sky-300/70">Runtime</span>
           <span
             aria-label={`Runtime ${runtimeStatus}`}
             className={cn('inline-flex items-center gap-1.5', tone === 'ok' ? 'text-emerald-300' : tone === 'warn' ? 'text-amber-300' : 'text-rose-300')}
@@ -240,20 +256,139 @@ function StatusBar() {
             {stats ? runtimeStatus : 'offline'}
           </span>
         </div>
-        <div className="hidden min-w-0 items-center gap-3 truncate md:flex">
+        <div className="hidden min-w-0 items-center gap-3 truncate lg:flex">
           <span>active {stats ? stats.tasks.active : '—'}</span>
           <span>live {stats ? stats.tasks.live : '—'}</span>
           <span>engine {stats ? stats.engine.active : '—'}</span>
           <span>up {stats ? fmtUptime(stats.runtimeUptimeSec) : '—'}</span>
         </div>
         <div className="flex items-center gap-2">
-          <span aria-hidden className={cn('size-1.5 rounded-full', status === 'live' ? 'animate-pulse bg-emerald-400' : status === 'connecting' ? 'bg-amber-400' : 'bg-rose-400')} />
-          <span>SSE: {status}</span>
-          <span aria-hidden className="text-zinc-700">│</span>
+          <span aria-hidden className={cn('size-1.5 rounded-full', status === 'connected' ? 'animate-pulse bg-emerald-400' : status === 'error' ? 'bg-rose-400' : status === 'reconnecting' ? 'bg-amber-400' : 'bg-sky-400')} />
+          <span>stream: {status}</span>
+          <span aria-hidden className="text-slate-600">│</span>
+          <span className="font-tech text-[9px] tracking-wider text-sky-300/70">v{APP_VERSION}</span>
+          <span aria-hidden className="text-slate-600">│</span>
           <span className="tabular-nums">{clock ?? '--:--:--'}</span>
         </div>
       </div>
     </footer>
+  );
+}
+
+/** Mobile bottom navigation — primary destinations + "More" sheet. */
+function MobileBottomNav() {
+  const activeView = useConsoleStore((s) => s.activeView);
+  const setActiveView = useConsoleStore((s) => s.setActiveView);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreActive = !MOBILE_PRIMARY.some((i) => i.view === activeView) && activeView !== 'task-preview';
+
+  return (
+    <nav
+      aria-label="Primary"
+      className="glass-shell fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.08] pb-safe md:hidden"
+    >
+      <div className="mx-auto grid h-15 max-w-lg grid-cols-5">
+        {MOBILE_PRIMARY.map(({ view, label, icon: Icon }) => {
+          const active = activeView === view;
+          return (
+            <button
+              key={view}
+              type="button"
+              onClick={() => setActiveView(view)}
+              aria-current={active ? 'page' : undefined}
+              className={cn(
+                'relative flex min-h-[3.75rem] flex-col items-center justify-center gap-1 px-1 text-[10px] transition-colors outline-ring/50 focus-visible:ring-2',
+                active ? 'text-sky-300' : 'text-slate-400 hover:text-slate-200',
+              )}
+            >
+              {active && <span aria-hidden className="bg-primary-gradient absolute top-0 h-0.5 w-8 rounded-full" />}
+              <Icon className="size-5" aria-hidden />
+              <span className={cn(active && 'font-medium')}>{label}</span>
+            </button>
+          );
+        })}
+        <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
+          <SheetTrigger asChild>
+            <button
+              type="button"
+              aria-label="More sections"
+              aria-expanded={moreOpen}
+              className={cn(
+                'relative flex min-h-[3.75rem] flex-col items-center justify-center gap-1 px-1 text-[10px] transition-colors outline-ring/50 focus-visible:ring-2',
+                moreActive ? 'text-sky-300' : 'text-slate-400 hover:text-slate-200',
+              )}
+            >
+              {moreActive && <span aria-hidden className="bg-primary-gradient absolute top-0 h-0.5 w-8 rounded-full" />}
+              <MoreHorizontal className="size-5" aria-hidden />
+              <span>More</span>
+            </button>
+          </SheetTrigger>
+          <SheetContent side="bottom" className="glass-strong h-[70dvh] rounded-t-2xl border-white/[0.1] p-0">
+            <SheetHeader className="border-b border-white/[0.08] px-4 py-3">
+              <SheetTitle className="flex items-center gap-2 text-sm text-foreground">
+                <LogoMark className="size-6" />
+                All sections
+              </SheetTitle>
+              <SheetDescription className="text-xs text-muted-foreground">
+                {APP_NAME} v{APP_VERSION} — every console screen stays reachable on mobile.
+              </SheetDescription>
+            </SheetHeader>
+            <div className="nextool-scroll h-[calc(70dvh-5rem)] overflow-y-auto p-3">
+              <div className="grid grid-cols-2 gap-2">
+                {NAV_ITEMS.filter((i) => !MOBILE_PRIMARY.some((p) => p.view === i.view)).map(({ view, label, icon: Icon }) => (
+                  <button
+                    key={view}
+                    type="button"
+                    onClick={() => {
+                      setActiveView(view);
+                      setMoreOpen(false);
+                    }}
+                    aria-current={activeView === view ? 'page' : undefined}
+                    className={cn(
+                      'flex min-h-12 items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors outline-ring/50 focus-visible:ring-2',
+                      activeView === view
+                        ? 'border-sky-400/30 bg-primary-gradient-soft text-sky-100'
+                        : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:bg-white/[0.06]',
+                    )}
+                  >
+                    <Icon className={cn('size-4 shrink-0', activeView === view ? 'text-sky-300' : 'text-slate-400')} aria-hidden />
+                    <span className="truncate">{label}</span>
+                  </button>
+                ))}
+              </div>
+              <TaskPreviewNavLinkMobile onNavigate={() => setMoreOpen(false)} />
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+    </nav>
+  );
+}
+
+function TaskPreviewNavLinkMobile({ onNavigate }: { onNavigate?: () => void }) {
+  const selectedTaskId = useConsoleStore((s) => s.selectedTaskId);
+  const setActiveView = useConsoleStore((s) => s.setActiveView);
+  const activeView = useConsoleStore((s) => s.activeView);
+  if (!selectedTaskId) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setActiveView('task-preview');
+        onNavigate?.();
+      }}
+      className={cn(
+        'mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm',
+        activeView === 'task-preview'
+          ? 'border-sky-400/30 bg-primary-gradient-soft text-sky-100'
+          : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:bg-white/[0.06]',
+      )}
+    >
+      <TerminalSquare className="size-4 shrink-0 text-sky-300/80" aria-hidden />
+      <span className="truncate">
+        Task Preview <span className="font-mono text-xs text-slate-400">#{shortId(selectedTaskId)}</span>
+      </span>
+    </button>
   );
 }
 
@@ -283,6 +418,8 @@ function ViewRouter() {
         return <ModelsView />;
       case 'datasets':
         return <DatasetsView />;
+      case 'docs':
+        return <DocsView />;
       case 'settings':
         return <SettingsView />;
       case 'task-preview':
@@ -308,61 +445,51 @@ function ViewRouter() {
 }
 
 function Shell() {
-  const sidebarOpen = useConsoleStore((s) => s.sidebarOpen);
-  const setSidebarOpen = useConsoleStore((s) => s.setSidebarOpen);
-
+  const menuOpen = useState(false);
+  const [open, setOpen] = menuOpen;
   return (
     <div className="flex min-h-screen flex-col bg-background">
+      {/* Ambient blue gradient field + faint tech grid (behind everything) */}
+      <div className="ambient-bg" aria-hidden />
+      <div className="ambient-grid" aria-hidden />
+
       {/* Top bar */}
-      <header className="sticky top-0 z-40 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur">
-        <div className="mx-auto flex h-14 w-full max-w-[1600px] items-center gap-3 px-4">
-          {/* Mobile nav */}
-          <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+      <header className="glass-shell sticky top-0 z-40 border-b border-white/[0.08]">
+        <div className="mx-auto flex h-14 w-full max-w-[1600px] items-center gap-3 px-3 sm:px-4">
+          {/* Mobile menu (secondary access — primary is the bottom nav) */}
+          <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation">
+              <Button variant="ghost" size="icon" className="size-11 text-slate-300 hover:bg-white/[0.06] hover:text-foreground md:hidden" aria-label="Open all sections">
                 <Menu className="size-5" aria-hidden />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="w-64 border-zinc-800 bg-zinc-950 p-0">
-              <SheetHeader className="border-b border-zinc-800 px-4 py-3">
-                <SheetTitle className="flex items-center gap-2 text-sm text-zinc-200">
-                  <span className="flex size-6 items-center justify-center rounded-md bg-emerald-500/15">
-                    <Wrench className="size-3.5 text-emerald-400" aria-hidden />
-                  </span>
-                  NexTool
+            <SheetContent side="left" className="glass-strong w-72 border-white/[0.1] p-0">
+              <SheetHeader className="border-b border-white/[0.08] px-4 py-3">
+                <SheetTitle className="flex items-center gap-2 text-sm text-foreground">
+                  <LogoMark className="size-6" />
+                  {APP_NAME}
                 </SheetTitle>
-                <SheetDescription className="sr-only">Console navigation</SheetDescription>
+                <SheetDescription className="font-tech text-[9px] uppercase tracking-widest text-sky-300/70">
+                  v{APP_VERSION} · AI Operations Console
+                </SheetDescription>
               </SheetHeader>
-              <div className="p-3">
-                <NavList onNavigate={() => setSidebarOpen(false)} />
+              <div className="nextool-scroll h-[calc(100dvh-6rem)] overflow-y-auto p-3">
+                <NavList onNavigate={() => setOpen(false)} />
               </div>
             </SheetContent>
           </Sheet>
 
-          {/* Logo */}
-          <button
-            type="button"
-            onClick={() => useConsoleStore.getState().setActiveView('dashboard')}
-            className="flex items-center gap-2.5 rounded-md px-1 py-1 outline-ring/50 focus-visible:ring-2"
-            aria-label="Go to dashboard"
-          >
-            <span className="flex size-7 items-center justify-center rounded-md bg-emerald-500/15 ring-1 ring-emerald-500/30">
-              <Wrench className="size-4 text-emerald-400" aria-hidden />
-            </span>
-            <span className="text-sm font-semibold tracking-tight text-zinc-100">NexTool</span>
-            <Badge variant="outline" className="border-zinc-700/80 font-mono text-[10px] text-zinc-400">
-              Q1 v1.0.0
-            </Badge>
-          </button>
+          {/* Logo + version */}
+          <BrandButton />
 
           <div className="ml-auto flex items-center gap-2">
-            <ConnectionPill />
+            <RuntimeConnectionStatus compact />
             <NotificationBell />
             <TooltipProvider delayDuration={200}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Badge variant="outline" className="hidden h-9 items-center gap-1.5 border-zinc-700/80 px-3 font-mono text-[11px] text-zinc-300 sm:inline-flex">
-                    <span className="size-1.5 rounded-full bg-emerald-400" aria-hidden />
+                  <Badge variant="outline" className="font-tech hidden h-9 items-center gap-1.5 border-sky-400/25 bg-sky-400/[0.07] px-3 text-[9px] uppercase tracking-wider text-sky-300 sm:inline-flex">
+                    <span className="size-1.5 rounded-full bg-sky-400" aria-hidden />
                     engine: llm-core
                   </Badge>
                 </TooltipTrigger>
@@ -376,12 +503,12 @@ function Shell() {
       {/* Body */}
       <div className="mx-auto flex w-full max-w-[1600px] flex-1">
         {/* Desktop sidebar */}
-        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-56 shrink-0 flex-col overflow-y-auto border-r border-zinc-800/80 p-3 nextool-scroll md:flex" aria-label="Console sections">
+        <aside className="nextool-scroll sticky top-14 hidden h-[calc(100vh-3.5rem-2.25rem)] w-56 shrink-0 flex-col overflow-y-auto border-r border-white/[0.07] p-3 md:flex" aria-label="Console sections">
           <NavList />
         </aside>
 
-        {/* Main */}
-        <main className="min-w-0 flex-1 p-4 md:p-6">
+        {/* Main — extra bottom padding clears the mobile bottom nav */}
+        <main className="min-w-0 flex-1 p-3 pb-24 sm:p-4 md:p-6 md:pb-6">
           <div className="mx-auto w-full max-w-[1400px]">
             <ViewRouter />
           </div>
@@ -389,6 +516,7 @@ function Shell() {
       </div>
 
       <StatusBar />
+      <MobileBottomNav />
     </div>
   );
 }

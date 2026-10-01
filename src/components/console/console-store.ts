@@ -13,6 +13,7 @@ export type ConsoleView =
   | 'history'
   | 'models'
   | 'datasets'
+  | 'docs'
   | 'settings'
   | 'task-preview';
 

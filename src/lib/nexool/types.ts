@@ -239,19 +239,35 @@ export interface ApiError {
 
 export type ApiEnvelope<T> = { ok: true; data: T } | { ok: false; error: ApiError };
 
+// ---------- REST DTOs ----------
+// Canonical definitions live in api-contract.ts (BINDING contract). Re-exported
+// here so frontend and runtime share ONE import surface (v1.0.1 §47).
+export type {
+  TaskDetail,
+  ToolEntry,
+  MemoryEntryDTO,
+  HistoryEntryDTO,
+  NotificationDTO,
+  GeneratedImageDTO,
+} from './api-contract';
+
 // ---------- System (Dashboard) ----------
 
 export interface SystemStats {
+  /** Application release version (package.json / version.ts). */
+  appVersion: string;
   runtimeStatus: 'online' | 'degraded' | 'offline';
   runtimeUptimeSec: number;
   engine: {
     active: string; // "llm-core"
     fallback: string; // "heuristic-fallback"
-    version: string; // "1.0.0"
+    version: string; // CoreModule model version (unchanged since 1.0.0)
     coreCalls: number;
     avgCoreLatencyMs: number;
     lastDecisionAt?: string;
   };
+  /** Version of the most recently updated dataset, if any. */
+  datasetVersion: string | null;
   tasks: {
     total: number;
     active: number;

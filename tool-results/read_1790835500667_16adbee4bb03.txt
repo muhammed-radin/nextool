@@ -1,0 +1,878 @@
+     1→     1→/**
+     2→     2→ * NexTool Main Loop — Goal Mode + Live Mode orchestration.
+     3→     3→ * UNDERSTAND → PLAN → SELECT TOOL → GENERATE PARAMS → EXECUTE → OBSERVE → UPDATE STATE → REPLAN → COMPLETE
+     4→     4→ */
+     5→     5→import { db } from '@/lib/db';
+     6→     6→import { emitEvent } from '../eventbus';
+     7→     7→import { getSettings } from '../settings';
+     8→     8→import { getEnabledToolDefs } from '../tools/registry';
+     9→     9→import { executeTool } from '../tools/executor';
+    10→    10→import { decide } from '../core/coremodule';
+    11→    11→import { buildPlan } from './planner';
+    12→    12→import { interpret, checkGoalComplete } from './observer';
+    13→    13→import { listServers } from '../environment';
+    14→    14→import type {
+    15→    15→  MainState, PlanStep, Subgoal, TaskConfig, ToolDefinition, ToolExecution, NexToolEvent, FinalResult,
+    16→    16→} from '../types';
+    17→    17→import type { TaskMode } from '../types';
+    18→    18→
+    19→    19→const RESTART_SETTLE_MS = 2700;
+    20→    20→
+    21→    21→// ---------- run handle (passed in from nexool.ts) ----------
+    22→    22→
+    23→    23→export interface WakePayload {
+    24→    24→  reason: 'timeout' | 'event';
+    25→    25→  event?: NexToolEvent;
+    26→    26→}
+    27→    27→
+    28→    28→export interface TaskRunHandle {
+    29→    29→  stopFlag: { stopped: boolean };
+    30→    30→  abortController: AbortController;
+    31→    31→  wake: ((payload: WakePayload) => void) | null;
+    32→    32→}
+    33→    33→
+    34→    34→// ---------- helpers ----------
+    35→    35→
+    36→    36→function parseJson<T>(s: string | null | undefined, fallback: T): T {
+    37→    37→  if (!s) return fallback;
+    38→    38→  try {
+    39→    39→    return JSON.parse(s) as T;
+    40→    40→  } catch {
+    41→    41→    return fallback;
+    42→    42→  }
+    43→    43→}
+    44→    44→
+    45→    45→function clampNum(v: number | undefined, def: number, min: number, max: number): number {
+    46→    46→  const n = Number(v);
+    47→    47→  if (!Number.isFinite(n)) return def;
+    48→    48→  return Math.min(Math.max(Math.round(n), min), max);
+    49→    49→}
+    50→    50→
+    51→    51→export interface ResolvedTaskConfig extends TaskConfig {
+    52→    52→  mode: TaskConfig['mode'];
+    53→    53→  reasoningLevel: TaskConfig['reasoningLevel'];
+    54→    54→  useMemory: boolean;
+    55→    55→  learnFrom: { feedback: boolean; results: boolean };
+    56→    56→  autoExecuteSubtools: boolean;
+    57→    57→  maxSubtoolCalls: number;
+    58→    58→  safetyLimit: number;
+    59→    59→  maxIterations: number;
+    60→    60→  taskTimeoutMs: number;
+    61→    61→  toolTimeoutMs: number;
+    62→    62→  liveIntervalMs: number;
+    63→    63→}
+    64→    64→
+    65→    65→function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<typeof getSettings>>): ResolvedTaskConfig {
+    66→    66→  const safetyLimit = clampNum(stored.safetyLimit, settings.safetyLimit, 1, 500);
+    67→    67→  const maxSubtoolCalls = Math.min(clampNum(stored.maxSubtoolCalls, settings.maxSubtoolCalls, 1, 200), safetyLimit);
+    68→    68→  const level = clampNum(stored.reasoningLevel, settings.defaultReasoningLevel, 1, 6);
+    69→    69→  return {
+    70→    70→    name: stored.name,
+    71→    71→    mode: stored.mode === 'live' ? 'live' : stored.mode === 'goal' ? 'goal' : settings.defaultMode,
+    72→    72→    reasoningLevel: level as TaskConfig['reasoningLevel'],
+    73→    73→    enabledTools: Array.isArray(stored.enabledTools) ? stored.enabledTools.map(String) : undefined,
+    74→    74→    useMemory: stored.useMemory ?? settings.useMemory,
+    75→    75→    learnFrom: { feedback: stored.learnFrom?.feedback ?? true, results: stored.learnFrom?.results ?? true },
+    76→    76→    autoExecuteSubtools: stored.autoExecuteSubtools ?? true,
+    77→    77→    maxSubtoolCalls,
+    78→    78→    safetyLimit,
+    79→    79→    maxIterations: clampNum(stored.maxIterations, settings.maxIterations, 1, 200),
+    80→    80→    taskTimeoutMs: clampNum(stored.taskTimeoutMs, settings.taskTimeoutMs, 5_000, 3_600_000),
+    81→    81→    toolTimeoutMs: clampNum(stored.toolTimeoutMs, settings.toolTimeoutMs, 1_000, 300_000),
+    82→    82→    liveIntervalMs: clampNum(stored.liveIntervalMs, settings.liveIntervalMs, 1_000, 3_600_000),
+    83→    83→    sessionId: stored.sessionId,
+    84→    84→    context: stored.context,
+    85→    85→  };
+    86→    86→}
+    87→    87→
+    88→    88→function subgoalId(i: number): string {
+    89→    89→  return `sg_${Date.now().toString(36)}_${i}_${Math.random().toString(36).slice(2, 6)}`;
+    90→    90→}
+    91→    91→
+    92→    92→async function persistTask(taskId: string, data: Record<string, unknown>): Promise<void> {
+    93→    93→  try {
+    94→    94→    await db.task.update({ where: { id: taskId }, data });
+    95→    95→  } catch (err) {
+    96→    96→    console.error(`[loop] persist failed for task ${taskId}:`, err);
+    97→    97→  }
+    98→    98→}
+    99→    99→
+   100→   100→interface RunContext {
+   101→   101→  taskId: string;
+   102→   102→  request: string;
+   103→   103→  goal: string;
+   104→   104→  config: ResolvedTaskConfig;
+   105→   105→  toolDefs: ToolDefinition[];
+   106→   106→  state: MainState;
+   107→   107→  handle: TaskRunHandle;
+   108→   108→  startedAtMs: number;
+   109→   109→  artifacts: Record<string, unknown>[];
+   110→   110→}
+   111→   111→
+   112→   112→// ---------- context bundle ----------
+   113→   113→
+   114→   114→async function buildContextBundle(ctx: RunContext): Promise<{
+   115→   115→  memory: Record<string, unknown>[];
+   116→   116→  history: Record<string, unknown>[];
+   117→   117→  stateSummary: string;
+   118→   118→  lastObservation?: string;
+   119→   119→}> {
+   120→   120→  let memory: Record<string, unknown>[] = [];
+   121→   121→  if (ctx.config.useMemory) {
+   122→   122→    try {
+   123→   123→      const rows = await db.memoryEntry.findMany({ orderBy: { updatedAt: 'desc' }, take: 5 });
+   124→   124→      memory = rows.map((r) => ({ key: r.key, value: parseJson<unknown>(r.value, r.value), updatedAt: r.updatedAt.toISOString() }));
+   125→   125→    } catch (err) {
+   126→   126→      console.error('[loop] memory load failed:', err);
+   127→   127→    }
+   128→   128→  }
+   129→   129→  let history: Record<string, unknown>[] = [];
+   130→   130→  try {
+   131→   131→    const rows = await db.historyEntry.findMany({ where: { taskId: ctx.taskId }, orderBy: { timestamp: 'desc' }, take: 5 });
+   132→   132→    history = rows.map((r) => ({ action: r.action, status: r.status, result: parseJson<unknown>(r.result, null) }));
+   133→   133→  } catch {
+   134→   134→    /* fresh task */
+   135→   135→  }
+   136→   136→  return {
+   137→   137→    memory,
+   138→   138→    history,
+   139→   139→    stateSummary: JSON.stringify({
+   140→   140→      mode: ctx.state.mode,
+   141→   141→      iteration: ctx.state.iterationCount,
+   142→   142→      toolCalls: ctx.state.toolCallCount,
+   143→   143→      activeSubgoal: ctx.state.activeSubgoal?.title,
+   144→   144→      planStatuses: ctx.state.plan.map((s) => `${s.id}:${s.status}`).join(','),
+   145→   145→      servers: listServers().map((s) => `${s.id}=${s.health}`),
+   146→   146→    }),
+   147→   147→    lastObservation: ctx.state.lastObservation,
+   148→   148→  };
+   149→   149→}
+   150→   150→
+   151→   151→// ---------- plan-step selection ----------
+   152→   152→
+   153→   153→function firstPendingIndex(plan: PlanStep[]): number {
+   154→   154→  return plan.findIndex((s) => s.status === 'pending' || s.status === 'in_progress');
+   155→   155→}
+   156→   156→
+   157→   157→/** Collect consecutive pending action steps sharing the first pending step's parallelGroup. */
+   158→   158→function parallelGroupSteps(plan: PlanStep[]): PlanStep[] {
+   159→   159→  const idx = firstPendingIndex(plan);
+   160→   160→  if (idx === -1) return [];
+   161→   161→  const step = plan[idx];
+   162→   162→  if (!step.parallelGroup) return [step];
+   163→   163→  const group: PlanStep[] = [step];
+   164→   164→  for (let i = idx + 1; i < plan.length; i++) {
+   165→   165→    const s = plan[i];
+   166→   166→    if (s.status !== 'pending' || s.parallelGroup !== step.parallelGroup || s.kind !== 'action') break;
+   167→   167→    group.push(s);
+   168→   168→  }
+   169→   169→  return group.length >= 2 ? group : [step];
+   170→   170→}
+   171→   171→
+   172→   172→// ---------- one CoreModule decision + execution ----------
+   173→   173→
+   174→   174→interface ActionResult {
+   175→   175→  execution: ToolExecution;
+   176→   176→  observation: string;
+   177→   177→}
+   178→   178→
+   179→   179→async function decideAndExecute(
+   180→   180→  ctx: RunContext,
+   181→   181→  objective: string,
+   182→   182→  contextBundleOverride?: Partial<Awaited<ReturnType<typeof buildContextBundle>>>,
+   183→   183→): Promise<{ decision: Awaited<ReturnType<typeof decide>>; result?: ActionResult }> {
+   184→   184→  const bundle = { ...(await buildContextBundle(ctx)), ...contextBundleOverride };
+   185→   185→
+   186→   186→  const decision = await decide({
+   187→   187→    objective,
+   188→   188→    request: ctx.request,
+   189→   189→    goal: ctx.goal,
+   190→   190→    activeSubgoal: ctx.state.activeSubgoal
+   191→   191→      ? { title: ctx.state.activeSubgoal.title, reason: ctx.state.activeSubgoal.reason }
+   192→   192→      : undefined,
+   193→   193→    toolDefs: ctx.toolDefs,
+   194→   194→    contextBundle: bundle,
+   195→   195→    reasoningLevel: ctx.config.reasoningLevel,
+   196→   196→    allowedTools: ctx.config.enabledTools,
+   197→   197→  });
+   198→   198→
+   199→   199→  void emitEvent({
+   200→   200→    taskId: ctx.taskId,
+   201→   201→    type: 'core.decision',
+   202→   202→    source: 'core',
+   203→   203→    message: `core → ${decision.status}${decision.tool ? ` ${decision.tool}` : ''} (conf ${decision.confidence.toFixed(2)}, ${decision.engine})`,
+   204→   204→    data: { ...decision, objective } as unknown as Record<string, unknown>,
+   205→   205→    priority: 4,
+   206→   206→  });
+   207→   207→
+   208→   208→  if (decision.status !== 'tool_call' || !decision.tool) {
+   209→   209→    return { decision };
+   210→   210→  }
+   211→   211→
+   212→   212→  const execution = await executeTool(decision.tool, decision.params, {
+   213→   213→    timeoutMs: ctx.config.toolTimeoutMs,
+   214→   214→    taskId: ctx.taskId,
+   215→   215→    signal: ctx.handle.abortController.signal,
+   216→   216→  });
+   217→   217→  const observation = interpret(decision.tool, execution, { goal: ctx.goal, lastObservation: ctx.state.lastObservation });
+   218→   218→  return { decision, result: { execution, observation } };
+   219→   219→}
+   220→   220→
+   221→   221→function recordExecution(ctx: RunContext, tool: string, result: ActionResult): void {
+   222→   222→  ctx.state.lastObservation = result.observation;
+   223→   223→  ctx.state.observations.push({ at: new Date().toISOString(), message: result.observation });
+   224→   224→  if (ctx.state.observations.length > 30) ctx.state.observations.splice(0, ctx.state.observations.length - 30);
+   225→   225→  ctx.state.previousActions.push({ action: tool, status: result.execution.status, at: new Date().toISOString() });
+   226→   226→  if (ctx.state.previousActions.length > 30) ctx.state.previousActions.splice(0, ctx.state.previousActions.length - 30);
+   227→   227→  ctx.state.toolCallCount += 1;
+   228→   228→  const r = result.execution.result as Record<string, unknown> | undefined;
+   229→   229→  if (r && typeof r === 'object') {
+   230→   230→    if (typeof r.imagePath === 'string') ctx.artifacts.push({ type: 'image', path: r.imagePath });
+   231→   231→    if (typeof r.id === 'string' && typeof r.level === 'string') ctx.artifacts.push({ type: 'notification', id: r.id, level: r.level });
+   232→   232→  }
+   233→   233→  void emitEvent({
+   234→   234→    taskId: ctx.taskId,
+   235→   235→    type: 'observer.observed',
+   236→   236→    source: 'observer',
+   237→   237→    message: result.observation,
+   238→   238→    priority: 6,
+   239→   239→  });
+   240→   240→}
+   241→   241→
+   242→   242→async function persistState(ctx: RunContext): Promise<void> {
+   243→   243→  await persistTask(ctx.taskId, {
+   244→   244→    state: JSON.stringify(ctx.state),
+   245→   245→    steps: ctx.state.iterationCount,
+   246→   246→    toolCalls: ctx.state.toolCallCount,
+   247→   247→  });
+   248→   248→}
+   249→   249→
+   250→   250→// ---------- LLM helper: next subgoal ----------
+   251→   251→
+   252→   252→async function proposeNextSubgoal(
+   253→   253→  ctx: RunContext,
+   254→   254→): Promise<{ done: true } | { done: false; title: string; reason: string }> {
+   255→   255→  try {
+   256→   256→    const { default: ZAI } = await import('z-ai-web-dev-sdk');
+   257→   257→    const zai = await ZAI.create();
+   258→   258→    const res = await Promise.race([
+   259→   259→      zai.chat.completions.create({
+   260→   260→        messages: [
+   261→   261→          {
+   262→   262→            role: 'assistant' as const,
+   263→   263→            content: [
+   264→   264→              'You are the Planner of NexTool. Given the goal and recent observations, determine the next dynamic subgoal.',
+   265→   265→              'Output STRICT JSON only, either {"done":true} when nothing further is needed, or {"title":"next subgoal","reason":"one sentence"}.',
+   266→   266→            ].join('\n'),
+   267→   267→          },
+   268→   268→          {
+   269→   269→            role: 'user' as const,
+   270→   270→            content: JSON.stringify({
+   271→   271→              goal: ctx.goal,
+   272→   272→              observations: ctx.state.observations.slice(-4),
+   273→   273→              planStatuses: ctx.state.plan.map((s) => `${s.title}:${s.status}`),
+   274→   274→            }),
+   275→   275→          },
+   276→   276→        ],
+   277→   277→        thinking: { type: 'disabled' },
+   278→   278→      }),
+   279→   279→      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000)),
+   280→   280→    ]);
+   281→   281→    const content = res?.choices?.[0]?.message?.content ?? '';
+   282→   282→    const cleaned = content.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+   283→   283→    const start = cleaned.indexOf('{');
+   284→   284→    const end = cleaned.lastIndexOf('}');
+   285→   285→    if (start !== -1 && end > start) {
+   286→   286→      const parsed = JSON.parse(cleaned.slice(start, end + 1)) as { done?: unknown; title?: unknown; reason?: unknown };
+   287→   287→      if (parsed.done === true) return { done: true };
+   288→   288→      if (typeof parsed.title === 'string' && parsed.title.trim()) {
+   289→   289→        return { done: false, title: parsed.title.trim().slice(0, 200), reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 300) : 'Dynamic subgoal from planner.' };
+   290→   290→      }
+   291→   291→    }
+   292→   292→  } catch (err) {
+   293→   293→    console.error('[loop] subgoal proposal failed, heuristic fallback:', err);
+   294→   294→  }
+   295→   295→  return { done: true };
+   296→   296→}
+   297→   297→
+   298→   298→// ---------- goal completion check ----------
+   299→   299→
+   300→   300→async function verifyGoal(ctx: RunContext): Promise<boolean> {
+   301→   301→  const check = await checkGoalComplete(ctx.goal, ctx.state.lastObservation ?? 'No observation yet.', ctx.config.reasoningLevel, ctx.taskId);
+   302→   302→  if (check.complete) {
+   303→   303→    void emitEvent({
+   304→   304→      taskId: ctx.taskId,
+   305→   305→      type: 'observer.state_changed',
+   306→   306→      source: 'observer',
+   307→   307→      message: `State indicates goal achieved: ${check.reason}`,
+   308→   308→      priority: 4,
+   309→   309→    });
+   310→   310→    void emitEvent({
+   311→   311→      taskId: ctx.taskId,
+   312→   312→      type: 'goal.completed',
+   313→   313→      source: 'runtime',
+   314→   314→      message: `Goal completed: ${ctx.goal}`,
+   315→   315→      data: { reason: check.reason, engine: check.engine },
+   316→   316→      priority: 3,
+   317→   317→    });
+   318→   318→  }
+   319→   319→  return check.complete;
+   320→   320→}
+   321→   321→
+   322→   322→// ---------- termination ----------
+   323→   323→
+   324→   324→interface Termination {
+   325→   325→  finalStatus: FinalResult['status'];
+   326→   326→  taskStatus: 'completed' | 'failed' | 'stopped';
+   327→   327→  statusDetail?: string;
+   328→   328→  summary: string;
+   329→   329→  errorState?: MainState['errorState'];
+   330→   330→}
+   331→   331→
+   332→   332→function markStepByExecution(plan: PlanStep[], stepId: string, status: ToolExecution['status']): void {
+   333→   333→  const step = plan.find((s) => s.id === stepId);
+   334→   334→  if (!step) return;
+   335→   335→  step.status = status === 'completed' ? 'completed' : status === 'cancelled' ? 'skipped' : 'failed';
+   336→   336→}
+   337→   337→
+   338→   338→// ---------- GOAL MODE ----------
+   339→   339→
+   340→   340→async function runGoalMode(ctx: RunContext): Promise<Termination> {
+   341→   341→  const { config } = ctx;
+   342→   342→  const startedAt = Date.now();
+   343→   343→
+   344→   344→  while (true) {
+   345→   345→    if (ctx.handle.stopFlag.stopped) {
+   346→   346→      return { finalStatus: 'stopped', taskStatus: 'stopped', statusDetail: 'Stopped by user.', summary: ctx.state.lastObservation ?? 'Task stopped.' };
+   347→   347→    }
+   348→   348→    if (Date.now() - startedAt > config.taskTimeoutMs) {
+   349→   349→      return {
+   350→   350→        finalStatus: 'limit_reached', taskStatus: 'failed', statusDetail: 'Task timeout reached.',
+   351→   351→        summary: 'Task exceeded the configured timeout.',
+   352→   352→        errorState: { code: 'TIMEOUT', message: `Task timeout (${config.taskTimeoutMs}ms) reached.`, stage: 'goal_loop' },
+   353→   353→      };
+   354→   354→    }
+   355→   355→    if (ctx.state.iterationCount >= config.maxIterations || ctx.state.toolCallCount >= config.safetyLimit) {
+   356→   356→      return {
+   357→   357→        finalStatus: 'limit_reached', taskStatus: 'failed', statusDetail: 'Iteration/safety limit reached.',
+   358→   358→        summary: 'Safety limit reached before goal completion.',
+   359→   359→        errorState: { code: 'SAFETY_LIMIT', message: 'Iteration or tool-call safety limit reached.', stage: 'goal_loop' },
+   360→   360→      };
+   361→   361→    }
+   362→   362→
+   363→   363→    // pick objective
+   364→   364→    const group = parallelGroupSteps(ctx.state.plan);
+   365→   365→    const planExhausted = firstPendingIndex(ctx.state.plan) === -1;
+   366→   366→
+   367→   367→    if (planExhausted && !ctx.state.activeSubgoal) {
+   368→   368→      // plan exhausted → dynamic subgoal
+   369→   369→      const proposal = await proposeNextSubgoal(ctx);
+   370→   370→      if (proposal.done) {
+   371→   371→        return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Plan exhausted; no further subgoals identified.' };
+   372→   372→      }
+   373→   373→      const sg: Subgoal = { id: subgoalId(ctx.state.subgoals.length), title: proposal.title, reason: proposal.reason, status: 'active', createdAt: new Date().toISOString() };
+   374→   374→      ctx.state.subgoals.push(sg);
+   375→   375→      ctx.state.activeSubgoal = sg;
+   376→   376→      void emitEvent({
+   377→   377→        taskId: ctx.taskId, type: 'subgoal.created', source: 'planner',
+   378→   378→        message: `Dynamic subgoal created: ${sg.title}`, data: { subgoal: sg }, priority: 5,
+   379→   379→      });
+   380→   380→      await persistState(ctx);
+   381→   381→    }
+   382→   382→
+   383→   383→    const objective = ctx.state.activeSubgoal
+   384→   384→      ? ctx.state.activeSubgoal.title
+   385→   385→      : group[0].title;
+   386→   386→
+   387→   387→    // mark plan step in_progress (when using plan steps)
+   388→   388→    let activeStepIds: string[] = [];
+   389→   389→    if (!ctx.state.activeSubgoal) {
+   390→   390→      activeStepIds = group.map((s) => s.id);
+   391→   391→      for (const s of group) s.status = 'in_progress';
+   392→   392→      ctx.state.currentStepId = group[0].id;
+   393→   393→    }
+   394→   394→    ctx.state.iterationCount += 1;
+   395→   395→
+   396→   396→    // PARALLEL EXECUTION (spec §10): ≥2 consecutive pending action steps sharing parallelGroup
+   397→   397→    if (!ctx.state.activeSubgoal && group.length >= 2 && ctx.config.autoExecuteSubtools) {
+   398→   398→      const cap = Math.min(group.length, ctx.config.maxSubtoolCalls);
+   399→   399→      const slice = group.slice(0, cap);
+   400→   400→      const decisions = await Promise.all(
+   401→   401→        slice.map(async (step) => ({ step, decision: await decideForStep(ctx, step) })),
+   402→   402→      );
+   403→   403→      if (decisions.every((d) => d.decision.status === 'tool_call' && d.decision.tool)) {
+   404→   404→        const executions = await Promise.all(
+   405→   405→          decisions.map((d) =>
+   406→   406→            executeTool(d.decision.tool as string, d.decision.params, {
+   407→   407→              timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId, signal: ctx.handle.abortController.signal,
+   408→   408→            }),
+   409→   409→          ),
+   410→   410→        );
+   411→   411→        executions.forEach((execution, i) => {
+   412→   412→          const observation = interpret(execution.tool, execution, { goal: ctx.goal });
+   413→   413→          recordExecution(ctx, execution.tool, { execution, observation });
+   414→   414→          markStepByExecution(ctx.state.plan, decisions[i].step.id, execution.status);
+   415→   415→        });
+   416→   416→        await persistState(ctx);
+   417→   417→        if (await verifyGoal(ctx)) {
+   418→   418→          return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Goal verified.' };
+   419→   419→        }
+   420→   420→        continue;
+   421→   421→      }
+   422→   422→      // not uniformly parallelizable → fall through to sequential handling below
+   423→   423→      for (const s of slice) s.status = 'pending';
+   424→   424→      ctx.state.currentStepId = undefined;
+   425→   425→      ctx.state.iterationCount -= 1;
+   426→   426→    }
+   427→   427→
+   428→   428→    // SEQUENTIAL EXECUTION
+   429→   429→    const { decision, result } = await decideAndExecute(ctx, objective);
+   430→   430→
+   431→   431→    if (decision.status === 'clarification_required') {
+   432→   432→      const missing = decision.missing ?? [];
+   433→   433→      void emitEvent({
+   434→   434→        taskId: ctx.taskId, type: 'core.clarification', source: 'core',
+   435→   435→        message: `Clarification required: missing ${missing.join(', ') || 'parameters'}`,
+   436→   436→        data: { missing, reason: decision.reason }, priority: 3,
+   437→   437→      });
+   438→   438→      return {
+   439→   439→        finalStatus: 'failed', taskStatus: 'failed',
+   440→   440→        statusDetail: `Clarification required: ${missing.join(', ') || 'missing parameters'}`,
+   441→   441→        summary: decision.reason,
+   442→   442→        errorState: { code: 'CLARIFICATION_REQUIRED', message: `Missing parameters: ${missing.join(', ')}`, stage: 'core_decision' },
+   443→   443→      };
+   444→   444→    }
+   445→   445→
+   446→   446→    if (decision.status === 'cannot_execute') {
+   447→   447→      return {
+   448→   448→        finalStatus: 'failed', taskStatus: 'failed', statusDetail: decision.reason,
+   449→   449→        summary: decision.reason,
+   450→   450→        errorState: { code: 'NO_CAPABLE_TOOL', message: decision.reason, stage: 'core_decision' },
+   451→   451→      };
+   452→   452→    }
+   453→   453→
+   454→   454→    if (decision.status === 'stop') {
+   455→   455→      return { finalStatus: 'stopped', taskStatus: 'stopped', statusDetail: 'Stop requested.', summary: decision.reason };
+   456→   456→    }
+   457→   457→
+   458→   458→    if (decision.status === 'no_tool') {
+   459→   459→      const informational = /no .*(registered|suitable|matching) tool|not require|informational|no tool provides/i.test(decision.reason) || decision.confidence >= 0.6;
+   460→   460→      if (informational) {
+   461→   461→        return { finalStatus: 'completed', taskStatus: 'completed', summary: decision.reason };
+   462→   462→      }
+   463→   463→      return {
+   464→   464→        finalStatus: 'failed', taskStatus: 'failed', statusDetail: 'No capable tool available.',
+   465→   465→        summary: decision.reason,
+   466→   466→        errorState: { code: 'NO_TOOL', message: decision.reason, stage: 'core_decision' },
+   467→   467→      };
+   468→   468→    }
+   469→   469→
+   470→   470→    // tool_call — execute with ONE retry on failure
+   471→   471→    if (!result) {
+   472→   472→      // defensive: tool_call without execution
+   473→   473→      continue;
+   474→   474→    }
+   475→   475→    let finalResult = result;
+   476→   476→    if (result.execution.status === 'failed' || result.execution.status === 'timeout') {
+   477→   477→      void emitEvent({
+   478→   478→        taskId: ctx.taskId, type: 'planner.retry', source: 'planner',
+   479→   479→        message: `Execution failed (${result.execution.status}); retrying once with error as observation.`,
+   480→   480→        data: { tool: result.execution.tool, error: result.execution.error }, priority: 4,
+   481→   481→      });
+   482→   482→      const retry = await decideAndExecute(ctx, objective, {
+   483→   483→        lastObservation: `Previous attempt ${result.execution.status}: ${result.execution.error?.message ?? 'unknown'}`,
+   484→   484→      });
+   485→   485→      if (retry.result && retry.result.execution.status !== 'failed' && retry.result.execution.status !== 'timeout') {
+   486→   486→        finalResult = retry.result;
+   487→   487→      } else {
+   488→   488→        recordExecution(ctx, result.execution.tool, result);
+   489→   489→        if (retry.result) recordExecution(ctx, retry.result.execution.tool, retry.result);
+   490→   490→        for (const id of activeStepIds) markStepByExecution(ctx.state.plan, id, 'failed');
+   491→   491→        await persistState(ctx);
+   492→   492→        const errMsg = retry.result?.execution.error?.message ?? result.execution.error?.message ?? 'unknown error';
+   493→   493→        return {
+   494→   494→          finalStatus: 'failed', taskStatus: 'failed', statusDetail: `Tool failure after retry: ${errMsg}`,
+   495→   495→          summary: ctx.state.lastObservation ?? 'Tool execution failed.',
+   496→   496→          errorState: { code: 'TOOL_FAILURE', message: errMsg, stage: 'tool_execution' },
+   497→   497→        };
+   498→   498→      }
+   499→   499→    }
+   500→   500→
+   501→   501→    recordExecution(ctx, finalResult.execution.tool, finalResult);
+   502→   502→    for (const id of activeStepIds) markStepByExecution(ctx.state.plan, id, finalResult.execution.status);
+   503→   503→
+   504→   504→    // action fulfilled the active subgoal → mark completed
+   505→   505→    if (ctx.state.activeSubgoal && finalResult.execution.status === 'completed') {
+   506→   506→      ctx.state.activeSubgoal.status = 'completed';
+   507→   507→      ctx.state.activeSubgoal = undefined;
+   508→   508→    }
+   509→   509→    await persistState(ctx);
+   510→   510→
+   511→   511→    if (await verifyGoal(ctx)) {
+   512→   512→      return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Goal verified.' };
+   513→   513→    }
+   514→   514→  }
+   515→   515→}
+   516→   516→
+   517→   517→async function decideForStep(ctx: RunContext, step: PlanStep): Promise<Awaited<ReturnType<typeof decide>>> {
+   518→   518→  return decide({
+   519→   519→    objective: step.title,
+   520→   520→    request: ctx.request,
+   521→   521→    goal: ctx.goal,
+   522→   522→    toolDefs: ctx.toolDefs,
+   523→   523→    contextBundle: await buildContextBundle(ctx),
+   524→   524→    reasoningLevel: ctx.config.reasoningLevel,
+   525→   525→    allowedTools: ctx.config.enabledTools,
+   526→   526→  });
+   527→   527→}
+   528→   528→
+   529→   529→// ---------- LIVE MODE ----------
+   530→   530→
+   531→   531→function waitWithEvents(intervalMs: number, handle: TaskRunHandle): Promise<WakePayload> {
+   532→   532→  return new Promise((resolve) => {
+   533→   533→    let settled = false;
+   534→   534→    const timer = setTimeout(() => {
+   535→   535→      if (settled) return;
+   536→   536→      settled = true;
+   537→   537→      handle.wake = null;
+   538→   538→      resolve({ reason: 'timeout' });
+   539→   539→    }, intervalMs);
+   540→   540→    if (typeof timer.unref === 'function') timer.unref();
+   541→   541→    handle.wake = (payload: WakePayload) => {
+   542→   542→      if (settled) return;
+   543→   543→      settled = true;
+   544→   544→      clearTimeout(timer);
+   545→   545→      handle.wake = null;
+   546→   546→      resolve(payload);
+   547→   547→    };
+   548→   548→  });
+   549→   549→}
+   550→   550→
+   551→   551→async function runRepairPasses(ctx: RunContext, serverId: string): Promise<boolean> {
+   552→   552→  const sg: Subgoal = {
+   553→   553→    id: subgoalId(ctx.state.subgoals.length),
+   554→   554→    title: `Recover server ${serverId}`,
+   555→   555→    reason: `Server ${serverId} reported unhealthy — recovery subgoal created.`,
+   556→   556→    status: 'active',
+   557→   557→    createdAt: new Date().toISOString(),
+   558→   558→  };
+   559→   559→  ctx.state.subgoals.push(sg);
+   560→   560→  ctx.state.activeSubgoal = sg;
+   561→   561→  void emitEvent({
+   562→   562→    taskId: ctx.taskId, type: 'subgoal.created', source: 'planner',
+   563→   563→    message: `Recovery subgoal created: ${sg.title}`, data: { subgoal: sg }, priority: 3,
+   564→   564→  });
+   565→   565→
+   566→   566→  let calls = 0;
+   567→   567→  // 1) observe health
+   568→   568→  let health = await executeTool('server.health', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId });
+   569→   569→  calls += 1;
+   570→   570→  recordExecution(ctx, 'server.health', { execution: health, observation: interpret('server.health', health) });
+   571→   571→
+   572→   572→  if (health.status === 'completed') {
+   573→   573→    const r = health.result as { health?: string } | undefined;
+   574→   574→    if (r?.health === 'healthy') {
+   575→   575→      sg.status = 'completed';
+   576→   576→      ctx.state.activeSubgoal = undefined;
+   577→   577→      await persistState(ctx);
+   578→   578→      return true;
+   579→   579→    }
+   580→   580→  }
+   581→   581→
+   582→   582→  // 2) restart
+   583→   583→  if (calls < 3) {
+   584→   584→    const restart = await executeTool('server.restart', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId });
+   585→   585→    calls += 1;
+   586→   586→    recordExecution(ctx, 'server.restart', { execution: restart, observation: interpret('server.restart', restart) });
+   587→   587→    await new Promise((res) => setTimeout(res, RESTART_SETTLE_MS));
+   588→   588→  }
+   589→   589→
+   590→   590→  // 3) verify
+   591→   591→  if (calls < 4) {
+   592→   592→    const verify = await executeTool('server.health', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId });
+   593→   593→    calls += 1;
+   594→   594→    recordExecution(ctx, 'server.health', { execution: verify, observation: interpret('server.health', verify) });
+   595→   595→    const r = verify.result as { health?: string } | undefined;
+   596→   596→    if (r?.health === 'healthy') {
+   597→   597→      sg.status = 'completed';
+   598→   598→      ctx.state.activeSubgoal = undefined;
+   599→   599→      ctx.state.lastObservation = `Server ${serverId} recovered and verified healthy.`;
+   600→   600→      await persistState(ctx);
+   601→   601→      void emitEvent({
+   602→   602→        taskId: ctx.taskId, type: 'observer.state_changed', source: 'observer',
+   603→   603→        message: `Server ${serverId} recovered and verified healthy.`, priority: 3,
+   604→   604→      });
+   605→   605→      return true;
+   606→   606→    }
+   607→   607→  }
+   608→   608→
+   609→   609→  sg.status = 'failed';
+   610→   610→  ctx.state.activeSubgoal = undefined;
+   611→   611→  await persistState(ctx);
+   612→   612→  return false;
+   613→   613→}
+   614→   614→
+   615→   615→async function liveObserveCycle(ctx: RunContext, objective: string): Promise<void> {
+   616→   616→  const { decision, result } = await decideAndExecute(ctx, objective);
+   617→   617→  if (result) {
+   618→   618→    recordExecution(ctx, decision.tool as string, result);
+   619→   619→    await persistState(ctx);
+   620→   620→  }
+   621→   621→
+   622→   622→  // environment-driven recovery (spec §71)
+   623→   623→  const goalMentionsMonitoring = /monitor|recover|production|prod|api|server|health|web|db/i.test(ctx.goal);
+   624→   624→  const unhealthy = listServers().filter((s) => s.health === 'unhealthy' || s.health === 'degraded');
+   625→   625→  if (goalMentionsMonitoring && unhealthy.length > 0) {
+   626→   626→    for (const server of unhealthy) {
+   627→   627→      if (ctx.handle.stopFlag.stopped) return;
+   628→   628→      await runRepairPasses(ctx, server.id);
+   629→   629→    }
+   630→   630→  }
+   631→   631→}
+   632→   632→
+   633→   633→async function runLiveMode(ctx: RunContext): Promise<Termination> {
+   634→   634→  const { config } = ctx;
+   635→   635→
+   636→   636→  // initial pass: one full observation cycle before entering the wait loop
+   637→   637→  try {
+   638→   638→    await liveObserveCycle(ctx, `Initial observation: ${ctx.goal}. Environment state: ${JSON.stringify(listServers())}`);
+   639→   639→  } catch (err) {
+   640→   640→    console.error('[loop] live initial pass failed:', err);
+   641→   641→  }
+   642→   642→  if (ctx.handle.stopFlag.stopped) {
+   643→   643→    return { finalStatus: 'stopped', taskStatus: 'stopped', statusDetail: 'Live task stopped by user.', summary: ctx.state.lastObservation ?? 'Live task stopped.' };
+   644→   644→  }
+   645→   645→
+   646→   646→  // live tasks park in 'waiting' while between cycles
+   647→   647→  await persistTask(ctx.taskId, { status: 'waiting' });
+   648→   648→  void emitEvent({
+   649→   649→    taskId: ctx.taskId, type: 'task.waiting', source: 'runtime',
+   650→   650→    message: `Live task waiting — scheduled tick every ${config.liveIntervalMs}ms plus event-driven wake-ups.`,
+   651→   651→    priority: 7,
+   652→   652→  });
+   653→   653→  await persistState(ctx);
+   654→   654→
+   655→   655→  while (true) {
+   656→   656→    if (ctx.handle.stopFlag.stopped) break;
+   657→   657→
+   658→   658→    const wake = await waitWithEvents(config.liveIntervalMs, ctx.handle);
+   659→   659→    if (ctx.handle.stopFlag.stopped) break;
+   660→   660→
+   661→   661→    const cycleDeadline = Date.now() + config.taskTimeoutMs;
+   662→   662→
+   663→   663→    if (wake.reason === 'timeout') {
+   664→   664→      void emitEvent({
+   665→   665→        taskId: ctx.taskId, type: 'observer.scheduled_tick', source: 'runtime',
+   666→   666→        message: 'Scheduled observation tick.',
+   667→   667→        data: { at: new Date().toISOString() },
+   668→   668→        priority: 9,
+   669→   669→      });
+   670→   670→      const servers = listServers();
+   671→   671→      try {
+   672→   672→        await liveObserveCycle(
+   673→   673→          ctx,
+   674→   674→          `Scheduled observation: keep making progress on: ${ctx.goal}. Environment state: ${JSON.stringify(servers)}`,
+   675→   675→        );
+   676→   676→      } catch (err) {
+   677→   677→        console.error('[loop] scheduled cycle failed:', err);
+   678→   678→      }
+   679→   679→    } else if (wake.event) {
+   680→   680→      const event = wake.event;
+   681→   681→      void emitEvent({
+   682→   682→        taskId: ctx.taskId, type: 'observer.event_wake', source: 'observer',
+   683→   683→        message: `Woken by event: ${event.type} (priority ${event.priority}).`,
+   684→   684→        data: { eventId: event.id, type: event.type },
+   685→   685→        priority: 5,
+   686→   686→      });
+   687→   687→
+   688→   688→      if (event.type === 'task.stop') break;
+   689→   689→
+   690→   690→      if (event.type === 'user.feedback') {
+   691→   691→        const message = String(event.data?.message ?? '');
+   692→   692→        const correctAction = event.data?.correctAction ? String(event.data.correctAction) : undefined;
+   693→   693→        void emitEvent({
+   694→   694→          taskId: ctx.taskId, type: 'observer.feedback_applied', source: 'observer',
+   695→   695→          message: `User feedback processed: ${message.slice(0, 200)}`,
+   696→   696→          priority: 3,
+   697→   697→        });
+   698→   698→        if (ctx.config.learnFrom?.feedback) {
+   699→   699→          try {
+   700→   700→            await db.memoryEntry.upsert({
+   701→   701→              where: { key: `feedback_${ctx.taskId}` },
+   702→   702→              update: { value: JSON.stringify({ message, correctAction, at: new Date().toISOString() }), tags: JSON.stringify(['feedback', 'live']) },
+   703→   703→              create: { key: `feedback_${ctx.taskId}`, value: JSON.stringify({ message, correctAction, at: new Date().toISOString() }), tags: JSON.stringify(['feedback', 'live']), source: 'runtime' },
+   704→   704→            });
+   705→   705→          } catch (err) {
+   706→   706→            console.error('[loop] feedback memory failed:', err);
+   707→   707→          }
+   708→   708→        }
+   709→   709→        // revise active subgoal via LLM (fallback: correctAction or generic title)
+   710→   710→        let title = correctAction ?? `Adjust approach per user feedback: ${message.slice(0, 80)}`;
+   711→   711→        try {
+   712→   712→          const { default: ZAI } = await import('z-ai-web-dev-sdk');
+   713→   713→          const zai = await ZAI.create();
+   714→   714→          const res = await Promise.race([
+   715→   715→            zai.chat.completions.create({
+   716→   716→              messages: [
+   717→   717→                { role: 'assistant' as const, content: 'You are the Planner of NexTool. The user corrected the runtime. Revise the active subgoal accordingly. Output STRICT JSON only: {"title":"revised subgoal","reason":"one sentence"}' },
+   718→   718→                { role: 'user' as const, content: JSON.stringify({ goal: ctx.goal, feedback: message, correctAction, activeSubgoal: ctx.state.activeSubgoal?.title, lastObservation: ctx.state.lastObservation }) },
+   719→   719→              ],
+   720→   720→              thinking: { type: 'disabled' },
+   721→   721→            }),
+   722→   722→            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000)),
+   723→   723→          ]);
+   724→   724→          const content = res?.choices?.[0]?.message?.content ?? '';
+   725→   725→          const m = content.replace(/```json\s*/gi, '').match(/\{[\s\S]*\}/);
+   726→   726→          if (m) {
+   727→   727→            const parsed = JSON.parse(m[0]) as { title?: unknown };
+   728→   728→            if (typeof parsed.title === 'string' && parsed.title.trim()) title = parsed.title.trim().slice(0, 200);
+   729→   729→          }
+   730→   730→        } catch (err) {
+   731→   731→          console.error('[loop] feedback subgoal revision fallback:', err);
+   732→   732→        }
+   733→   733→        const sg: Subgoal = { id: subgoalId(ctx.state.subgoals.length), title, reason: `Revised after user feedback: ${message.slice(0, 150)}`, status: 'active', createdAt: new Date().toISOString() };
+   734→   734→        ctx.state.subgoals.push(sg);
+   735→   735→        ctx.state.activeSubgoal = sg;
+   736→   736→        void emitEvent({
+   737→   737→          taskId: ctx.taskId, type: 'subgoal.created', source: 'planner',
+   738→   738→          message: `Subgoal revised after feedback: ${title}`, data: { subgoal: sg }, priority: 3,
+   739→   739→        });
+   740→   740→        await persistState(ctx);
+   741→   741→      } else if (event.type.startsWith('environment.')) {
+   742→   742→        // environment event → immediate recovery
+   743→   743→        const serverId = event.data?.serverId ? String(event.data.serverId) : undefined;
+   744→   744→        const crashed = serverId ?? listServers().find((s) => s.health !== 'healthy')?.id;
+   745→   745→        if (crashed) {
+   746→   746→          try {
+   747→   747→            await runRepairPasses(ctx, crashed);
+   748→   748→          } catch (err) {
+   749→   749→            console.error('[loop] env recovery failed:', err);
+   750→   750→          }
+   751→   751→        }
+   752→   752→      } else {
+   753→   753→        // generic event: one observe cycle bounded by cycle deadline
+   754→   754→        if (Date.now() < cycleDeadline) {
+   755→   755→          try {
+   756→   756→            await liveObserveCycle(ctx, `Event-driven observation (${event.type}): keep making progress on: ${ctx.goal}. Event: ${event.message}`);
+   757→   757→          } catch (err) {
+   758→   758→            console.error('[loop] event cycle failed:', err);
+   759→   759→          }
+   760→   760→        }
+   761→   761→      }
+   762→   762→    }
+   763→   763→  }
+   764→   764→
+   765→   765→  return { finalStatus: 'stopped', taskStatus: 'stopped', statusDetail: 'Live task stopped by user.', summary: ctx.state.lastObservation ?? 'Live task stopped.' };
+   766→   766→}
+   767→   767→
+   768→   768→// ---------- ENTRY POINT ----------
+   769→   769→
+   770→   770→export async function runTask(taskId: string, handle: TaskRunHandle): Promise<void> {
+   771→   771→  const row = await db.task.findUnique({ where: { id: taskId } });
+   772→   772→  if (!row) throw new Error(`Task not found: ${taskId}`);
+   773→   773→
+   774→   774→  const settings = await getSettings();
+   775→   775→  const storedConfig = parseJson<Partial<TaskConfig>>(row.config, {});
+   776→   776→  const config = mergeConfig(storedConfig, settings);
+   777→   777→  const request = row.request;
+   778→   778→  const startedAtMs = Date.now();
+   779→   779→
+   780→   780→  const state: MainState = {
+   781→   781→    request,
+   782→   782→    goal: row.goal ?? request,
+   783→   783→    mode: config.mode,
+   784→   784→    plan: [],
+   785→   785→    subgoals: [],
+   786→   786→    previousActions: [],
+   787→   787→    observations: [],
+   788→   788→    iterationCount: 0,
+   789→   789→    toolCallCount: 0,
+   790→   790→    terminationStatus: null,
+   791→   791→    errorState: null,
+   792→   792→  };
+   793→   793→
+   794→   794→  const ctx: RunContext = {
+   795→   795→    taskId, request, goal: state.goal, config, toolDefs: [], state, handle, startedAtMs, artifacts: [],
+   796→   796→  };
+   797→   797→
+   798→   798→  await persistTask(taskId, { status: 'running', startedAt: new Date(), config: JSON.stringify(config) });
+   799→   799→  void emitEvent({
+   800→   800→    taskId, type: 'task.started', source: 'runtime',
+   801→   801→    message: `Task started in ${config.mode} mode (reasoning level ${config.reasoningLevel}).`,
+   802→   802→    priority: 5,
+   803→   803→  });
+   804→   804→
+   805→   805→  try {
+   806→   806→    // tool registry + plan
+   807→   807→    ctx.toolDefs = await getEnabledToolDefs(config.enabledTools);
+   808→   808→    const plan = await buildPlan(request, state.goal, ctx.toolDefs, config.reasoningLevel, taskId);
+   809→   809→    state.plan = plan.steps;
+   810→   810→    state.goal = plan.goal;
+   811→   811→    ctx.goal = plan.goal;
+   812→   812→    await persistTask(taskId, { goal: plan.goal, plan: JSON.stringify(plan.steps), state: JSON.stringify(state) });
+   813→   813→    void emitEvent({
+   814→   814→      taskId, type: 'planner.plan', source: 'planner',
+   815→   815→      message: `Plan created: ${plan.steps.length} step(s) for goal "${plan.goal}".`,
+   816→   816→      data: { goal: plan.goal, steps: plan.steps },
+   817→   817→      priority: 5,
+   818→   818→    });
+   819→   819→
+   820→   820→    const term = config.mode === 'live' ? await runLiveMode(ctx) : await runGoalMode(ctx);
+   821→   821→
+   822→   822→    state.terminationStatus = term.finalStatus === 'completed' ? 'completed' : term.finalStatus;
+   823→   823→    state.errorState = term.errorState ?? null;
+   824→   824→    await finalize(ctx, term);
+   825→   825→  } catch (err) {
+   826→   826→    console.error(`[loop] fatal error in task ${taskId}:`, err);
+   827→   827→    const message = err instanceof Error ? err.message : String(err);
+   828→   828→    await finalize(ctx, {
+   829→   829→      finalStatus: 'failed',
+   830→   830→      taskStatus: 'failed',
+   831→   831→      statusDetail: 'Runtime error.',
+   832→   832→      summary: `Runtime error: ${message}`,
+   833→   833→      errorState: { code: 'RUNTIME_ERROR', message, stage: 'main' },
+   834→   834→    });
+   835→   835→  }
+   836→   836→}
+   837→   837→
+   838→   838→async function finalize(ctx: RunContext, term: Termination): Promise<void> {
+   839→   839→  const durationMs = Date.now() - ctx.startedAtMs;
+   840→   840→  const finalResult: FinalResult = {
+   841→   841→    status: term.finalStatus,
+   842→   842→    goal: ctx.goal,
+   843→   843→    result: {
+   844→   844→      summary: term.summary,
+   845→   845→      lastObservation: ctx.state.lastObservation,
+   846→   846→      artifacts: ctx.artifacts.length > 0 ? ctx.artifacts : undefined,
+   847→   847→    },
+   848→   848→    steps: ctx.state.iterationCount,
+   849→   849→    toolCalls: ctx.state.toolCallCount,
+   850→   850→    durationMs,
+   851→   851→  };
+   852→   852→
+   853→   853→  ctx.state.terminationStatus = term.finalStatus;
+   854→   854→  ctx.state.errorState = term.errorState ?? null;
+   855→   855→
+   856→   856→  const completedAt = new Date();
+   857→   857→  await persistTask(ctx.taskId, {
+   858→   858→    status: term.taskStatus,
+   859→   859→    statusDetail: term.statusDetail ?? null,
+   860→   860→    state: JSON.stringify(ctx.state),
+   861→   861→    finalResult: JSON.stringify(finalResult),
+   862→   862→    error: term.errorState ? JSON.stringify(term.errorState) : null,
+   863→   863→    steps: ctx.state.iterationCount,
+   864→   864→    toolCalls: ctx.state.toolCallCount,
+   865→   865→    durationMs,
+   866→   866→    completedAt,
+   867→   867→  });
+   868→   868→
+   869→   869→  void emitEvent({
+   870→   870→    taskId: ctx.taskId,
+   871→   871→    type: term.taskStatus === 'completed' ? 'task.completed' : term.taskStatus === 'stopped' ? 'task.cancelled' : 'task.failed',
+   872→   872→    source: 'runtime',
+   873→   873→    message: `Task ${term.taskStatus}${term.statusDetail ? `: ${term.statusDetail}` : ''} — ${term.summary.slice(0, 200)}`,
+   874→   874→    data: finalResult as unknown as Record<string, unknown>,
+   875→   875→    priority: 3,
+   876→   876→  });
+   877→   877→}
+   878→   878→

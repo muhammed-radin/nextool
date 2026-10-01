@@ -1,5 +1,5 @@
 /**
- * NexTool Q1 v1.0.0 — typed frontend API client.
+ * NexTool Q1 v1.0.1 — typed frontend API client.
  * Every call goes through apiFetch which enforces the ApiEnvelope contract:
  *   { ok: true, data: T } | { ok: false, error: { code, message } }
  * Network/HTTP failures throw ApiClientError — callers MUST handle them
@@ -45,7 +45,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   }
 
   const env = json as Partial<ApiEnvelope<T>>;
-  if (!res.ok || !env || env.ok !== true || !('data' in env)) {
+  if (!res.ok || !env || env.ok !== true || !('data' in env) || env.data === undefined) {
     const err = (env as { ok: false; error?: ApiError } | undefined)?.error;
     throw new ApiClientError(
       err?.message || `Request failed (HTTP ${res.status})`,
@@ -53,10 +53,10 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       res.status,
     );
   }
-  return env.data;
+  return env.data as T;
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
+function qs(params: object): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== '' && v !== null) sp.set(k, String(v));
@@ -89,7 +89,7 @@ export interface ListTasksParams {
 }
 
 export const listTasks = (params: ListTasksParams = {}) =>
-  apiFetch<TaskSummary[]>(`/api/tasks${qs(params as Record<string, string | number | undefined>)}`);
+  apiFetch<TaskSummary[]>(`/api/tasks${qs(params)}`);
 
 export interface CreateTaskPayload {
   request: string;
@@ -207,3 +207,29 @@ export const getSettings = () => apiFetch<NexToolSettings>('/api/settings');
 
 export const updateSettings = (partial: Partial<NexToolSettings>) =>
   apiFetch<NexToolSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(partial) });
+
+// ---------- Documentation ----------
+
+export interface DocMetaDTO {
+  slug: string;
+  title: string;
+  category: string;
+  order: number;
+  excerpt: string;
+}
+
+export interface DocsIndex {
+  version: string;
+  count: number;
+  docs: DocMetaDTO[];
+}
+
+export interface DocPage extends DocMetaDTO {
+  content: string;
+  updatedAt: string;
+}
+
+export const getDocsIndex = () => apiFetch<DocsIndex>('/api/docs');
+
+export const getDocPage = (slug: string) =>
+  apiFetch<DocPage>(`/api/docs/${encodeURIComponent(slug)}`);

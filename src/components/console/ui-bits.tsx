@@ -1,9 +1,11 @@
 'use client';
 
 /**
- * Shared small building blocks for the NexTool console views.
- * Palette rule: zinc neutrals + emerald (ok) + amber (warn) + rose (error)
- * + teal/orange reserved for 'core' / 'environment' source tags.
+ * Shared small building blocks for the NexTool console views (v1.0.1).
+ * Palette rule: blue gradient glassmorphism — sky/cyan/blue brand accents on a
+ * deep navy base, with semantic status colors reserved for meaning:
+ * emerald (ok) · amber (warn) · rose (error) · sky (info) · slate (muted).
+ * Technical metadata uses the Michroma face via `font-tech`.
  */
 
 import { useEffect, useState } from 'react';
@@ -113,11 +115,11 @@ export function statusTone(status: string | undefined | null): Tone {
 }
 
 const toneClasses: Record<Tone, string> = {
-  ok: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
-  warn: 'border-amber-500/30 bg-amber-500/10 text-amber-300',
-  err: 'border-rose-500/30 bg-rose-500/10 text-rose-300',
-  info: 'border-teal-500/30 bg-teal-500/10 text-teal-300',
-  muted: 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300',
+  ok: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+  warn: 'border-amber-400/30 bg-amber-400/10 text-amber-300',
+  err: 'border-rose-400/30 bg-rose-400/10 text-rose-300',
+  info: 'border-sky-400/30 bg-sky-400/10 text-sky-300',
+  muted: 'border-slate-400/25 bg-slate-400/10 text-slate-200',
 };
 
 export function StatusChip({ status, className }: { status: string | undefined | null; className?: string }) {
@@ -129,15 +131,20 @@ export function StatusChip({ status, className }: { status: string | undefined |
   );
 }
 
+/** Michroma technical metadata label — version numbers, system identifiers. */
+export function TechLabel({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cn('font-tech text-[10px] uppercase tracking-wider text-sky-300/80', className)}>{children}</span>;
+}
+
 export const SOURCE_COLORS: Record<EventSource, string> = {
   planner: 'bg-emerald-400',
-  core: 'bg-teal-300',
+  core: 'bg-cyan-300',
   tool: 'bg-amber-400',
-  observer: 'bg-zinc-300',
-  runtime: 'bg-zinc-400',
+  observer: 'bg-slate-300',
+  runtime: 'bg-slate-400',
   user: 'bg-rose-400',
   environment: 'bg-orange-400',
-  system: 'bg-zinc-500',
+  system: 'bg-slate-500',
 };
 
 export function SourceDot({ source, className }: { source: string; className?: string }) {
@@ -199,7 +206,7 @@ export function JsonBlock({ value, className, maxHeight = 'max-h-80' }: { value:
     text = String(value);
   }
   return (
-    <pre className={cn('nextool-scroll overflow-auto rounded-md border border-zinc-800 bg-zinc-950/80 p-3 font-mono text-xs leading-relaxed text-zinc-300', maxHeight, className)}>
+    <pre className={cn('nextool-scroll glass-inset overflow-auto rounded-md p-3 font-mono text-xs leading-relaxed text-sky-100/80', maxHeight, className)}>
       {text}
     </pre>
   );
@@ -223,7 +230,7 @@ export function SectionTitle({
   return (
     <div className={cn('flex items-start justify-between gap-3', className)}>
       <div className="min-w-0">
-        <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight text-zinc-100">
+        <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
           {icon}
           {title}
         </h2>
@@ -253,13 +260,13 @@ export function MetricCard({
     tone === 'ok' ? 'text-emerald-300'
     : tone === 'warn' ? 'text-amber-300'
     : tone === 'err' ? 'text-rose-300'
-    : tone === 'info' ? 'text-teal-300'
-    : 'text-zinc-100';
+    : tone === 'info' ? 'text-sky-300'
+    : 'text-foreground';
   return (
-    <div className={cn('rounded-lg border bg-card p-4', className)}>
+    <div className={cn('glass-card rounded-lg p-4', className)}>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
-        {icon ? <span className="text-muted-foreground">{icon}</span> : null}
+        <TechLabel>{label}</TechLabel>
+        {icon ? <span className="text-sky-300/70">{icon}</span> : null}
       </div>
       <div className={cn('mt-2 font-mono text-xl font-semibold tabular-nums', valueColor)}>{value}</div>
       {sub ? <div className="mt-1 truncate text-xs text-muted-foreground">{sub}</div> : null}
@@ -279,9 +286,9 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn('flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-800 p-8 text-center', className)}>
-      <div className="text-zinc-600">{icon ?? <Inbox className="size-6" aria-hidden />}</div>
-      <p className="text-sm font-medium text-zinc-300">{title}</p>
+    <div className={cn('glass-card flex flex-col items-center justify-center gap-2 rounded-lg border-dashed p-8 text-center', className)}>
+      <div className="text-sky-300/50">{icon ?? <Inbox className="size-6" aria-hidden />}</div>
+      <p className="text-sm font-medium text-foreground/90">{title}</p>
       {hint ? <p className="max-w-sm text-xs text-muted-foreground">{hint}</p> : null}
     </div>
   );
@@ -299,14 +306,14 @@ export function ErrorCard({
   className?: string;
 }) {
   return (
-    <div className={cn('flex flex-col items-start gap-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-4', className)}>
+    <div className={cn('flex flex-col items-start gap-3 rounded-lg border border-rose-400/30 bg-rose-400/5 p-4', className)}>
       <div className="flex items-center gap-2 text-sm font-medium text-rose-300">
         <AlertTriangle className="size-4 shrink-0" aria-hidden />
         {title}
       </div>
       <p className="font-mono text-xs text-rose-200/80">{message}</p>
       {onRetry ? (
-        <Button variant="outline" size="sm" onClick={onRetry} className="min-h-9 border-rose-500/30 text-rose-200 hover:bg-rose-500/10">
+        <Button variant="outline" size="sm" onClick={onRetry} className="min-h-9 border-rose-400/30 text-rose-200 hover:bg-rose-400/10">
           <RefreshCw className="size-3.5" aria-hidden /> Retry
         </Button>
       ) : null}
@@ -315,7 +322,7 @@ export function ErrorCard({
 }
 
 export function SkeletonBlock({ className }: { className?: string }) {
-  return <div className={cn('animate-pulse rounded-md bg-zinc-800/60', className)} />;
+  return <div className={cn('animate-pulse rounded-md bg-white/[0.06]', className)} />;
 }
 
 export function PulsingDot({ tone = 'ok', className }: { tone?: Tone; className?: string }) {
@@ -323,8 +330,8 @@ export function PulsingDot({ tone = 'ok', className }: { tone?: Tone; className?
     tone === 'ok' ? 'bg-emerald-400'
     : tone === 'warn' ? 'bg-amber-400'
     : tone === 'err' ? 'bg-rose-400'
-    : tone === 'info' ? 'bg-teal-300'
-    : 'bg-zinc-400';
+    : tone === 'info' ? 'bg-sky-300'
+    : 'bg-slate-400';
   return (
     <span className={cn('relative inline-flex size-2.5', className)} aria-hidden>
       <span className={cn('absolute inline-flex size-full animate-ping rounded-full opacity-60', color)} />
@@ -339,7 +346,7 @@ export function EventRow({ event, defaultOpen = false }: { event: NexToolEvent; 
   const [open, setOpen] = useState(defaultOpen);
   const hasData = event.data !== undefined && event.data !== null;
   return (
-    <div className="rounded-md border border-zinc-800/80 bg-card/60 px-3 py-2">
+    <div className="glass-card rounded-md px-3 py-2">
       <button
         type="button"
         onClick={hasData ? () => setOpen((o) => !o) : undefined}
@@ -347,14 +354,14 @@ export function EventRow({ event, defaultOpen = false }: { event: NexToolEvent; 
         aria-expanded={open}
       >
         <SourceDot source={event.source} className="mt-1.5" />
-        <span className="shrink-0 font-mono text-[11px] text-zinc-500">[{fmtClock(event.createdAt)}]</span>
+        <span className="shrink-0 font-mono text-[11px] text-sky-200/50">[{fmtClock(event.createdAt)}]</span>
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-center gap-1.5">
             <TypeChip type={event.type} />
-            <span className="truncate text-xs text-zinc-200">{event.message}</span>
+            <span className="truncate text-xs text-foreground/90">{event.message}</span>
           </span>
         </span>
-        {hasData ? <RotateCw className={cn('mt-0.5 size-3 shrink-0 text-zinc-600 transition-transform', open && 'rotate-90')} aria-hidden /> : null}
+        {hasData ? <RotateCw className={cn('mt-0.5 size-3 shrink-0 text-sky-300/40 transition-transform', open && 'rotate-90')} aria-hidden /> : null}
       </button>
       {open && hasData ? <JsonBlock value={event.data} maxHeight="max-h-48" className="mt-2" /> : null}
     </div>

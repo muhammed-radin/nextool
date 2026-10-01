@@ -3,20 +3,25 @@
 /**
  * Live Monitor (spec §54-55) — live-mode task cards, environment server grid
  * with crash/degrade/recover injection, and the filtered live event stream.
+ * v1.0.1: glass surfaces, sky "live" accents, mobile-first card order (LIVE →
+ * task → status → subgoal → observation → next tick → events → stop action)
+ * and a full-width min-h-11 stop button with confirm dialog on every card.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useConsoleStore } from '../console-store';
 import { useGlobalStream } from '../providers';
 import { ApiClientError, getLiveState, getTaskDetail, injectEnvEvent, listTasks, stopTask } from '@/lib/nexool/client';
-import type { GlobalLiveState, TaskDetail, TaskSummary } from '@/lib/nexool/types';
+import type { GlobalLiveState, TaskSummary } from '@/lib/nexool/types';
+import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { ServerCard } from '../server-card';
 import { EmptyState, ErrorCard, PulsingDot, SectionTitle, StatusChip, TimeAgo, fmtMs } from '../ui-bits';
-import { RadioTower, Square, Timer } from 'lucide-react';
+import { Ban, Loader2, RadioTower, Square, Timer } from 'lucide-react';
 
 const STREAM_SOURCES = new Set(['environment', 'planner', 'core', 'tool']);
 
@@ -38,14 +43,17 @@ function LiveTaskCard({ data, onStop, stopping, onOpen }: { data: LiveTaskCardDa
   }, [lastTickAt, interval]);
 
   return (
-    <div className="rounded-lg border border-amber-500/20 bg-card p-4">
+    <div className="glass-card rounded-lg p-4">
+      {/* Priority row: LIVE badge · status · task · stop (desktop) */}
       <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="gap-1.5 border-sky-400/30 bg-sky-400/10 font-tech text-[9px] uppercase tracking-wider text-sky-300">
+          <PulsingDot tone="info" /> live
+        </Badge>
         <StatusChip status={summary.status} />
-        <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 font-mono text-[10px] text-amber-300">live</Badge>
         <button
           type="button"
           onClick={() => onOpen(summary.id)}
-          className="min-w-0 flex-1 truncate text-left font-mono text-xs text-zinc-200 hover:text-emerald-300 hover:underline"
+          className="min-w-0 flex-1 truncate rounded text-left font-mono text-xs text-foreground/90 outline-ring/50 hover:text-sky-300 hover:underline focus-visible:ring-2"
           aria-label={`Open preview for live task ${summary.id.slice(0, 8)}`}
         >
           {summary.name || summary.request}
@@ -55,29 +63,41 @@ function LiveTaskCard({ data, onStop, stopping, onOpen }: { data: LiveTaskCardDa
           size="sm"
           disabled={stopping}
           onClick={() => onStop(summary.id)}
-          className="min-h-9 border-rose-500/40 text-rose-300 hover:bg-rose-500/10"
+          className="hidden min-h-11 border-rose-500/40 text-rose-300 hover:bg-rose-500/10 sm:inline-flex"
           aria-label={`Stop live task ${summary.id.slice(0, 8)}`}
         >
           <Square className="size-3.5" aria-hidden /> Stop
         </Button>
       </div>
 
+      {/* Priority info: subgoal → last observation → next tick → events */}
       <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-        <p className="text-zinc-300">
+        <p className="min-w-0 text-foreground/90">
           <span className="text-muted-foreground">subgoal: </span>
           {detail?.state?.activeSubgoal?.title ?? '—'}
         </p>
-        <p className="truncate text-zinc-300">
+        <p className="min-w-0 text-foreground/90 sm:truncate">
           <span className="text-muted-foreground">last observation: </span>
           {detail?.state?.lastObservation ?? '—'}
         </p>
-        <p className="font-mono text-[11px] text-zinc-500">events {eventCount} · steps {summary.steps} · tools {summary.toolCalls}</p>
-        <p className="flex items-center gap-1.5 font-mono text-[11px] text-zinc-500">
-          <Timer className="size-3" aria-hidden />
+        <p className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+          <Timer className="size-3 shrink-0" aria-hidden />
           tick {interval ? fmtMs(interval) : '—'}
           {nextTickEstimate ? ` · next ${nextTickEstimate}` : ''}
         </p>
+        <p className="font-mono text-[11px] text-muted-foreground">events {eventCount} · steps {summary.steps} · tools {summary.toolCalls}</p>
       </div>
+
+      {/* Stop action — full-width, easy to reach on mobile */}
+      <Button
+        variant="outline"
+        disabled={stopping}
+        onClick={() => onStop(summary.id)}
+        className="mt-3 min-h-11 w-full justify-center border-rose-500/40 text-rose-300 hover:bg-rose-500/10 sm:hidden"
+        aria-label={`Stop live task ${summary.id.slice(0, 8)}`}
+      >
+        <Square className="size-4" aria-hidden /> Stop live task
+      </Button>
     </div>
   );
 }
@@ -92,6 +112,7 @@ export default function LiveMonitorView() {
   const [details, setDetails] = useState<Record<string, TaskDetail>>({});
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [injecting, setInjecting] = useState(false);
+  const [stopCandidate, setStopCandidate] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [stateRes, tasksRes] = await Promise.allSettled([getLiveState(), listTasks({ mode: 'live', limit: 50 })]);
@@ -140,6 +161,7 @@ export default function LiveMonitorView() {
       toast.error('Stop failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
     } finally {
       setStoppingId(null);
+      setStopCandidate(null);
     }
   };
 
@@ -175,7 +197,7 @@ export default function LiveMonitorView() {
   return (
     <div className="space-y-6">
       <SectionTitle
-        icon={<RadioTower className="size-4 text-amber-400" aria-hidden />}
+        icon={<RadioTower className="size-4 text-sky-300" aria-hidden />}
         title="Live Monitor"
         desc="Continuous (live-mode) tasks and the virtual environment — refreshed every 3s."
       />
@@ -186,7 +208,7 @@ export default function LiveMonitorView() {
       <section aria-label="Live tasks" className="space-y-3">
         <SectionTitle title="Live tasks" desc={`${activeLive.length} active · click stop to cancel; tasks are interruptible.`} />
         {liveTasks === null && !stateError ? (
-          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-28 w-full" />
         ) : activeLive.length === 0 ? (
           <EmptyState
             title="No live tasks running"
@@ -198,7 +220,7 @@ export default function LiveMonitorView() {
               <LiveTaskCard
                 key={t.id}
                 data={{ summary: t, detail: details[t.id] ?? null, eventCount: liveTaskEvents(t.id), lastTickAt: lastTick(t.id) }}
-                onStop={(id) => void stopTaskById(id)}
+                onStop={(id) => setStopCandidate(id)}
                 stopping={stoppingId === t.id}
                 onOpen={openTaskPreview}
               />
@@ -211,13 +233,13 @@ export default function LiveMonitorView() {
       <section aria-label="Virtual environment" className="space-y-3">
         <SectionTitle title="Environment" desc="Virtual servers (api-01 · web-01 · db-01). Injections emit real environment events into the runtime." />
         {liveState === null ? (
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
             {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-40 w-full" />)}
           </div>
         ) : liveState.servers.length === 0 ? (
           <EmptyState title="No servers in the virtual environment" />
         ) : (
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
             {liveState.servers.map((server) => (
               <ServerCard key={server.id} server={server} onInject={(type, id) => void inject(type, id)} injecting={injecting} />
             ))}
@@ -226,7 +248,7 @@ export default function LiveMonitorView() {
       </section>
 
       {/* Live event stream */}
-      <section aria-label="Live event stream" className="rounded-lg border bg-card p-4">
+      <section aria-label="Live event stream" className="glass-panel rounded-lg p-4">
         <SectionTitle
           title="Live event stream"
           desc="environment · planner · core · tool sources — newest first."
@@ -236,20 +258,49 @@ export default function LiveMonitorView() {
           {monitorEvents.length === 0 ? (
             <EmptyState title="No runtime events yet" hint="Start a task or inject an environment event." />
           ) : (
-            <div className="nextool-terminal nextool-scroll max-h-96 space-y-1 overflow-y-auto rounded-md border border-zinc-800 p-3">
+            <div className="glass-inset nextool-terminal nextool-scroll max-h-96 space-y-1 overflow-y-auto rounded-md p-3">
               {monitorEvents.map((ev) => (
-                <button key={ev.id} type="button" disabled={!ev.taskId} onClick={() => ev.taskId && openTaskPreview(ev.taskId)} className="flex w-full items-start gap-2 rounded px-1 py-0.5 text-left font-mono text-xs hover:bg-zinc-800/40 disabled:hover:bg-transparent">
-                  <span className="shrink-0 text-zinc-600">[{new Date(ev.createdAt).toLocaleTimeString('en-GB', { hour12: false })}]</span>
-                  <span className={ev.source === 'planner' ? 'shrink-0 font-semibold text-emerald-400' : ev.source === 'core' ? 'shrink-0 font-semibold text-teal-300' : ev.source === 'tool' ? 'shrink-0 font-semibold text-amber-400' : 'shrink-0 font-semibold text-orange-400'}>{ev.source}</span>
-                  <span className="shrink-0 text-zinc-600">→</span>
-                  <span className={ev.type.includes('error') ? 'min-w-0 flex-1 font-bold text-rose-400' : 'min-w-0 flex-1 text-zinc-200'}>{ev.message}</span>
-                  <TimeAgo iso={ev.createdAt} className="shrink-0 text-[10px] text-zinc-600" />
+                <button
+                  key={ev.id}
+                  type="button"
+                  disabled={!ev.taskId}
+                  onClick={() => ev.taskId && openTaskPreview(ev.taskId)}
+                  className="flex w-full items-start gap-2 rounded px-1 py-0.5 text-left font-mono text-xs hover:bg-white/[0.05] disabled:hover:bg-transparent"
+                >
+                  <span className="shrink-0 text-slate-500">[{new Date(ev.createdAt).toLocaleTimeString('en-GB', { hour12: false })}]</span>
+                  <span className={ev.source === 'planner' ? 'shrink-0 font-semibold text-emerald-300' : ev.source === 'core' ? 'shrink-0 font-semibold text-cyan-300' : ev.source === 'tool' ? 'shrink-0 font-semibold text-amber-300' : 'shrink-0 font-semibold text-orange-300'}>{ev.source}</span>
+                  <span className="shrink-0 text-slate-600">→</span>
+                  <span className={ev.type.includes('error') ? 'min-w-0 flex-1 font-bold text-rose-300' : 'min-w-0 flex-1 text-foreground/90'}>{ev.message}</span>
+                  <TimeAgo iso={ev.createdAt} className="shrink-0 text-[10px] text-slate-600" />
                 </button>
               ))}
             </div>
           )}
         </div>
       </section>
+
+      {/* Stop confirm dialog — required confirmation before cancelling a live task */}
+      <Dialog
+        open={stopCandidate !== null}
+        onOpenChange={(open) => {
+          if (!open) setStopCandidate(null);
+        }}
+      >
+        <DialogContent className="glass-strong sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-rose-300"><Ban className="size-4" aria-hidden /> Stop live task?</DialogTitle>
+            <DialogDescription>
+              Cancellation is sent to the runtime: scheduled ticks stop, active executions abort and the task terminates with status <code className="font-mono">stopped</code>. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11" onClick={() => setStopCandidate(null)}>Cancel</Button>
+            <Button variant="destructive" className="min-h-11" disabled={stoppingId !== null} onClick={() => stopCandidate && void stopTaskById(stopCandidate)}>
+              {stoppingId !== null ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Square className="size-4" aria-hidden />} Stop task
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

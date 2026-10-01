@@ -3,6 +3,7 @@
 /**
  * Dashboard — runtime overview. Polls /api/system (via SystemStatsProvider, 5s),
  * renders metric cards, core-latency area chart, recent tasks + live event feed.
+ * v1.0.1: blue glass surfaces, sky/cyan brand accents, 2-col metric grid at 320px.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -32,19 +33,20 @@ function LatencyChart({ data }: { data: { at: string; ms: number }[] }) {
         <AreaChart data={points} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
           <defs>
             <linearGradient id="latencyFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#34d399" stopOpacity={0.35} />
-              <stop offset="100%" stopColor="#34d399" stopOpacity={0} />
+              <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.35} />
+              <stop offset="100%" stopColor="#38bdf8" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid stroke="#27272a" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="t" tick={{ fill: '#71717a', fontSize: 10, fontFamily: 'monospace' }} tickLine={false} axisLine={{ stroke: '#27272a' }} minTickGap={32} />
-          <YAxis tick={{ fill: '#71717a', fontSize: 10, fontFamily: 'monospace' }} tickLine={false} axisLine={false} width={54} unit="ms" />
+          <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" vertical={false} />
+          <XAxis dataKey="t" tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'monospace' }} tickLine={false} axisLine={{ stroke: 'rgba(255,255,255,0.1)' }} minTickGap={32} />
+          <YAxis tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'monospace' }} tickLine={false} axisLine={false} width={54} unit="ms" />
           <RTooltip
-            contentStyle={{ background: '#111113', border: '1px solid #27272a', borderRadius: 8, fontFamily: 'monospace', fontSize: 12 }}
-            labelStyle={{ color: '#a1a1aa' }}
-            itemStyle={{ color: '#6ee7b7' }}
+            contentStyle={{ background: 'rgba(11,14,28,0.95)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, fontFamily: 'monospace', fontSize: 12 }}
+            labelStyle={{ color: '#7dd3fc' }}
+            itemStyle={{ color: '#7dd3fc' }}
+            cursor={{ stroke: 'rgba(56,189,248,0.35)' }}
           />
-          <Area type="monotone" dataKey="ms" stroke="#34d399" strokeWidth={1.5} fill="url(#latencyFill)" isAnimationActive={false} name="core latency" />
+          <Area type="monotone" dataKey="ms" stroke="#38bdf8" strokeWidth={1.5} fill="url(#latencyFill)" isAnimationActive={false} name="core latency" />
         </AreaChart>
       </ResponsiveContainer>
     </div>
@@ -94,16 +96,16 @@ function RecentTasks() {
           <button
             type="button"
             onClick={() => openTaskPreview(t.id)}
-            className="flex w-full min-h-11 items-center gap-2 rounded-md border border-zinc-800/80 bg-card/50 px-3 py-2 text-left transition-colors hover:border-zinc-700 hover:bg-zinc-800/40"
+            className="glass-card glass-card-hover flex min-h-11 w-full items-center gap-2 rounded-md px-3 py-2 text-left outline-ring/50 focus-visible:ring-2"
           >
             <StatusChip status={t.status} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-xs text-zinc-200">{t.name || t.request}</span>
-              <span className="block truncate font-mono text-[10px] text-zinc-500">
+              <span className="block truncate text-xs text-foreground/90">{t.name || t.request}</span>
+              <span className="block truncate font-mono text-[10px] text-muted-foreground">
                 #{t.id.slice(0, 8)} · {t.mode} · L{t.reasoningLevel} · {t.steps} steps · {t.toolCalls} tools
               </span>
             </span>
-            <TimeAgo iso={t.createdAt} className="shrink-0 font-mono text-[10px] text-zinc-500" />
+            <TimeAgo iso={t.createdAt} className="shrink-0 font-mono text-[10px] text-muted-foreground" />
           </button>
         </li>
       ))}
@@ -133,7 +135,7 @@ export default function DashboardView() {
   return (
     <div className="space-y-6">
       <SectionTitle
-        icon={<Gauge className="size-4 text-emerald-400" aria-hidden />}
+        icon={<Gauge className="size-4 text-sky-300" aria-hidden />}
         title="Dashboard"
         desc="Runtime health, engine metrics and live activity — refreshed every 5s."
       />
@@ -147,19 +149,19 @@ export default function DashboardView() {
               <p className="font-mono text-xs text-amber-200/70">{error ?? 'Waiting for /api/system…'}</p>
             </div>
           </div>
-          <Button variant="outline" size="sm" className="min-h-9 border-amber-500/30 text-amber-200 hover:bg-amber-500/10" onClick={refresh}>
+          <Button variant="outline" size="sm" className="min-h-11 border-amber-500/30 text-amber-200 hover:bg-amber-500/10" onClick={refresh}>
             Retry now
           </Button>
         </div>
       ) : null}
 
       {loading && !stats ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 xl:grid-cols-5">
           {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
         </div>
       ) : stats ? (
         <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 xl:grid-cols-5">
             <MetricCard
               label="Runtime"
               value={stats.runtimeStatus}
@@ -169,7 +171,7 @@ export default function DashboardView() {
             />
             <MetricCard
               label="Engine"
-              value={stats.engine.active}
+              value={<span className="text-gradient">{stats.engine.active}</span>}
               sub={`avg core ${fmtMs(stats.engine.avgCoreLatencyMs)} · v${stats.engine.version}`}
               icon={<BrainCircuit className="size-4" aria-hidden />}
             />
@@ -183,12 +185,12 @@ export default function DashboardView() {
             <MetricCard label="Events" value={stats.eventCount} sub="emitted by runtime" icon={<Activity className="size-4" aria-hidden />} />
           </div>
 
-          <section aria-label="Core decision latency" className="rounded-lg border bg-card p-4">
+          <section aria-label="Core decision latency" className="glass-panel rounded-lg p-4">
             <SectionTitle
-              icon={<Activity className="size-4 text-emerald-400" aria-hidden />}
+              icon={<Activity className="size-4 text-sky-300" aria-hidden />}
               title="Core decision latency"
               desc="Recent CoreModule decision times (ms) — live runtime metrics."
-              right={<Badge variant="outline" className="border-zinc-700 font-mono text-[10px] text-zinc-400">last {Math.min(stats.latencySeries.length, 60)} decisions</Badge>}
+              right={<Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">last {Math.min(stats.latencySeries.length, 60)} decisions</Badge>}
             />
             <div className="mt-3">
               <LatencyChart data={stats.latencySeries} />
@@ -196,9 +198,9 @@ export default function DashboardView() {
           </section>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <section aria-label="Recent tasks" className="rounded-lg border bg-card p-4">
+            <section aria-label="Recent tasks" className="glass-panel rounded-lg p-4">
               <SectionTitle
-                icon={<TerminalSquare className="size-4 text-emerald-400" aria-hidden />}
+                icon={<TerminalSquare className="size-4 text-sky-300" aria-hidden />}
                 title="Recent tasks"
                 desc="Click a task to open the dedicated preview."
               />
@@ -207,9 +209,9 @@ export default function DashboardView() {
               </div>
             </section>
 
-            <section aria-label="Recent events" className="rounded-lg border bg-card p-4">
+            <section aria-label="Recent events" className="glass-panel rounded-lg p-4">
               <SectionTitle
-                icon={<Radio className="size-4 text-emerald-400" aria-hidden />}
+                icon={<Radio className="size-4 text-sky-300" aria-hidden />}
                 title="Recent events"
                 desc="Live SSE feed — newest first (last 30)."
               />

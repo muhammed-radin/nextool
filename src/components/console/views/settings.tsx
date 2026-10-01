@@ -4,6 +4,9 @@
  * Settings (spec §63) — bound to GET/PUT /api/settings with unsaved-changes
  * tracking. Live Mode is never switched automatically; transport is honestly
  * locked to SSE.
+ * v1.0.1: new About / Version section (application / model / dataset versions
+ * from the canonical version module + live system stats), blue gradient
+ * glassmorphism panels, min-h-11 controls.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -17,8 +20,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { ApiClientError, getSettings, updateSettings } from '@/lib/nexool/client';
 import type { NexToolSettings } from '@/lib/nexool/types';
-import { ErrorCard, SectionTitle } from '../ui-bits';
-import { AlertTriangle, Loader2, Save, SlidersHorizontal } from 'lucide-react';
+import { APP_NAME, APP_VERSION, RELEASE_NAME, CORE_MODULE_VERSION, CORE_MODULE_NAME } from '@/lib/nexool/version';
+import { useSystemStats } from '../providers';
+import { ErrorCard, SectionTitle, TechLabel, fmtMs } from '../ui-bits';
+import { AlertTriangle, Info, Loader2, Save, SlidersHorizontal } from 'lucide-react';
 
 const REASONING_CAPTIONS: Record<number, string> = {
   1: 'ultra-fast', 2: 'fast', 3: 'balanced', 4: 'thorough', 5: 'deep', 6: 'maximum',
@@ -43,7 +48,7 @@ const DEFAULTS: Draft = {
 function NumberField({ id, label, value, onChange, hint }: { id: string; label: string; value: number; onChange: (v: number) => void; hint?: string }) {
   return (
     <div className="space-y-1">
-      <Label htmlFor={id} className="text-xs text-zinc-400">{label}</Label>
+      <Label htmlFor={id} className="text-xs text-muted-foreground">{label}</Label>
       <Input
         id={id}
         type="number"
@@ -53,10 +58,78 @@ function NumberField({ id, label, value, onChange, hint }: { id: string; label: 
           const n = Number(e.target.value);
           onChange(Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
         }}
-        className="font-mono text-sm"
+        className="min-h-11 border-white/[0.09] bg-white/[0.04] font-mono text-sm"
       />
-      {hint ? <p className="font-mono text-[10px] text-zinc-600">{hint}</p> : null}
+      {hint ? <p className="font-mono text-[10px] text-muted-foreground/70">{hint}</p> : null}
     </div>
+  );
+}
+
+/** One labeled version row — Application / Model / Dataset stay distinct. */
+function VersionRow({ label, version, note, highlight }: { label: string; version: string; note: string; highlight?: boolean }) {
+  return (
+    <div className="glass-card flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-md px-3 py-2.5">
+      <div className="min-w-0">
+        <TechLabel>{label} version</TechLabel>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">{note}</p>
+      </div>
+      <span className={highlight ? 'text-gradient font-tech shrink-0 text-base tracking-wider' : 'font-tech shrink-0 text-base tracking-wider text-foreground'}>
+        {version}
+      </span>
+    </div>
+  );
+}
+
+function AboutSection() {
+  const { stats } = useSystemStats();
+  const datasetVersion = stats?.datasetVersion ?? null;
+
+  return (
+    <section aria-label="About and version" className="glass-panel rounded-lg p-4 md:p-6">
+      <SectionTitle
+        icon={<Info className="size-4 text-sky-300" aria-hidden />}
+        title="About"
+        desc={`${APP_NAME} — ${RELEASE_NAME}.`}
+      />
+      <div className="mt-4 space-y-2">
+        <VersionRow
+          label="Application"
+          version={`v${APP_VERSION}`}
+          note={`${APP_NAME} console — this application release.`}
+          highlight
+        />
+        <VersionRow
+          label="Model"
+          version={`v${CORE_MODULE_VERSION}`}
+          note={`${CORE_MODULE_NAME} decision unit — unchanged since v1.0.0.`}
+        />
+        <VersionRow
+          label="Dataset"
+          version={datasetVersion ? `v${datasetVersion}` : '—'}
+          note={datasetVersion ? 'Most recently updated dataset in the registry.' : stats ? 'No datasets imported yet.' : 'Runtime stats not loaded yet.'}
+        />
+      </div>
+
+      {/* Live runtime engine — honest values from GET /api/system, '—' when unavailable */}
+      <div className="glass-card mt-2 grid grid-cols-2 gap-3 rounded-md px-3 py-2.5 sm:grid-cols-4">
+        <div className="min-w-0">
+          <TechLabel>engine</TechLabel>
+          <p className="mt-1 truncate font-mono text-sm text-foreground">{stats?.engine.active ?? '—'}</p>
+        </div>
+        <div className="min-w-0">
+          <TechLabel>engine ver</TechLabel>
+          <p className="mt-1 truncate font-mono text-sm text-foreground">{stats?.engine.version ?? '—'}</p>
+        </div>
+        <div className="min-w-0">
+          <TechLabel>avg latency</TechLabel>
+          <p className="mt-1 truncate font-mono text-sm tabular-nums text-sky-300">{stats ? fmtMs(stats.engine.avgCoreLatencyMs) : '—'}</p>
+        </div>
+        <div className="min-w-0">
+          <TechLabel>core calls</TechLabel>
+          <p className="mt-1 truncate font-mono text-sm tabular-nums text-foreground">{stats ? stats.engine.coreCalls : '—'}</p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -106,20 +179,25 @@ export default function SettingsView() {
     }
   };
 
+  const inputCls = 'min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm';
+
   return (
     <div className="space-y-6">
       <SectionTitle
-        icon={<SlidersHorizontal className="size-4 text-emerald-400" aria-hidden />}
+        icon={<SlidersHorizontal className="size-4 text-sky-300" aria-hidden />}
         title="Settings"
         desc="Runtime defaults and execution limits — applies to newly created tasks."
         right={
           dirty ? (
-            <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 font-mono text-[10px] text-amber-300">unsaved changes</Badge>
+            <Badge variant="outline" className="border-amber-400/30 bg-amber-400/10 font-mono text-[10px] text-amber-300">unsaved changes</Badge>
           ) : (
-            <Badge variant="outline" className="border-zinc-700 font-mono text-[10px] text-zinc-500">in sync</Badge>
+            <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">in sync</Badge>
           )
         }
       />
+
+      {/* About / Version — application vs model vs dataset, honest when unknown */}
+      <AboutSection />
 
       {error && server === null ? (
         <ErrorCard title="Settings unavailable" message={error} onRetry={load} />
@@ -137,11 +215,11 @@ export default function SettingsView() {
           }}
         >
           {/* Mode & reasoning */}
-          <section aria-label="Defaults" className="grid gap-4 rounded-lg border bg-card p-4 md:grid-cols-2 md:p-6">
+          <section aria-label="Defaults" className="glass-panel grid gap-4 rounded-lg p-4 md:grid-cols-2 md:p-6">
             <div className="space-y-1.5">
               <Label htmlFor="set-mode">Default mode</Label>
               <Select value={draft.defaultMode} onValueChange={(v) => set('defaultMode', v as Draft['defaultMode'])}>
-                <SelectTrigger id="set-mode" className="min-h-11 w-full font-mono text-sm"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="set-mode" className={inputCls}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="goal">goal — finite, runs until completion</SelectItem>
                   <SelectItem value="live">live — continuous, until stopped</SelectItem>
@@ -155,7 +233,7 @@ export default function SettingsView() {
             <div className="space-y-1.5">
               <Label htmlFor="set-reasoning">Default reasoning level</Label>
               <Select value={String(draft.defaultReasoningLevel)} onValueChange={(v) => set('defaultReasoningLevel', Number(v) as Draft['defaultReasoningLevel'])}>
-                <SelectTrigger id="set-reasoning" className="min-h-11 w-full font-mono text-sm"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="set-reasoning" className={inputCls}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {[1, 2, 3, 4, 5, 6].map((lvl) => (
                     <SelectItem key={lvl} value={String(lvl)}><span className="font-mono">L{lvl}</span> — {REASONING_CAPTIONS[lvl]}</SelectItem>
@@ -163,8 +241,8 @@ export default function SettingsView() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center justify-between rounded-md border border-zinc-800 bg-background/60 px-3 py-2.5 md:col-span-2">
-              <div>
+            <div className="flex items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 md:col-span-2">
+              <div className="min-w-0">
                 <Label htmlFor="set-memory" className="text-sm">Use persistent memory by default</Label>
                 <p className="text-[11px] text-muted-foreground">Tasks may override this in their config</p>
               </div>
@@ -173,8 +251,8 @@ export default function SettingsView() {
           </section>
 
           {/* Execution limits */}
-          <section aria-label="Execution limits" className="rounded-lg border bg-card p-4 md:p-6">
-            <h3 className="text-sm font-semibold text-zinc-100">Execution limits</h3>
+          <section aria-label="Execution limits" className="glass-panel rounded-lg p-4 md:p-6">
+            <h3 className="text-sm font-semibold text-foreground">Execution limits</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">Hard runtime guardrails (defaults shown as hints).</p>
             <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <NumberField id="set-subtool" label="Max subtool calls" value={draft.maxSubtoolCalls} onChange={(v) => set('maxSubtoolCalls', v)} hint="default 20" />
@@ -187,11 +265,11 @@ export default function SettingsView() {
           </section>
 
           {/* Logging & transport */}
-          <section aria-label="Logging and transport" className="grid gap-4 rounded-lg border bg-card p-4 md:grid-cols-2 md:p-6">
+          <section aria-label="Logging and transport" className="glass-panel grid gap-4 rounded-lg p-4 md:grid-cols-2 md:p-6">
             <div className="space-y-1.5">
               <Label htmlFor="set-log">Log level</Label>
               <Select value={draft.logLevel} onValueChange={(v) => set('logLevel', v as Draft['logLevel'])}>
-                <SelectTrigger id="set-log" className="min-h-11 w-full font-mono text-sm"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="set-log" className={inputCls}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="info">info</SelectItem>
                   <SelectItem value="debug">debug</SelectItem>
@@ -202,7 +280,7 @@ export default function SettingsView() {
             <div className="space-y-1.5">
               <Label htmlFor="set-transport">Real-time transport</Label>
               <Select value="sse" disabled>
-                <SelectTrigger id="set-transport" className="min-h-11 w-full font-mono text-sm opacity-80"><SelectValue /></SelectTrigger>
+                <SelectTrigger id="set-transport" className={`${inputCls} opacity-80`}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="sse">sse — Server-Sent Events</SelectItem>
                 </SelectContent>
@@ -215,11 +293,11 @@ export default function SettingsView() {
 
           <div className="flex items-center justify-end gap-3">
             {dirty ? (
-              <Button type="button" variant="ghost" className="min-h-10 text-zinc-400" onClick={() => setDraft({ ...(server as NexToolSettings) })}>
+              <Button type="button" variant="ghost" className="min-h-11 text-muted-foreground" onClick={() => setDraft({ ...(server as NexToolSettings) })}>
                 Discard
               </Button>
             ) : null}
-            <Button type="submit" className="min-h-11 gap-2 bg-emerald-500/90 text-zinc-950 hover:bg-emerald-400" disabled={saving || !dirty}>
+            <Button type="submit" className="bg-primary-gradient min-h-11 gap-2 text-primary-foreground hover:opacity-90" disabled={saving || !dirty}>
               {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Save className="size-4" aria-hidden />}
               Save settings
             </Button>

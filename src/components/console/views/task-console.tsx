@@ -3,6 +3,8 @@
 /**
  * Task Console — task submission form (spec §51).
  * Goal Mode is the default; Live Mode requires explicit opt-in confirmation.
+ * v1.0.1: glass panel form, blue brand accents, works at 320px (full-width
+ * controls, wrapping quick-fill chips, prominent full-width submit on mobile).
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -20,7 +22,7 @@ import { cn } from '@/lib/utils';
 import { useConsoleStore } from '../console-store';
 import { ApiClientError, createTask, listTools } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
-import { EmptyState, ErrorCard, SectionTitle } from '../ui-bits';
+import { EmptyState, ErrorCard, SectionTitle, TechLabel } from '../ui-bits';
 import { AlertTriangle, ChevronDown, Loader2, Send, Sparkles, TerminalSquare, Wrench } from 'lucide-react';
 
 const REASONING_CAPTIONS: Record<number, string> = {
@@ -155,13 +157,13 @@ export default function TaskConsoleView() {
   return (
     <div className="space-y-6">
       <SectionTitle
-        icon={<TerminalSquare className="size-4 text-emerald-400" aria-hidden />}
+        icon={<TerminalSquare className="size-4 text-sky-300" aria-hidden />}
         title="Task Console"
         desc="Submit a request to the runtime. NexTool plans, selects tools, executes and observes — it is not a chatbot."
       />
 
       <form
-        className="space-y-5 rounded-lg border bg-card p-4 md:p-6"
+        className="glass-panel space-y-5 rounded-lg p-4 md:p-6"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
@@ -170,13 +172,21 @@ export default function TaskConsoleView() {
       >
         {/* quick-fill examples */}
         <div className="flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-            <Sparkles className="size-3" aria-hidden /> Examples
+          <span className="flex items-center gap-1.5">
+            <Sparkles className="size-3 text-sky-300/70" aria-hidden />
+            <TechLabel>Examples</TechLabel>
           </span>
           {EXAMPLES.map((ex) => (
-            <Button key={ex.label} type="button" variant="outline" size="sm" className="min-h-9 h-9 border-zinc-700 text-xs text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-300" onClick={() => applyExample(ex)}>
+            <Button
+              key={ex.label}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-h-11 border-white/[0.09] bg-white/[0.04] text-xs text-slate-300 hover:border-sky-400/40 hover:bg-white/[0.06] hover:text-sky-300"
+              onClick={() => applyExample(ex)}
+            >
               {ex.label}
-              {ex.live ? <span className="ml-1 font-mono text-[10px] text-amber-400">live</span> : null}
+              {ex.live ? <span className="ml-1 font-mono text-[10px] text-amber-300">live</span> : null}
             </Button>
           ))}
         </div>
@@ -184,15 +194,15 @@ export default function TaskConsoleView() {
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="task-name">Name <span className="text-muted-foreground">(optional)</span></Label>
-            <Input id="task-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. prod-api-watchdog" className="font-mono text-sm" maxLength={80} />
+            <Input id="task-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. prod-api-watchdog" className="min-h-11 border-white/[0.09] bg-white/[0.04] font-mono text-sm" maxLength={80} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="task-mode">Mode</Label>
             <Select value={mode} onValueChange={(v) => setMode(v as 'goal' | 'live')}>
-              <SelectTrigger id="task-mode" className="min-h-11 w-full font-mono text-sm" aria-label="Task mode">
+              <SelectTrigger id="task-mode" className="min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm" aria-label="Task mode">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="glass-strong">
                 <SelectItem value="goal">goal — finite, runs until completion</SelectItem>
                 <SelectItem value="live">live — continuous, until stopped</SelectItem>
               </SelectContent>
@@ -201,7 +211,7 @@ export default function TaskConsoleView() {
         </div>
 
         {mode === 'live' ? (
-          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
             <p className="flex items-center gap-2 text-xs font-medium text-amber-200">
               <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
               Live Mode runs continuously until stopped. Requires explicit opt-in.
@@ -224,7 +234,7 @@ export default function TaskConsoleView() {
             onChange={(e) => setRequest(e.target.value)}
             rows={4}
             placeholder={'Monitor the production server and recover it if unhealthy…\n\nPlain operational language — the CoreModule matches tools dynamically.'}
-            className="w-full rounded-md border border-input bg-background/60 px-3 py-2 font-mono text-sm shadow-xs outline-ring/50 placeholder:text-muted-foreground focus-visible:border-emerald-500/50 focus-visible:ring-2 focus-visible:ring-emerald-500/20"
+            className="w-full rounded-md border border-white/[0.09] bg-white/[0.04] px-3 py-2.5 font-mono text-sm shadow-xs outline-ring/50 placeholder:text-muted-foreground focus-visible:border-sky-400/50 focus-visible:ring-2 focus-visible:ring-sky-400/20"
             aria-invalid={!!validation && !request.trim()}
           />
         </div>
@@ -233,10 +243,10 @@ export default function TaskConsoleView() {
           <div className="space-y-1.5">
             <Label htmlFor="task-reasoning">Reasoning Level</Label>
             <Select value={String(reasoningLevel)} onValueChange={(v) => setReasoningLevel(Number(v))}>
-              <SelectTrigger id="task-reasoning" className="min-h-11 w-full" aria-label="Reasoning level">
+              <SelectTrigger id="task-reasoning" className="min-h-11 w-full border-white/[0.09] bg-white/[0.04]" aria-label="Reasoning level">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="glass-strong">
                 {[1, 2, 3, 4, 5, 6].map((lvl) => (
                   <SelectItem key={lvl} value={String(lvl)}>
                     <span className="font-mono">L{lvl}</span> — {REASONING_CAPTIONS[lvl]}
@@ -247,8 +257,8 @@ export default function TaskConsoleView() {
             <p className="text-[11px] text-muted-foreground">{REASONING_CAPTIONS[reasoningLevel]}</p>
           </div>
           <div className="flex items-end">
-            <div className="flex w-full items-center justify-between rounded-md border border-zinc-800 bg-background/60 px-3 py-2.5">
-              <div>
+            <div className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 py-2.5">
+              <div className="min-w-0">
                 <Label htmlFor="task-memory" className="text-sm">Use persistent memory</Label>
                 <p className="text-[11px] text-muted-foreground">Read/write persistent memory during execution</p>
               </div>
@@ -259,15 +269,15 @@ export default function TaskConsoleView() {
 
         {/* Execution limits */}
         <Collapsible open={limitsOpen} onOpenChange={setLimitsOpen}>
-          <CollapsibleTrigger className="flex min-h-11 w-full items-center justify-between rounded-md border border-zinc-800 bg-background/60 px-3 text-sm text-zinc-300 hover:bg-zinc-800/40">
+          <CollapsibleTrigger className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 text-left text-sm text-foreground/90 hover:bg-white/[0.06]">
             <span>Execution limits</span>
-            <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              defaults: 20 subtools · 100 safety · 30 iters
-              <ChevronDown className={cn('size-4 transition-transform', limitsOpen && 'rotate-180')} aria-hidden />
+            <span className="flex items-center gap-2">
+              <span className="hidden text-[11px] text-muted-foreground sm:inline">defaults: 20 subtools · 100 safety · 30 iters</span>
+              <ChevronDown className={cn('size-4 text-sky-300/70 transition-transform', limitsOpen && 'rotate-180')} aria-hidden />
             </span>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="mt-2 grid gap-3 rounded-md border border-zinc-800 bg-background/40 p-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="mt-2 grid gap-3 rounded-lg border border-white/[0.07] bg-white/[0.03] p-3 sm:grid-cols-2 lg:grid-cols-3">
               {([
                 ['maxSubtoolCalls', 'Max subtool calls', DEFAULTS.maxSubtoolCalls],
                 ['safetyLimit', 'Safety limit', DEFAULTS.safetyLimit],
@@ -277,16 +287,16 @@ export default function TaskConsoleView() {
                 ...(mode === 'live' ? ([['liveIntervalMs', 'Live tick interval (ms)', DEFAULTS.liveIntervalMs]] as const) : []),
               ] as [keyof typeof DEFAULTS, string, number][]).map(([key, label, def]) => (
                 <div key={key} className="space-y-1">
-                  <Label htmlFor={`limit-${key}`} className="text-xs text-zinc-400">{label}</Label>
+                  <Label htmlFor={`limit-${key}`} className="text-xs text-muted-foreground">{label}</Label>
                   <Input
                     id={`limit-${key}`}
                     type="number"
                     min={1}
                     value={limits[key]}
                     onChange={(e) => setLimit(key, e.target.value)}
-                    className="font-mono text-sm"
+                    className="min-h-11 border-white/[0.09] bg-white/[0.04] font-mono text-sm"
                   />
-                  <p className="font-mono text-[10px] text-zinc-600">default {def}</p>
+                  <p className="font-mono text-[10px] text-muted-foreground/60">default {def}</p>
                 </div>
               ))}
             </div>
@@ -295,7 +305,7 @@ export default function TaskConsoleView() {
 
         {/* Tool selection */}
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <Label className="text-sm">Tool selection</Label>
             <span className="font-mono text-[11px] text-muted-foreground">
               {selectedTools.size === 0 ? 'all enabled tools' : `${selectedTools.size} selected`}
@@ -305,22 +315,29 @@ export default function TaskConsoleView() {
             <ErrorCard title="Tool registry unavailable" message={toolsError} />
           ) : tools === null ? (
             <div className="space-y-2">
-              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
             </div>
           ) : tools.length === 0 ? (
             <EmptyState icon={<Wrench className="size-5" aria-hidden />} title="No tools registered in the runtime" hint="All tools will be considered when the registry repopulates." />
           ) : (
-            <div className="nextool-scroll max-h-56 space-y-3 overflow-y-auto rounded-md border border-zinc-800 bg-background/40 p-3">
+            <div className="nextool-scroll max-h-56 space-y-3 overflow-y-auto rounded-lg border border-white/[0.07] bg-white/[0.03] p-3">
               {toolGroups.map(([category, list]) => (
                 <div key={category}>
-                  <p className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-500">{category}</p>
+                  <p className="mb-1.5">
+                    <TechLabel className="text-[9px] text-sky-300/60">{category}</TechLabel>
+                  </p>
                   <div className="grid gap-1.5 sm:grid-cols-2">
                     {list.map((tool) => {
                       const checked = selectedTools.has(tool.name);
                       return (
                         <label
                           key={tool.name}
-                          className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-zinc-800/70 px-2.5 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800/40"
+                          className={cn(
+                            'flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors outline-ring/50 focus-within:ring-2',
+                            checked
+                              ? 'border-sky-400/30 bg-primary-gradient-soft text-sky-100'
+                              : 'border-white/[0.07] text-slate-300 hover:bg-white/[0.06]',
+                          )}
                         >
                           <Checkbox
                             checked={checked}
@@ -343,7 +360,7 @@ export default function TaskConsoleView() {
                 </div>
               ))}
               {selectedTools.size > 0 ? (
-                <Button type="button" variant="ghost" size="sm" className="min-h-8 text-xs text-muted-foreground" onClick={() => setSelectedTools(new Set())}>
+                <Button type="button" variant="ghost" size="sm" className="min-h-11 text-xs text-muted-foreground hover:text-foreground" onClick={() => setSelectedTools(new Set())}>
                   Clear selection — use all tools
                 </Button>
               ) : null}
@@ -352,14 +369,18 @@ export default function TaskConsoleView() {
         </div>
 
         {validation ? (
-          <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/5 px-3 py-2 text-xs text-rose-300">
+          <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-3 py-2 text-xs text-rose-300">
             {validation}
           </p>
         ) : null}
 
-        <div className="flex items-center justify-between gap-3 border-t border-zinc-800 pt-4">
-          <p className="text-[11px] text-muted-foreground">NexTool never switches to Live Mode automatically.</p>
-          <Button type="submit" disabled={submitting} className="min-h-11 gap-2 bg-emerald-500/90 font-medium text-zinc-950 hover:bg-emerald-400">
+        <div className="flex flex-col gap-3 border-t border-white/[0.08] pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="order-2 text-center text-[11px] text-muted-foreground sm:order-1 sm:text-left">NexTool never switches to Live Mode automatically.</p>
+          <Button
+            type="submit"
+            disabled={submitting}
+            className="order-1 min-h-11 w-full justify-center gap-2 bg-primary-gradient font-medium text-primary-foreground hover:opacity-90 sm:order-2 sm:w-auto"
+          >
             {submitting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Send className="size-4" aria-hidden />}
             {submitting ? 'Submitting…' : 'Submit task'}
           </Button>

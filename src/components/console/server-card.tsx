@@ -3,6 +3,7 @@
 /**
  * Reusable virtual-server card (used by Live Monitor, Live State, Memory view).
  * Health: healthy=emerald · degraded=amber · unhealthy=rose · restarting=animated amber.
+ * v1.0.1: glass card, blue-tinted chrome, progress bars tinted by health.
  */
 
 import { Badge } from '@/components/ui/badge';
@@ -35,16 +36,20 @@ export function ServerCard({
 }) {
   const tone = statusTone(server.health);
   const badgeClass =
-    tone === 'ok' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-    : tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-    : 'border-rose-500/30 bg-rose-500/10 text-rose-300';
+    tone === 'ok' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+    : tone === 'warn' ? 'border-amber-400/30 bg-amber-400/10 text-amber-300'
+    : 'border-rose-400/30 bg-rose-400/10 text-rose-300';
+  const progressClass =
+    tone === 'ok' ? '[&>div]:bg-emerald-400/80'
+    : tone === 'warn' ? '[&>div]:bg-amber-400/80'
+    : '[&>div]:bg-rose-400/80';
 
   return (
-    <div className={cn('rounded-lg border bg-card p-4', server.health === 'restarting' && 'animate-pulse')}>
+    <div className={cn('glass-card rounded-lg p-4', server.health === 'restarting' && 'animate-pulse')}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Activity className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="truncate font-mono text-sm font-semibold text-zinc-100">{server.id}</span>
+          <Activity className="size-4 shrink-0 text-sky-300/70" aria-hidden />
+          <span className="truncate font-mono text-sm font-semibold text-foreground">{server.id}</span>
         </div>
         <Badge variant="outline" className={cn('font-mono text-[11px]', badgeClass, server.health === 'restarting' && 'animate-pulse')}>
           {HEALTH_LABEL[server.health]}
@@ -57,14 +62,14 @@ export function ServerCard({
             <span>CPU</span>
             <span className="font-mono tabular-nums text-zinc-300">{Math.round(server.cpu)}%</span>
           </div>
-          <Progress value={server.cpu} className="h-1.5" aria-label={`${server.id} CPU usage`} />
+          <Progress value={server.cpu} className={cn('h-1.5 bg-white/[0.07]', progressClass)} aria-label={`${server.id} CPU usage`} />
         </div>
         <div>
           <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
             <span>MEM</span>
             <span className="font-mono tabular-nums text-zinc-300">{Math.round(server.memory)}%</span>
           </div>
-          <Progress value={server.memory} className="h-1.5" aria-label={`${server.id} memory usage`} />
+          <Progress value={server.memory} className={cn('h-1.5 bg-white/[0.07]', progressClass)} aria-label={`${server.id} memory usage`} />
         </div>
       </div>
 
@@ -79,7 +84,7 @@ export function ServerCard({
 
       {onInject && !compact ? (
         <TooltipProvider delayDuration={200}>
-          <div className="mt-3 flex flex-wrap gap-2 border-t border-zinc-800/80 pt-3">
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-white/[0.07] pt-3">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -88,7 +93,7 @@ export function ServerCard({
                   disabled={injecting}
                   onClick={() => onInject('server.crash', server.id)}
                   aria-label={`Inject crash into ${server.id}`}
-                  className="h-8 min-h-8 border-rose-500/30 px-2.5 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
+                  className="h-8 min-h-8 border-rose-400/30 px-2.5 text-rose-300 hover:bg-rose-400/10 hover:text-rose-200"
                 >
                   <Bomb className="size-3.5" aria-hidden /> Crash
                 </Button>
@@ -103,7 +108,7 @@ export function ServerCard({
                   disabled={injecting}
                   onClick={() => onInject('server.degrade', server.id)}
                   aria-label={`Degrade ${server.id}`}
-                  className="h-8 min-h-8 border-amber-500/30 px-2.5 text-amber-300 hover:bg-amber-500/10 hover:text-amber-200"
+                  className="h-8 min-h-8 border-amber-400/30 px-2.5 text-amber-300 hover:bg-amber-400/10 hover:text-amber-200"
                 >
                   <TrendingDown className="size-3.5" aria-hidden /> Degrade
                 </Button>
@@ -118,7 +123,7 @@ export function ServerCard({
                   disabled={injecting}
                   onClick={() => onInject('server.recover', server.id)}
                   aria-label={`Recover ${server.id}`}
-                  className="h-8 min-h-8 border-emerald-500/30 px-2.5 text-emerald-300 hover:bg-emerald-500/10 hover:text-emerald-200"
+                  className="h-8 min-h-8 border-emerald-400/30 px-2.5 text-emerald-300 hover:bg-emerald-400/10 hover:text-emerald-200"
                 >
                   <HeartPulse className="size-3.5" aria-hidden /> Recover
                 </Button>

@@ -12,6 +12,7 @@ import type { ReactNode } from 'react';
 import type { NotificationDTO, SystemStats } from '@/lib/nexool/types';
 import { ApiClientError, getSystemStats, listNotifications, markNotificationsRead } from '@/lib/nexool/client';
 import { useNexoolStream } from '@/hooks/use-nexool-stream';
+import { useRuntimeConnection, type RuntimeConnectionStore } from '@/lib/nexool/connection';
 
 // ---------- System stats ----------
 
@@ -64,7 +65,8 @@ export function SystemStatsProvider({ children }: { children: ReactNode }) {
 interface GlobalStreamCtx {
   events: ReturnType<typeof useNexoolStream>['events'];
   connected: boolean;
-  status: ReturnType<typeof useNexoolStream>['status'];
+  /** Connection state of the primary runtime stream (5-state, v1.0.1). */
+  status: RuntimeConnectionStore['status'];
 }
 
 const StreamContext = createContext<GlobalStreamCtx>({ events: [], connected: false, status: 'connecting' });
@@ -75,11 +77,13 @@ export function useGlobalStream() {
 
 export function GlobalStreamProvider({ children }: { children: ReactNode }) {
   // One shared EventSource: replay the last 15 minutes, then follow live.
+  // primary: true — this is THE runtime connection feeding the global indicator.
   const since = useMemo(() => new Date(Date.now() - 15 * 60 * 1000).toISOString(), []);
-  const stream = useNexoolStream({ since, max: 500 });
+  const stream = useNexoolStream({ since, max: 500, primary: true });
+  const status = useRuntimeConnection((s) => s.status);
   const value = useMemo(
-    () => ({ events: stream.events, connected: stream.connected, status: stream.status }),
-    [stream.events, stream.connected, stream.status],
+    () => ({ events: stream.events, connected: stream.connected, status }),
+    [stream.events, stream.connected, status],
   );
   return <StreamContext.Provider value={value}>{children}</StreamContext.Provider>;
 }

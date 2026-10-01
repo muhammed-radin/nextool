@@ -1,0 +1,107 @@
+---
+title: Mobile & Responsive
+category: Frontend
+order: 3
+---
+
+# Mobile & Responsive
+
+v1.0.1 shipped a mobile-first redesign: a bottom navigation shell, safe-area handling,
+blur-reduced glass, and layouts that hold from a 320 px phone to a 1440 px desktop.
+
+## Breakpoints & range
+
+| Range | Layout |
+| --- | --- |
+| **320–767 px** (`<md`) | Mobile shell: bottom nav + hamburger Sheet, single/2-col grids, no sidebar, no status bar. Blur-reduced glass (see [UI](ui.md)). |
+| **≥ 768 px** (`md`) | Desktop shell: glass sidebar (w-56), status bar footer, multi-column grids, full blur. |
+| **≥ 1024 px** (`lg`) | Two-pane docs reader, wider metric grids. |
+| **Up to 1440 px+** | Content is centered with `max-w-[1600px]`/`max-w-lg` caps where appropriate. |
+
+## Bottom navigation (< md)
+
+Fixed `glass-shell` nav (`fixed inset-x-0 bottom-0 z-40`, `pb-safe`) with a 5-column
+grid:
+
+| Slot | Destination | Icon |
+| --- | --- | --- |
+| 1 | **Dashboard** | LayoutDashboard |
+| 2 | **Tasks** (Task Console) | TerminalSquare |
+| 3 | **Live** (Live Monitor) | RadioTower |
+| 4 | **Tools** | Wrench |
+| 5 | **More** (bottom sheet) | MoreHorizontal |
+
+- The active item is sky-300 with a small gradient bar at the top edge; the More slot
+  shows active state for *any* non-primary view.
+- **More sheet**: 70 dvh `glass-strong` bottom Sheet ("All sections") with a 2-column
+  grid of *every* remaining view — Memory, Live State, Events, History, Models,
+  Datasets, Documentation, Settings — plus Task Preview when a task is selected, so no
+  screen is unreachable on mobile.
+- Desktop parity: the sidebar holds the same 12 items + conditional Task Preview entry.
+
+## Safe areas
+
+- `viewportFit=cover` is set in `layout.tsx`, exposing the env insets.
+- `.pb-safe` = `padding-bottom: env(safe-area-inset-bottom)` — applied to the bottom
+  nav.
+- `.h-safe-bottom-nav` = `3.75rem + env(safe-area-inset-bottom)` helper for reserving
+  nav height.
+- Main content uses `pb-24 md:pb-6` so nothing hides behind the floating nav.
+
+## Touch targets & ergonomics
+
+- Nav items are `min-h-[3.75rem]` (60 px) tall — comfortably above the 44 px minimum.
+- Sidebar/links use `min-h-11` (44 px); More-sheet tiles `min-h-12` (48 px).
+- Dialogs (stop confirm, send event, feedback) and dropdowns use `glass-strong` for
+  maximum readability over glass.
+- Form controls are the shadcn/Radix set — native-size touch targets, focus rings
+  preserved (`outline-ring/50` + `focus-visible:ring-2` everywhere).
+
+## Mobile performance: blur reduction < 768 px
+
+`@media (max-width: 767px)` in `globals.css`:
+
+| Class | Desktop blur | Mobile blur |
+| --- | --- | --- |
+| `.glass-shell` | 20 | 12 |
+| `.glass-panel` | 14 | 9 (+ shadow removed) |
+| `.glass-card` | 10 | 6 |
+| `.glass-strong` | 22 | 16 |
+
+`.ambient-grid` is hidden on mobile; `prefers-reduced-motion` disables animation
+entirely. These reductions are automatic — components don't branch on viewport for
+glass.
+
+## Task Preview on mobile
+
+The dedicated task screen stacks vertically: header badges → action buttons (stop /
+send event / feedback dialogs) → goal + subgoal cards → plan → executions accordion →
+MainState JSON → 5 context panels (single column) → event timeline → terminal. While a
+task is active it polls detail every 2.5 s; the SSE timeline dedupes against REST
+backfill. From the Task Console, submitting a task navigates straight into this
+preview; on mobile the Task Preview entry also appears in the More sheet.
+
+## Live Monitor priority layout
+
+Live Mode gets the priority treatment on small screens:
+
+1. **Live tasks first** — status, current subgoal, observation/event counts, interval +
+   next-tick estimate, stop button.
+2. **Fleet second** — server cards (cpu/mem bars tinted by health) with the
+   Crash/Degraded/Recover injections for driving event-driven automation from a phone.
+3. **Event terminal last** — §55-filtered runtime stream (monitoring-relevant types).
+
+## Verified responsive behavior
+
+Browser-verified in the v1.0.0/1.0.1 runs at **390×844** (drawer nav, 2-col grids,
+bottom nav, safe-area padding) and **1440×900** (sidebar, status bar), with zero page
+or console errors and the sticky footer behaving correctly on both short and long
+pages.
+
+## Practical tips
+
+- Test with the browser device toolbar at 320 px *and* 390 px — the narrow end exposes
+  truncation in badges/ids (short ids mitigate this).
+- Keep new views grid-based (`grid-cols-2 md:grid-cols-…` patterns) so they inherit
+  the mobile density without custom breakpoints.
+- Any fixed element added must respect `pb-safe`/`pb-24` just like the bottom nav.

@@ -3,6 +3,8 @@
 /**
  * Runtime terminal (spec §53) — `.nextool-terminal` scanline surface rendering
  * live task events as `[HH:MM:SS] source → message` lines with auto-scroll.
+ * v1.0.1: blue glass surface, Readex/Michroma chrome, efficient rendering
+ * (plain divs, capped scroll container, no per-line React state).
  */
 
 import { useEffect, useRef } from 'react';
@@ -11,14 +13,14 @@ import { cn } from '@/lib/utils';
 import { fmtClock } from './ui-bits';
 
 const SOURCE_TEXT: Record<EventSource, string> = {
-  planner: 'text-emerald-400',
-  core: 'text-teal-300',
-  tool: 'text-amber-400',
-  observer: 'text-zinc-300',
-  runtime: 'text-zinc-400',
-  user: 'text-rose-400',
-  environment: 'text-orange-400',
-  system: 'text-zinc-500',
+  planner: 'text-emerald-300',
+  core: 'text-cyan-300',
+  tool: 'text-amber-300',
+  observer: 'text-slate-200',
+  runtime: 'text-slate-300',
+  user: 'text-rose-300',
+  environment: 'text-orange-300',
+  system: 'text-slate-400',
 };
 
 export function RuntimeTerminal({ taskId, events, className }: { taskId: string; events: NexToolEvent[]; className?: string }) {
@@ -31,12 +33,15 @@ export function RuntimeTerminal({ taskId, events, className }: { taskId: string;
   }, [events.length]);
 
   return (
-    <div className={cn('overflow-hidden rounded-lg border border-zinc-800', className)}>
-      <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-900/80 px-3 py-2">
-        <span className="size-2.5 rounded-full bg-rose-500/80" aria-hidden />
-        <span className="size-2.5 rounded-full bg-amber-400/80" aria-hidden />
-        <span className="size-2.5 rounded-full bg-emerald-400/80" aria-hidden />
-        <span className="ml-2 truncate font-mono text-xs text-zinc-400">runtime://{taskId}</span>
+    <div className={cn('glass-panel overflow-hidden rounded-lg', className)}>
+      <div className="flex items-center gap-2 border-b border-white/[0.07] px-3 py-2">
+        <span className="size-2.5 rounded-full bg-rose-400/80" aria-hidden />
+        <span className="size-2.5 rounded-full bg-amber-300/80" aria-hidden />
+        <span className="size-2.5 rounded-full bg-sky-400/80" aria-hidden />
+        <span className="ml-2 truncate font-mono text-xs text-sky-200/70">runtime://{taskId}</span>
+        <span className="font-tech ml-auto hidden shrink-0 text-[9px] uppercase tracking-widest text-sky-300/50 sm:inline">
+          runtime output
+        </span>
       </div>
       <div
         ref={bodyRef}
@@ -45,27 +50,27 @@ export function RuntimeTerminal({ taskId, events, className }: { taskId: string;
         className="nextool-terminal nextool-scroll h-64 overflow-y-auto p-3 md:h-80"
       >
         {events.length === 0 ? (
-          <p className="font-mono text-xs text-zinc-500">
-            <span className="text-zinc-600">nexchange@runtime</span>:<span className="text-zinc-500">~$</span> waiting for runtime events…
+          <p className="font-mono text-xs text-slate-400">
+            <span className="text-sky-300/60">nextool@runtime</span>:<span className="text-sky-200/70">~$</span> waiting for runtime events…
           </p>
         ) : (
           events.map((ev) => {
             const isError = ev.type.includes('error') || ev.type.includes('failed') || ev.priority <= 2;
             return (
               <div key={ev.id} className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
-                <span className="text-zinc-600">[{fmtClock(ev.createdAt)}]</span>{' '}
-                <span className={cn('font-semibold', SOURCE_TEXT[ev.source as EventSource] ?? 'text-zinc-400')}>
+                <span className="text-slate-500">[{fmtClock(ev.createdAt)}]</span>{' '}
+                <span className={cn('font-semibold', SOURCE_TEXT[ev.source as EventSource] ?? 'text-slate-300')}>
                   {ev.source}
                 </span>{' '}
-                <span className="text-zinc-600">→</span>{' '}
-                <span className={cn(isError ? 'font-bold text-rose-400' : 'text-zinc-200')}>{ev.message}</span>
+                <span className="text-sky-300/50">→</span>{' '}
+                <span className={cn(isError ? 'font-bold text-rose-300' : 'text-sky-50/90')}>{ev.message}</span>
               </div>
             );
           })
         )}
         <div className="mt-1 font-mono text-xs leading-relaxed">
-          <span className="text-zinc-600">nexchange@runtime</span>:<span className="text-zinc-500">~$</span>{' '}
-          <span className="inline-block h-3.5 w-2 animate-pulse bg-emerald-400/80 align-middle" aria-hidden />
+          <span className="text-sky-300/60">nextool@runtime</span>:<span className="text-sky-200/70">~$</span>{' '}
+          <span className="inline-block h-3.5 w-2 animate-pulse bg-sky-400/80 align-middle" aria-hidden />
         </div>
       </div>
     </div>

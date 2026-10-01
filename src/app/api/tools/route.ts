@@ -1,8 +1,9 @@
 /**
  * /api/tools — GET registry list; POST register dynamic tool.
  */
-import { ok, fail, readJson } from '@/lib/nexool/api-helpers';
+import { ok, fail, parseBody } from '@/lib/nexool/api-helpers';
 import { listTools, registerDynamicTool } from '@/lib/nexool/tools/registry';
+import { registerToolSchema } from '@/lib/nexool/schemas';
 import type { ToolDefinition } from '@/lib/nexool/types';
 
 export const runtime = 'nodejs';
@@ -13,17 +14,12 @@ export async function GET() {
   return ok(tools);
 }
 
-interface RegisterBody {
-  definition?: ToolDefinition;
-  handlerKind?: 'echo' | 'delay' | 'http_get' | 'uuid';
-  handlerConfig?: Record<string, unknown>;
-}
-
 export async function POST(req: Request) {
-  const body = await readJson<RegisterBody>(req);
-  if (!body?.definition) return fail('INVALID_PARAMS', 'definition (ToolDefinition) is required');
+  const parsed = await parseBody(req, registerToolSchema);
+  if (parsed.error) return parsed.error;
+  const body = parsed.data;
   try {
-    const entry = await registerDynamicTool(body.definition, body.handlerKind, body.handlerConfig);
+    const entry = await registerDynamicTool(body.definition as ToolDefinition, body.handlerKind, body.handlerConfig);
     return ok(entry, 201);
   } catch (err) {
     return fail('REGISTER_FAILED', err instanceof Error ? err.message : 'Tool registration failed', 400);

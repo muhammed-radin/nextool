@@ -4,6 +4,7 @@
 import { ok } from '@/lib/nexool/api-helpers';
 import { db } from '@/lib/db';
 import { getMetrics } from '@/lib/nexool/eventbus';
+import { CORE_MODULE_NAME, CORE_MODULE_VERSION } from '@/lib/nexool/version';
 import type { ActiveEngineInfo, ModelPackageInfo } from '@/lib/nexool/types';
 
 export const runtime = 'nodejs';
@@ -12,8 +13,8 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const metrics = getMetrics();
   const engine: ActiveEngineInfo = {
-    name: 'llm-core',
-    version: '1.0.0',
+    name: CORE_MODULE_NAME,
+    version: CORE_MODULE_VERSION,
     architecture: 'LLM CoreModule (tool-matching + parameter generation heads via structured prompting)',
     backend: 'z-ai-web-dev-sdk (server-side)',
     status: 'active',

@@ -6,7 +6,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-readex-pro);
+  --font-tech: var(--font-michroma);
   --font-mono: var(--font-geist-mono);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -43,88 +44,177 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-:root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
+/*
+ * NexTool Q1 v1.0.1 — Blue Gradient Glassmorphism design system.
+ * Layers: ambient blue gradient → glass application shell → glass panels →
+ * solid high-contrast controls. Semantic status colors (emerald/amber/rose)
+ * remain reserved for status meaning only — blue is the brand accent.
+ */
 .dark {
-  --background: oklch(0.16 0.005 260);
-  --foreground: oklch(0.93 0.003 260);
-  --card: oklch(0.205 0.006 260);
-  --card-foreground: oklch(0.93 0.003 260);
-  --popover: oklch(0.22 0.006 260);
-  --popover-foreground: oklch(0.93 0.003 260);
-  --primary: oklch(0.76 0.16 162);
-  --primary-foreground: oklch(0.16 0.005 260);
-  --secondary: oklch(0.27 0.006 260);
-  --secondary-foreground: oklch(0.93 0.003 260);
-  --muted: oklch(0.26 0.006 260);
-  --muted-foreground: oklch(0.68 0.01 260);
-  --accent: oklch(0.27 0.006 260);
-  --accent-foreground: oklch(0.93 0.003 260);
+  --radius: 0.75rem;
+  --background: oklch(0.145 0.028 262);
+  --foreground: oklch(0.93 0.012 250);
+  --card: oklch(0.185 0.03 262);
+  --card-foreground: oklch(0.93 0.012 250);
+  --popover: oklch(0.175 0.032 262);
+  --popover-foreground: oklch(0.93 0.012 250);
+  --primary: oklch(0.62 0.19 255);
+  --primary-foreground: oklch(0.985 0.005 250);
+  --secondary: oklch(0.24 0.035 260);
+  --secondary-foreground: oklch(0.93 0.012 250);
+  --muted: oklch(0.235 0.03 260);
+  --muted-foreground: oklch(0.68 0.025 255);
+  --accent: oklch(0.26 0.05 258);
+  --accent-foreground: oklch(0.95 0.01 250);
   --destructive: oklch(0.63 0.2 25);
   --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.76 0.16 162);
-  --chart-1: oklch(0.76 0.16 162);
-  --chart-2: oklch(0.8 0.15 85);
-  --chart-3: oklch(0.63 0.2 25);
-  --chart-4: oklch(0.75 0.12 300);
-  --chart-5: oklch(0.7 0.12 200);
-  --sidebar: oklch(0.185 0.006 260);
-  --sidebar-foreground: oklch(0.93 0.003 260);
-  --sidebar-primary: oklch(0.76 0.16 162);
-  --sidebar-primary-foreground: oklch(0.16 0.005 260);
-  --sidebar-accent: oklch(0.27 0.006 260);
-  --sidebar-accent-foreground: oklch(0.93 0.003 260);
-  --sidebar-border: oklch(1 0 0 / 9%);
-  --sidebar-ring: oklch(0.76 0.16 162);
+  --input: oklch(1 0 0 / 13%);
+  --ring: oklch(0.7 0.14 235);
+  --chart-1: oklch(0.72 0.14 232);
+  --chart-2: oklch(0.8 0.13 205);
+  --chart-3: oklch(0.76 0.16 162);
+  --chart-4: oklch(0.8 0.15 85);
+  --chart-5: oklch(0.63 0.2 25);
+  --sidebar: oklch(0.165 0.03 262);
+  --sidebar-foreground: oklch(0.93 0.012 250);
+  --sidebar-primary: oklch(0.62 0.19 255);
+  --sidebar-primary-foreground: oklch(0.985 0.005 250);
+  --sidebar-accent: oklch(0.25 0.045 258);
+  --sidebar-accent-foreground: oklch(0.95 0.01 250);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.7 0.14 235);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    color-scheme: dark;
+  }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "ss01" on;
+  }
+  ::selection {
+    background: oklch(0.62 0.19 255 / 35%);
   }
 }
 
-/* NexTool console scrollbars */
+/* ---------- Ambient background (blue gradient field) ---------- */
+
+.ambient-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(52rem 36rem at 8% -10%, oklch(0.45 0.16 258 / 22%), transparent 60%),
+    radial-gradient(44rem 30rem at 100% 0%, oklch(0.55 0.15 225 / 13%), transparent 55%),
+    radial-gradient(50rem 40rem at 50% 118%, oklch(0.5 0.17 260 / 15%), transparent 60%),
+    var(--background);
+}
+
+/* Faint technical grid on top of the ambient field (desktop only). */
+.ambient-grid {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(oklch(1 0 0 / 2.2%) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 2.2%) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(75% 60% at 50% 30%, black, transparent);
+}
+
+/* ---------- Glassmorphism primitives ---------- */
+
+/* Highest glass layer: application shell surfaces (header, sidebar, bottom nav). */
+.glass-shell {
+  background: linear-gradient(165deg, oklch(1 0 0 / 5.5%), oklch(1 0 0 / 2%));
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid oklch(1 0 0 / 9%);
+}
+
+/* Primary glass layer: section panels. */
+.glass-panel {
+  background: linear-gradient(160deg, oklch(1 0 0 / 4.5%), oklch(1 0 0 / 1.5%));
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid oklch(1 0 0 / 8.5%);
+  box-shadow: 0 1px 0 0 oklch(1 0 0 / 5%) inset, 0 10px 34px -18px oklch(0.4 0.14 260 / 45%);
+}
+
+/* Content glass layer: cards, rows, compact blocks. */
+.glass-card {
+  background: oklch(1 0 0 / 3.5%);
+  -webkit-backdrop-filter: blur(10px) saturate(135%);
+  backdrop-filter: blur(10px) saturate(135%);
+  border: 1px solid oklch(1 0 0 / 8%);
+  box-shadow: 0 1px 0 0 oklch(1 0 0 / 4.5%) inset;
+}
+
+.glass-card-hover {
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+.glass-card-hover:hover {
+  border-color: oklch(0.72 0.14 235 / 32%);
+  background: oklch(1 0 0 / 5.5%);
+}
+
+/* Strong glass: popovers, dialogs, dropdowns — maximum readability. */
+.glass-strong {
+  background: linear-gradient(165deg, oklch(0.19 0.035 262 / 92%), oklch(0.16 0.03 262 / 94%));
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid oklch(1 0 0 / 11%);
+  box-shadow: 0 24px 60px -24px oklch(0.05 0.03 262 / 80%);
+}
+
+/* Inset glass: terminal and JSON wells — dark, high contrast, readable. */
+.glass-inset {
+  background: oklch(0.115 0.028 262 / 88%);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border: 1px solid oklch(1 0 0 / 8%);
+  box-shadow: 0 2px 14px -6px oklch(0 0 0 / 55%) inset;
+}
+
+/* ---------- Blue gradient accents ---------- */
+
+.text-gradient {
+  background: linear-gradient(100deg, oklch(0.85 0.12 215), oklch(0.72 0.15 240) 55%, oklch(0.62 0.19 255));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bg-primary-gradient {
+  background-image: linear-gradient(135deg, oklch(0.72 0.14 225), oklch(0.55 0.2 260));
+}
+
+.bg-primary-gradient-soft {
+  background-image: linear-gradient(135deg, oklch(0.72 0.14 225 / 16%), oklch(0.55 0.2 260 / 16%));
+}
+
+.border-gradient {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(oklch(0.185 0.03 262), oklch(0.185 0.03 262)) padding-box,
+    linear-gradient(135deg, oklch(0.72 0.14 225 / 55%), oklch(0.62 0.19 255 / 45%)) border-box;
+}
+
+.glow-blue {
+  box-shadow: 0 0 0 1px oklch(0.62 0.19 255 / 25%), 0 8px 30px -8px oklch(0.55 0.19 255 / 45%);
+}
+
+/* ---------- NexTool console scrollbars ---------- */
+
 .nextool-scroll {
   scrollbar-width: thin;
-  scrollbar-color: oklch(0.45 0.01 260) transparent;
+  scrollbar-color: oklch(0.42 0.06 255) transparent;
 }
 .nextool-scroll::-webkit-scrollbar {
   width: 6px;
@@ -134,22 +224,71 @@
   background: transparent;
 }
 .nextool-scroll::-webkit-scrollbar-thumb {
-  background: oklch(0.42 0.01 260);
+  background: oklch(0.4 0.06 255);
   border-radius: 3px;
 }
 .nextool-scroll::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.55 0.02 260);
+  background: oklch(0.55 0.1 250);
 }
 
-/* Terminal scanline texture for runtime output */
+/* ---------- Terminal scanline surface ---------- */
+
 .nextool-terminal {
   background:
     repeating-linear-gradient(
       0deg,
       transparent,
       transparent 2px,
-      rgba(255, 255, 255, 0.012) 2px,
-      rgba(255, 255, 255, 0.012) 4px
+      oklch(1 0 0 / 1.2%) 2px,
+      oklch(1 0 0 / 1.2%) 4px
     ),
-    oklch(0.14 0.005 260);
+    oklch(0.115 0.028 262 / 92%);
+}
+
+/* ---------- Mobile helpers ---------- */
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.h-safe-bottom-nav {
+  height: calc(3.75rem + env(safe-area-inset-bottom));
+}
+
+/* ---------- Mobile / reduced-motion performance ---------- */
+
+@media (max-width: 767px) {
+  .ambient-grid {
+    display: none;
+  }
+  .glass-shell {
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    backdrop-filter: blur(12px) saturate(140%);
+  }
+  .glass-panel {
+    -webkit-backdrop-filter: blur(9px) saturate(135%);
+    backdrop-filter: blur(9px) saturate(135%);
+    box-shadow: none;
+  }
+  .glass-card {
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+  .glass-strong {
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-bg,
+  .ambient-grid {
+    background-attachment: scroll;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
