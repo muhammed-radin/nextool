@@ -7,9 +7,11 @@ order: 1
 # Tools — writing and registering tools
 
 Everything the runtime can *do* is a tool. This page documents the `ToolDefinition`
-schema, parameter generation rules, both registration paths (built-in code and the
-`/api/tools/register` endpoint), the four dynamic handler kinds, and a complete working
-example.
+schema, parameter generation rules, the registration paths (built-in code, the
+`/api/tools/register` endpoint and the v1.0.2 Tool IDE / `js-function` path), the four
+dynamic handler kinds, and a complete working example. The JavaScript tool authoring
+workflow (Monaco editor, sandbox contract, testing, debugging) has its own page:
+[Tool Development](tool-development.md).
 
 ## ToolDefinition schema
 
@@ -19,13 +21,15 @@ interface ToolDefinition {
   description: string;       // what it does — feeds matching + prompts
   purpose?: string;          // why it exists (prompt context)
   category: string;          // monitoring | automation | content | utility | memory | notification | general …
-  environment: 'builtin' | 'virtual-env' | 'dynamic';
+  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function';   // v1.0.2: js-function
   schema: {
     type: 'object';
     properties: ToolParamDef[];
   };
   handlerKind?: 'echo' | 'delay' | 'http_get' | 'uuid';   // dynamic tools only
   handlerConfig?: Record<string, unknown>;                // dynamic tools only
+  functionSource?: string;   // js-function tools only (≤ 64 000 chars)
+  toolVersion?: string;      // user-facing version string, free form
 }
 
 interface ToolParamDef {
@@ -45,6 +49,28 @@ The 15 built-in tools (seeded into `ToolRecord` on first registry access) follow
 contract — `server.*` are `virtual-env`, the rest `builtin`. Browse them with
 `GET /api/tools` or the Tools view, which renders each param's type, required flag,
 generation and enum chips.
+
+## The Tool IDE and the `js-function` environment (v1.0.2)
+
+**Tools → New Tool / Edit** opens the in-console Tool IDE: a Monaco JavaScript editor
+(custom `nextool-dark` theme), a schema editor, schema-driven IntelliSense, a References
+pane showing the real sandbox API, and a **Test Tool** panel that runs the actual
+sandbox. A tool authored here has `environment: 'js-function'` and its body is a
+single `async function execute(params, context) { …; return value; }`.
+
+- Execution happens in a hardened `node:vm` sandbox (`src/lib/nexool/tools/js-runner.ts`)
+  exposing **only** `params`, `context {executionId, taskId, mode, now, log}`, `console`
+  (capped 100 lines) and ES builtins. No `require`, `process`, `fetch`, timers or
+  `Buffer` — a documented limitation, not a bug.
+- Limits: source ≤ 64 000 chars; sync execution capped 4 s (`vm` timeout); the whole
+  run capped 10 s; results must be JSON-serializable, ≤ 64 KiB, depth ≤ 12.
+- Full guide with a worked example, limits table and debugging checklist:
+  [Tool Development](tool-development.md).
+
+Grid actions on the Tools view (v1.0.2): **New Tool**, **Edit**, **Duplicate** (built-ins
+included — creates an editable `js-function` copy), **Test**, **Enable/Disable**, and
+**Delete** (user tools only, behind a confirm dialog; built-ins are rejected
+`READ_ONLY`).
 
 ## Parameter generation: extractive vs constructive
 
@@ -115,6 +141,24 @@ curl -X POST http://localhost:3000/api/tools/register \
   URL-encoded (tool names contain dots). Disabled tools are excluded from the registry
   the loop loads, and the post-decision gate rewrites decisions targeting them into
   `cannot_execute`.
+
+### 3. Tool IDE path (js-function, v1.0.2)
+
+```bash
+curl -X POST http://localhost:3000/api/tools/js -H 'Content-Type: application/json' \
+  -d '{ "name": "utility.wordcount", "description": "…", "category": "utility",
+        "schema": { "type": "object", "properties": [ … ] },
+        "functionSource": "async-annotated or plain function body…" }'
+```
+
+- The source is compiled server-side before registration — a syntax error blocks the
+  save (`REGISTER_FAILED`). Duplicate names → `ALREADY_EXISTS` (409).
+- CRUD beyond creation (all v1.0.2): `GET /api/tools/{name}` (full entry incl.
+  `functionSource`), `PUT /api/tools/{name}` (partial update of user-editable tools —
+  description, category, schema, source, `toolVersion`, `enabled`, and rename via the
+  `name` field; built-ins → 403 `READ_ONLY`), `DELETE /api/tools/{name}` (user tools
+  only), `POST /api/tools/test` (registered tool or unsaved source — see
+  [Tool Development](tool-development.md) for the response shape).
 
 ## Complete working example tool
 

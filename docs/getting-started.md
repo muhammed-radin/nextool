@@ -82,7 +82,7 @@ on the first registry query.
 curl -s http://localhost:3000/api/system | head -c 400
 ```
 
-A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.1", ... } }`
+A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.2", ... } }`
 with runtime status `online`. The console header shows a connection pill that reads
 **Connected** once the SSE stream (`/api/stream`) is live.
 
@@ -98,8 +98,9 @@ curl -s http://localhost:3000/api/models | head -c 400
 ```
 
 The `adapters` field honestly reports what is installed in this environment:
-`{ "tfjs": false, "nextoolManifest": true, "parquet": false }` — TensorFlow.js and Parquet
-adapters are **not installed**; the `.nextool` manifest validator is available.
+`{ "tfjs": true, "nextoolManifest": true, "parquet": false }` — TensorFlow.js is
+installed since v1.0.2 (training + classifier inference work); the Parquet adapter is
+**not installed**; the `.nextool` manifest validator is available.
 
 ## Run your first task (Goal Mode)
 
@@ -135,6 +136,33 @@ press **Crash** on a server. The environment broadcast wakes the live task insta
 recovery subgoal is created, and the runtime runs health → restart → verify until the
 server is healthy again.
 
+## Train + benchmark + export your first model
+
+Once you have a dataset (Datasets view → Import, or `POST /api/datasets/import`) with
+labeled examples (`expectedTool`), you can train, score and ship a classifier in three
+commands:
+
+```bash
+# 1. train (real TensorFlow.js run — registers a tool-classifier checkpoint)
+nextool train -d tool-selection -e 20 --early-stop 5
+
+# 2. benchmark it (model key = the trained model id from step 1)
+nextool benchmark -d tool-selection -m heuristic-fallback
+nextool benchmark -d tool-selection -m <modelId>          # score the trained classifier
+
+# 3. export the checkpoint as a portable package
+nextool model export -m current -f nextool -o ./exports/core.nextool
+nextool model export -m current -f tfjs    -o ./exports/model.zip
+```
+
+Console equivalent: **Datasets** → import (or reuse an existing dataset) → **Training**
+view → pick dataset + config → **Start training** (live per-epoch metrics and logs) →
+**Benchmark** view → pick dataset + model key → run → **Models** view → **Export Current
+Model** dropdown. Training requirements: ≥ 4 labeled examples, ≥ 2 distinct tools; see
+[Training](../ai-core/training.md) for the engine, config ranges and honest limitations
+(no pause; classifiers are tool selectors only), and [CLI](../operations/cli.md) for the
+full command reference.
+
 ## Where to go next
 
 - [Installation](installation.md) — detailed setup and troubleshooting during install.
@@ -142,3 +170,5 @@ server is healthy again.
 - [Architecture](architecture.md) — how Main, Planner, Observer, CoreModule and the tool
   runtime fit together.
 - [API](api.md) — every endpoint with request/response examples.
+- [Tool Development](tool-development.md) — write and test your own tool in the Tool IDE.
+- [CLI](../operations/cli.md) — the full command reference for `nextool`.

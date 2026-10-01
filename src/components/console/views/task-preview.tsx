@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -28,10 +29,22 @@ import { ApiClientError, getTaskContext, getTaskDetail, getTaskEvents, getTaskEx
 import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { RuntimeTerminal } from '../terminal';
-import { EmptyState, ErrorCard, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, fmtClock, fmtMs } from '../ui-bits';
+import { TaskChecklist } from '../task-checklist';
+import { EmptyState, ErrorCard, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, fmtClock, fmtMs } from '../ui-bits';
 import {
-  Ban, Braces, CheckCircle2, Circle, CornerDownRight, Flag, Layers, Loader2, MessageSquareWarning, Play, Radio, Send, Square, Wrench, XCircle,
+  Ban, Braces, CheckCircle2, Circle, CornerDownRight, Flag, Layers, ListChecks, Loader2, MessageSquareWarning, Play, Radio, Send, Square, TerminalSquare, Wrench, XCircle,
 } from 'lucide-react';
+
+const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
+
+/** Persisted per user/session (spec §69) — defaults to OFF (checklist view). */
+function readTerminalPreference(): boolean {
+  try {
+    return window.localStorage.getItem(PREVIEW_AS_TERMINAL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting']);
 
@@ -114,8 +127,23 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const [feedbackMsg, setFeedbackMsg] = useState('Incorrect decision.');
   const [feedbackAction, setFeedbackAction] = useState('');
   const [busy, setBusy] = useState(false);
+  const [previewAsTerminal, setPreviewAsTerminal] = useState<boolean | null>(null); // null = not yet hydrated
 
   const { events: streamEvents } = useNexoolStream({ taskId, max: 300 });
+
+  // Restore the persisted view preference after mount (avoids SSR mismatch).
+  useEffect(() => {
+    setPreviewAsTerminal(readTerminalPreference());
+  }, []);
+
+  const togglePreviewMode = (on: boolean) => {
+    setPreviewAsTerminal(on);
+    try {
+      window.localStorage.setItem(PREVIEW_AS_TERMINAL_KEY, on ? '1' : '0');
+    } catch {
+      /* storage unavailable — session-only preference */
+    }
+  };
 
   // Backfill historical events from REST, then merge with live SSE (dedupe by id).
   useEffect(() => {
@@ -363,7 +391,40 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
     </section>
   );
 
-  const terminal = <RuntimeTerminal taskId={taskId} events={taskEvents} />;
+  const terminal = <RuntimeTerminal taskId={taskId} events={taskEvents} taskStatus={detail.status} />;
+
+  // ---- v1.0.2 §67-68: Preview as Terminal toggle — checklist is the DEFAULT.
+  // Both views consume the SAME runtime state (spec §68).
+  const livePreview = (
+    <section aria-label="Live task preview" className="glass-panel rounded-lg p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <SectionTitle
+          icon={<ListChecks className="size-4 text-sky-300" aria-hidden />}
+          title="Live checklist"
+          desc="Real-time task timeline driven by the runtime plan."
+        />
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-white/[0.09] bg-white/[0.03] px-3 text-xs text-slate-300">
+          <TerminalSquare className="size-3.5 text-sky-300/70" aria-hidden />
+          Preview as Terminal
+          <Switch
+            checked={previewAsTerminal === true}
+            onCheckedChange={togglePreviewMode}
+            aria-label="Preview as Terminal"
+            data-testid="terminal-toggle"
+          />
+        </label>
+      </div>
+      <div className="mt-3">
+        {previewAsTerminal === false ? (
+          <TaskChecklist plan={planSteps} events={taskEvents} taskStatus={detail.status} />
+        ) : previewAsTerminal === true ? (
+          terminal
+        ) : (
+          <Skeleton className="h-32 w-full" />
+        )}
+      </div>
+    </section>
+  );
 
   return (
     <div className="space-y-4">
@@ -378,6 +439,18 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
             <p className="break-all font-mono text-xs text-foreground/90">{detail.request}</p>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <StatusChip status={detail.status} />
+              {(() => {
+                // v1.0.2 §71: dynamic derived status from the SAME event stream
+                // the terminal/checklist use — never a hardcoded state string.
+                const rt = deriveTaskRuntime(detail.status, taskEvents);
+                if (rt.status === detail.status) return null;
+                return (
+                  <Badge variant="outline" className="border-sky-400/25 bg-sky-400/[0.06] font-mono text-[10px] text-sky-300">
+                    {rt.status}
+                    {rt.activeTool ? <span className="ml-1 text-cyan-300/90">· {rt.activeTool}</span> : null}
+                  </Badge>
+                );
+              })()}
               <Badge variant="outline" className={cn('font-mono text-[10px]', detail.mode === 'live' ? 'border-sky-400/30 bg-sky-400/10 text-sky-300' : 'border-white/[0.09] text-muted-foreground')}>
                 {detail.mode}
               </Badge>
@@ -454,6 +527,7 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
           <TabsContent value="overview" className="mt-3 space-y-4 outline-none">
             {goalCard}
             {subgoalCard}
+            {livePreview}
             {planSection}
           </TabsContent>
           <TabsContent value="timeline" className="mt-3 space-y-4 outline-none">
@@ -479,6 +553,8 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
         {planSection}
 
+        {livePreview}
+
         <div className="grid gap-4 lg:grid-cols-2">
           {toolsSection}
           {stateSection}
@@ -487,8 +563,6 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
         {contextSection}
 
         {timelineSection}
-
-        {terminal}
       </div>
 
       {/* Stop confirm dialog */}

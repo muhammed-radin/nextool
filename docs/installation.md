@@ -6,7 +6,7 @@ order: 2
 
 # Installation
 
-Step-by-step setup for NexTool Q1 v1.0.1, including the parts that most often trip up a
+Step-by-step setup for NexTool Q1 v1.0.2, including the parts that most often trip up a
 fresh environment (Node version, Prisma client, ports, first boot).
 
 ## 1. System requirements
@@ -75,7 +75,7 @@ bun run dev
 
 ```bash
 curl -s http://localhost:3000/api/system | head -c 300
-# {"ok":true,"data":{"appVersion":"1.0.1",...}}
+# {"ok":true,"data":{"appVersion":"1.0.2",...}}
 
 curl -s "http://localhost:3000/api/stream?since=0" --max-time 3
 # event: hello

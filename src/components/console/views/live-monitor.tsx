@@ -12,18 +12,31 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 import { useConsoleStore } from '../console-store';
 import { useGlobalStream } from '../providers';
 import { ApiClientError, getLiveState, getTaskDetail, injectEnvEvent, listTasks, stopTask } from '@/lib/nexool/client';
-import type { GlobalLiveState, TaskSummary } from '@/lib/nexool/types';
+import type { GlobalLiveState, NexToolEvent, TaskSummary } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { ServerCard } from '../server-card';
+import { TaskChecklist } from '../task-checklist';
+import { RuntimeTerminal } from '../terminal';
 import { EmptyState, ErrorCard, PulsingDot, SectionTitle, StatusChip, TimeAgo, fmtMs } from '../ui-bits';
-import { Ban, Loader2, RadioTower, Square, Timer } from 'lucide-react';
+import { Ban, ChevronDown, Loader2, RadioTower, Square, Timer } from 'lucide-react';
 
 const STREAM_SOURCES = new Set(['environment', 'planner', 'core', 'tool']);
+
+/** Shared per-session preview preference — checklist is the default (spec §67/§69). */
+function readTerminalPreference(): boolean {
+  try {
+    return window.localStorage.getItem('nextool.previewAsTerminal') === '1';
+  } catch {
+    return false;
+  }
+}
 
 interface LiveTaskCardData {
   summary: TaskSummary;
@@ -32,15 +45,29 @@ interface LiveTaskCardData {
   lastTickAt: string | null;
 }
 
-function LiveTaskCard({ data, onStop, stopping, onOpen }: { data: LiveTaskCardData; onStop: (id: string) => void; stopping: boolean; onOpen: (id: string) => void }) {
+function LiveTaskCard({ data, taskEvents, onStop, stopping, onOpen }: {
+  data: LiveTaskCardData;
+  taskEvents: NexToolEvent[];
+  onStop: (id: string) => void;
+  stopping: boolean;
+  onOpen: (id: string) => void;
+}) {
   const { summary, detail, eventCount, lastTickAt } = data;
   const interval = detail?.config?.liveIntervalMs;
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [asTerminal, setAsTerminal] = useState<boolean | null>(null);
   const nextTickEstimate = useMemo(() => {
     if (!lastTickAt || !interval) return null;
     const elapsed = Date.now() - new Date(lastTickAt).getTime();
     const remaining = Math.max(0, interval - elapsed);
     return `~${Math.ceil(remaining / 1000)}s`;
   }, [lastTickAt, interval]);
+
+  // Default Live Mode visualization is the CHECKLIST (spec §62) — restore the
+  // per-session "Preview as Terminal" preference on mount.
+  useEffect(() => {
+    setAsTerminal(readTerminalPreference());
+  }, []);
 
   return (
     <div className="glass-card rounded-lg p-4">
@@ -98,6 +125,41 @@ function LiveTaskCard({ data, onStop, stopping, onOpen }: { data: LiveTaskCardDa
       >
         <Square className="size-4" aria-hidden /> Stop live task
       </Button>
+
+      {/* v1.0.2 §62-68: live checklist/timeline (default) with terminal toggle.
+          Both views consume the SAME runtime event stream. */}
+      <Collapsible open={previewOpen} onOpenChange={setPreviewOpen}>
+        <CollapsibleTrigger className="mt-3 flex min-h-11 w-full items-center justify-between gap-2 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 text-xs text-slate-300 hover:bg-white/[0.06]">
+          <span className="flex items-center gap-2">
+            {asTerminal ? <span className="font-mono">terminal preview</span> : <span>live checklist</span>}
+            <span className="font-mono text-[10px] text-muted-foreground">{eventCount} events</span>
+          </span>
+          <span className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const next = !(asTerminal ?? false);
+                setAsTerminal(next);
+                try {
+                  window.localStorage.setItem('nextool.previewAsTerminal', next ? '1' : '0');
+                } catch { /* session-only */ }
+              }}
+              className="rounded border border-sky-400/25 px-2 py-1 font-mono text-[10px] uppercase tracking-wide text-sky-300 outline-ring/50 hover:bg-sky-400/10 focus-visible:ring-2"
+            >
+              Preview as Terminal: {asTerminal ? 'ON' : 'OFF'}
+            </button>
+            <ChevronDown className={cn('size-4 text-sky-300/70 transition-transform', previewOpen && 'rotate-180')} aria-hidden />
+          </span>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-2">
+          {asTerminal === true ? (
+            <RuntimeTerminal taskId={summary.id} events={taskEvents} taskStatus={summary.status} />
+          ) : (
+            <TaskChecklist plan={detail?.plan} events={taskEvents} taskStatus={summary.status} />
+          )}
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }
@@ -220,6 +282,7 @@ export default function LiveMonitorView() {
               <LiveTaskCard
                 key={t.id}
                 data={{ summary: t, detail: details[t.id] ?? null, eventCount: liveTaskEvents(t.id), lastTickAt: lastTick(t.id) }}
+                taskEvents={events.filter((ev) => ev.taskId === t.id).slice(-120)}
                 onStop={(id) => setStopCandidate(id)}
                 stopping={stoppingId === t.id}
                 onOpen={openTaskPreview}

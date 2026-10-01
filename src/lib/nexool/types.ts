@@ -25,7 +25,7 @@ export interface ToolSchema {
   properties: ToolParamDef[];
 }
 
-export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic';
+export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic' | 'js-function';
 
 export interface ToolDefinition {
   name: string; // e.g. "server.health"
@@ -37,6 +37,10 @@ export interface ToolDefinition {
   /** dynamic tools only */
   handlerKind?: 'echo' | 'delay' | 'http_get' | 'uuid';
   handlerConfig?: Record<string, unknown>;
+  /** js-function tools only (v1.0.2) — mirrors ToolRecord.functionSource */
+  functionSource?: string;
+  /** js-function tools only (v1.0.2) — free-form user-facing tool version */
+  toolVersion?: string;
 }
 
 export interface ToolStats {
@@ -365,4 +369,153 @@ export interface NexToolSettings {
   useMemory: boolean;
   logLevel: 'info' | 'debug' | 'error';
   realTimeTransport: 'sse'; // websocket adapter not installed in this environment (honest state)
+}
+
+// ---------- Training (v1.0.2) ----------
+
+export interface TrainingConfig {
+  epochs: number; // 1..100
+  batchSize: number; // 1..128
+  learningRate: number; // 0.0001..1
+  validationSplit: number; // 0..0.5 (fraction of examples held out)
+  shuffle: boolean;
+  earlyStoppingPatience?: number; // 0 = disabled
+  vocabSize?: number; // hashed bag-of-words dimension (default 128)
+}
+
+export interface TrainingEpochMetrics {
+  at: string;
+  epoch: number;
+  loss: number;
+  valLoss: number | null;
+  accuracy: number;
+  valAccuracy: number | null;
+  elapsedMs: number;
+}
+
+export interface TrainingLogLine {
+  at: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+}
+
+export type TrainingJobStatus = 'queued' | 'starting' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface TrainingJobSummary {
+  id: string;
+  datasetId: string;
+  datasetName: string;
+  datasetVersion: string;
+  status: TrainingJobStatus;
+  config: TrainingConfig;
+  epochs: number;
+  epochsDone: number;
+  error?: string | null;
+  modelRecordId?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+}
+
+export interface TrainingJobDetail extends TrainingJobSummary {
+  metrics: TrainingEpochMetrics[];
+  logs: TrainingLogLine[];
+  finalMetrics?: {
+    loss: number;
+    valLoss: number | null;
+    accuracy: number;
+    valAccuracy: number | null;
+    trainMs: number;
+  } | null;
+}
+
+// ---------- Benchmark (v1.0.2) ----------
+
+export type BenchmarkModelKey = string; // 'llm-core' | 'heuristic-fallback' | trained model id
+
+export interface BenchmarkConfig {
+  modelKey: BenchmarkModelKey;
+  datasetId: string;
+  suite: 'tool-selection'; // suite actually implemented by the engine
+  limit?: number; // max test examples to run (default: all test-split examples)
+  timeoutPerCaseMs?: number;
+}
+
+export interface BenchmarkMetrics {
+  /** Examples actually evaluated (skipped examples excluded). */
+  cases: number;
+  toolSelectionAccuracy: number; // 0..1 — decision tool matches expectedTool
+  noToolRate: number; // fraction of cases where CoreModule decided no_tool/cannot_execute
+  paramAccuracy: number | null; // 0..1 — strict match of expectedParams (null when no expectedParams present)
+  schemaValidity: number; // fraction of tool_call decisions whose params pass schema validation
+  avgDecisionLatencyMs: number;
+  p95DecisionLatencyMs: number;
+  avgConfidence: number;
+  avgCoreCallsPerCase: number; // always 1 decision per case (documented)
+}
+
+export interface BenchmarkCaseResult {
+  request: string;
+  expectedTool?: string;
+  decidedTool?: string;
+  status: 'tool_call' | 'no_tool' | 'clarification_required' | 'cannot_execute' | 'stop';
+  correct: boolean;
+  confidence: number;
+  latencyMs: number;
+  engine: string;
+}
+
+export interface BenchmarkRunSummary {
+  id: string;
+  label?: string | null;
+  modelKey: BenchmarkModelKey;
+  datasetId: string;
+  datasetName: string;
+  datasetVersion: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  metrics: BenchmarkMetrics;
+  durationMs: number;
+  error?: string | null;
+  createdAt: string;
+}
+
+export interface BenchmarkRunDetail extends BenchmarkRunSummary {
+  config: BenchmarkConfig;
+  cases: BenchmarkCaseResult[];
+}
+
+// ---------- Model packages (v1.0.2) ----------
+
+export interface ExportedModelMetadata {
+  packageName: string;
+  applicationVersion: string;
+  modelVersion: string;
+  architecture: string;
+  parameterCount: number;
+  datasetVersion: string | null;
+  createdAt: string;
+  tfjsCompatibility: string; // tfjs version the topology was produced with
+  packageFormat: 'tfjs-zip' | 'nextool';
+  notes?: string;
+}
+
+// ---------- Branding / icons (v1.0.2) ----------
+
+export interface IconAsset {
+  /** File name inside the icons package, e.g. "icon-192.png". */
+  file: string;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+}
+
+export interface BrandingManifest {
+  status: 'staged' | 'active';
+  uploadedAt: string;
+  activatedAt?: string | null;
+  assets: IconAsset[];
+  favicon: string | null; // favicon.ico file name
+  appleTouch: string | null;
+  p512: string | null;
+  p192: string | null;
 }

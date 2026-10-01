@@ -55,10 +55,12 @@ model ToolRecord {
   description   String
   purpose       String?
   category      String   @default("general")
-  environment   String   @default("builtin") // builtin | virtual-env | dynamic
+  environment   String   @default("builtin") // builtin | virtual-env | dynamic | js-function
   definition    String // JSON full ToolDefinition (schema etc.)
   handlerKind   String? // dynamic handler: echo | delay | http_get | time | uuid
   handlerConfig String? // JSON
+  functionSource String? // v1.0.2: JavaScript source for environment=js-function tools
+  toolVersion   String? // v1.0.2: user-facing tool version string (semver-ish, free form)
   enabled       Boolean  @default(true)
   callCount     Int      @default(0)
   successCount  Int      @default(0)
@@ -67,6 +69,44 @@ model ToolRecord {
   totalMs       Float    @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+// ============ v1.0.2: Training / Benchmark / Branding ============
+
+model TrainingJobRecord {
+  id           String   @id @default(cuid())
+  datasetId    String
+  datasetName  String
+  datasetVersion String
+  status       String   @default("queued") // queued | starting | running | completed | failed | cancelled
+  config       String   @default("{}") // JSON TrainingConfig
+  epochs       Int      @default(0)
+  epochsDone   Int      @default(0)
+  metrics      String   @default("[]") // JSON { at, epoch, loss, valLoss, accuracy, valAccuracy, elapsedMs }[]
+  logs         String   @default("[]") // JSON { at, level, message }[]
+  finalMetrics String? // JSON { loss, valLoss, accuracy, valAccuracy, trainMs }
+  modelRecordId String? // set when a model package was produced
+  error        String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model BenchmarkRunRecord {
+  id           String   @id @default(cuid())
+  label        String?
+  modelKey     String // "llm-core" | "heuristic-fallback" | trained model id
+  datasetId    String
+  datasetName  String
+  datasetVersion String
+  config       String   @default("{}") // JSON BenchmarkConfig
+  metrics      String   @default("{}") // JSON BenchmarkMetrics
+  cases        String   @default("[]") // JSON per-example results (truncated params/results)
+  durationMs   Int      @default(0)
+  status       String   @default("queued") // queued | running | completed | failed
+  error        String?
+  createdAt    DateTime @default(now())
 }
 
 model MemoryEntry {

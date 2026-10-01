@@ -6,19 +6,35 @@ order: 2
 
 # Testing
 
-Honest status first: **NexTool Q1 ships without an automated test suite.** There is no
-unit, integration or E2E test code in the repository, and no test runner is configured.
-What exists instead is `bun run lint` plus the manual verification workflows below —
-the same ones used to verify v1.0.0 and v1.0.1 end-to-end in a real browser and with
-curl.
-
-## What you can run today
+NexTool Q1 v1.0.2 ships a focused **bun test** unit suite alongside `bun run lint`
+and the manual verification workflows below.
 
 ```bash
-bun run lint         # eslint over the repo — the only automated gate
+bun test                     # runs tests/*.test.ts (24 tests / 58 assertions)
+bun run lint                 # eslint over the repo
+bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ```
 
-Everything else is manual but scripted below so it is repeatable.
+## Unit suite — `tests/nextool-v102.test.ts`
+
+Pure-function coverage of the v1.0.2 core (no database required):
+
+| Area | What is verified |
+| --- | --- |
+| Training preprocessing | tokenizer keeps `api-01`-style tokens, vectorizer is deterministic + L2-normalized, `prepareDataset` split carve is deterministic and counts skipped examples |
+| js-function sandbox | `validateFunctionSource` catches real syntax errors (Bun defers `vm.Script` compilation — the probe executes the definition), source limits; `runJsTool` returns serializable results, exposes `context.mode/executionId`, collects `log()` lines, and blocks `require` |
+| Tool params | `coerceParams` string→number / CSV→array coercion; `validateParams` required/enum/min-max errors |
+| Icon parsing | `pngDimensions` reads real IHDR width/height, rejects non-PNG and absurd sizes |
+| Status derivation | `deriveTaskRuntime` transitions (idle / running / planning / observing / terminal states, active tool tracking), `terminalStatusLine` cursor blinks **only** while a tool runs (spec §7-11), `deriveChecklist` plan + event fallback and null-percent honesty (spec §62-65) |
+
+The `tests/` directory also contains shell scripts that verify the **sandbox
+infrastructure** (fake-`bun` harness around `db:push`, python-runtime
+build/container checks). They test the hosting environment, not the application.
+
+What is intentionally **not** unit-tested: Prisma/SQLite persistence paths and
+the Next.js route handlers — those are covered by the scripted API smoke and
+browser verification below (the sandbox runs the app in dev mode; no
+production-build gate exists in this environment).
 
 ## Smoke workflow (API level)
 
@@ -49,6 +65,34 @@ curl -s -X PUT http://localhost:3000/api/settings -H 'Content-Type: application/
 Expected: `online`, 15 tools, `"status":"completed"`, executions with
 `server.health`, `hello` frame on the stream, `maxIterations:35`.
 
+## v1.0.2 feature smoke (CLI + API)
+
+```bash
+# js-function tool: register → test → call (see docs/tool-development.md)
+curl -s -X POST http://localhost:3000/api/tools/js -H 'Content-Type: application/json' \
+  -d '{"name":"utility.wordcount","description":"count words","category":"utility",
+       "schema":{"type":"object","properties":[{"name":"text","type":"string",
+       "required":true,"description":"text"}]},
+       "functionSource":"return { words: (params.text.match(/\\S+/g) ?? []).length };"}'
+curl -s -X POST http://localhost:3000/api/tools/test -H 'Content-Type: application/json' \
+  -d '{"name":"utility.wordcount","params":{"text":"one two three"}}'
+# → data.status "completed", data.result.words 3, data.mode "test-source"
+
+# dataset → train → benchmark → export (needs ≥ 4 labeled examples, ≥ 2 tools)
+nextool dataset import ds.json -n smoke-ds -v 1.0.0
+nextool train -d smoke-ds -e 3
+nextool benchmark -d smoke-ds -m heuristic-fallback
+nextool model export -m current -f tfjs -o ./exports/model.zip
+nextool model import ./exports/model.zip      # round-trip; real TFJS load check
+
+# parquet stays honest
+nextool dataset import data.parquet -n x -v 1.0.0
+# → error: Parquet import is not supported by the current engine (JSON only) …
+```
+
+Expected: a `tc-…` model registered by training, benchmark metrics over the labeled
+examples, a writable zip in `exports/`, and the explicit parquet rejection.
+
 ## Manual browser workflow (the release gate used for v1.0.x)
 
 1. **Dashboard** — metric cards populated from `/api/system`, latency chart draws after
@@ -56,43 +100,61 @@ Expected: `online`, 15 tools, `"status":"completed"`, executions with
 2. **Task Console** — create a goal task (validation on empty request), then a live
    task with the amber opt-in + confirmation switch; submitting navigates to Task
    Preview.
-3. **Task Preview** — plan with step statuses, executions with params/result JSON,
-   MainState viewer, 5 context panels, live timeline merging REST + SSE, terminal;
-   Stop dialog cancels cleanly; Send Event dialog injects (`scheduled.force` wakes a
-   waiting live task); Feedback dialog revises the active subgoal.
+3. **Task Preview** — live checklist/timeline (`[✓]/[-]/[ ]/[!]/[~]`, indeterminate bar
+   without a plan), plan with step statuses, executions with result JSON in the JSON
+   tree, MainState viewer, 5 context panels, live timeline merging REST + SSE,
+   dynamic terminal (`[running]: Tool called …` while a tool executes, cursor stops
+   when it ends); *Preview as Terminal* toggle persists across reloads (default OFF);
+   Stop dialog cancels cleanly; Send Event dialog injects; Feedback dialog revises the
+   active subgoal.
 4. **Live Monitor** — live task shows interval/next-tick; press **Crash** on a server →
    recovery subgoal → health → restart → verified healthy; counters update.
-5. **Tools** — 15 built-ins with schema accordions; register a dynamic tool
-   (`echo`/`http_get`); toggle off → subsequent decisions avoid it.
-6. **Memory / Live State** — add/delete memory entries; inject crash/degrade/recover
+5. **Tools + Tool IDE** — 15 built-ins with schema accordions; New Tool opens Monaco
+   with `nextool-dark`; IntelliSense completes schema params; invalid schema JSON blocks
+   save; Test Tool runs the sandbox (logs visible); Duplicate creates a js-function
+   copy; toggle off → subsequent decisions avoid the tool; Delete has a confirm dialog.
+6. **Training** — pick dataset, run a short job, per-epoch metrics grow, logs stream,
+   cancel works between epochs; too-small dataset fails with the honest message.
+7. **Benchmark** — run `heuristic-fallback`, then `llm-core`, then a trained model id;
+   metric cards + per-case table render; history lists previous runs.
+8. **Models** — Export dropdown downloads real zips; Import dialog accepts a `.nextool`
+   package and rejects a corrupt zip with the surfaced TFJS error; bare-manifest import
+   shows the *not runnable* warning.
+9. **Memory / Live State** — add/delete memory entries; inject crash/degrade/recover
    and watch fleet + status pill flip.
-7. **Models / Datasets** — load dialog accepts a valid `.nextool` manifest and rejects
-   an invalid one with the 400 reason; import a dataset (split bars), export, delete;
-   parquet export shows the honest `PARQUET_UNAVAILABLE` error card.
-8. **Docs view** — this documentation index renders, search filters, pages open.
-9. **Settings** — edit + save round-trips; SSE transport shown as locked.
-10. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
+10. **Settings → Branding & icons** — upload an icons.zip (missing favicon.ico → explicit
+    rejection; wrong-sized `icon-192.png` → per-file reason), preview, Apply, favicon
+    swaps to the packaged one; DELETE discards a staged package.
+11. **Docs view** — this documentation index renders (37 pages), search filters, pages
+    open.
+12. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
     connection pill reflects real SSE state when you kill the dev server mid-session.
 
-## Regression checklist (v1.0.1 focus areas)
+## Regression checklist (v1.0.2 focus areas)
 
-- Connection indicator: real state, 5 states, popover details, manual reconnect,
-  refocus recovery after `error`.
-- Mobile shell: bottom nav 5 slots, More sheet reaches every view, safe-area padding.
-- Glassmorphism: no emerald/teal brand accents; status colors only for status.
-- Docs system: `/api/docs` index + `/api/docs/{slug}` render; unknown slug → friendly
-  404 state; traversal-safe slugs rejected.
-- Version surfaces: header badge, status bar, `/api/system.appVersion` all read 1.0.1;
-  engine stays llm-core 1.0.0.
+- Dynamic runtime status: no hardcoded `nextool@runtime:~$` prompt or static "Running";
+  `[running]: Tool called <tool>` cursor behavior matches actual executions.
+- JSON tree: no raw `JSON.stringify` dumps remain; depth-2 collapse + copy work.
+- Tool sandbox: `fetch`/`require`/timers unavailable inside js tools (limitation, not
+  bug); 64 KiB / depth-12 result limits enforced with readable errors.
+- Training honesty: no pause control anywhere; `valLoss`/`valAccuracy` null without a
+  holdout; cancel between epochs only.
+- Benchmark honesty: `paramAccuracy` `-`/null without `expectedParams` or for
+  classifiers; suite fixed to `tool-selection`.
+- Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
+  version` all read 1.0.2; engine stays llm-core 1.0.0.
 
-## Known gaps (by design in v1.0.1)
+## Known gaps (by design in v1.0.2)
 
-- No unit/integration tests for `loop.ts` state machines, executor races, or settings
-  clamping — these are covered only by the manual workflows.
+- No unit/integration tests for `loop.ts` state machines, the js-runner sandbox,
+  executor races, training/benchmark engines, or settings clamping — these are covered
+  only by the manual workflows above.
 - No CI pipeline configuration in the repo.
 - No load/soak testing tooling.
-- The Evaluation page's benchmark runner is planned, not implemented.
+- Training has no pause/resume (cancel between epochs only).
 
-If you add automated tests later, natural seams are: `coerceParams`/`validateParams`
-(pure), `heuristicDecide` (pure), the settings clamp function, and the
-`reconnectDelayMs` policy (pure) — all testable without a server.
+If you add automated tests later, natural seams are: `vectorize`/`prepareDataset` and
+`resolveTrainingConfig` (pure), `runJsTool` limits (`validateFunctionSource`,
+`ensureSerializable` — pure), `coerceParams`/`validateParams` (pure),
+`heuristicDecide` (pure), the settings clamp function, `pngDimensions` in `branding.ts`
+(pure), and the `reconnectDelayMs` policy (pure) — all testable without a server.

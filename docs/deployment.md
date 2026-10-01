@@ -63,18 +63,48 @@ Next server itself).
   `db/custom.db` (stop writes or use SQLite's backup API).
 - **Generated images** accumulate under `public/generated/`; prune by disk policy (the
   `GeneratedImage` table references paths — deleting files orphans rows honestly).
+- **Icon packages** (v1.0.2) live under `public/icons/<packageId>/` — created on first
+  upload and referenced by the active branding manifest in the `Setting` table. Copy
+  that directory along with the database when migrating hosts, or discard via
+  `DELETE /api/icons` + re-upload.
+- **Exports directory** (v1.0.2): `nextool model export -o ./exports/…` writes model
+  packages wherever you point it (`exports/` is the convention used in the docs); these
+  are plain zips — safe to archive or move between environments.
 - **Time sync** matters for SSE replay (`since` comparisons) and event ordering.
+
+## CLI availability
+
+The CLI ships with the app (v1.0.2) and runs wherever the repo + Bun do:
+
+```bash
+bun run cli -- runtime status        # via the package script
+bun scripts/nextool.ts train …       # directly
+```
+
+`package.json` declares `"bin": { "nextool": "./scripts/nextool.ts" }`, so a
+`bun link` / global install exposes a plain `nextool` command. Commands that talk to
+SQLite directly (train, benchmark, model, dataset, tool) work without the web server;
+`nextool runtime status/start` targets the HTTP API (`NEXOOL_RUNTIME_URL` overrides the
+default `http://127.0.0.1:3000`). Full reference: [CLI](cli.md).
 
 ## Model / dataset deployment notes
 
-- There is **no model artifact to ship**. The active engine is llm-core v1.0.0 via
-  `z-ai-web-dev-sdk`; the heuristic fallback is code.
-- `.nextool` manifests registered via `POST /api/models/load` live in the `ModelRecord`
-  table and are metadata only — the inference adapter is not installed, so packages
-  stay `registered` and nothing needs to be deployed alongside the app.
+- The active engine is llm-core v1.0.0 via `z-ai-web-dev-sdk`; the heuristic fallback
+  is code. No engine artifact needs to be deployed.
+- **Trained model artifacts are real since v1.0.2**: checkpoints registered by training
+  live in the `ModelRecord` table (weights embedded in the manifest JSON), and export
+  produces portable zips (`GET /api/models/export`, `nextool model export`). To move a
+  model between environments: export, then import in the target env
+  (`POST /api/models/import` or `nextool model import`) — the import runs the real TFJS
+  compatibility check before registering. Note the TensorFlow.js dependency
+  (`@tensorflow/tfjs` 4.22.0, CPU backend) is a normal npm dependency — no native
+  binaries, no extra services.
+- `.nextool` manifests registered via `POST /api/models/load` remain metadata-only
+  (no weights) and are not runnable; the import path marks them with a warning.
 - Datasets live in the `DatasetRecord` table. To move them between environments, export
-  JSON (`GET /api/datasets/{id}/export?format=json`) and re-import in the target env —
-  the export format is exactly the import format.
+  JSON (`GET /api/datasets/{id}/export?format=json`, `nextool dataset export`) and
+  re-import in the target env — the export format is exactly the import format.
+  Parquet remains unavailable (JSON only, honestly enforced).
 
 ## Realtime behind proxies
 
@@ -97,9 +127,11 @@ Client behavior through proxies is handled by the frontend reconnect policy
 
 | Check | Expectation |
 | --- | --- |
-| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.1"`. |
+| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.2"`. |
 | `GET /api/stream` (curl, 3 s) | `event: hello` frame immediately, then `:keepalive` within 15 s. |
 | `POST /api/tasks` smoke | Queued task reaches `completed` (goal) or `waiting` (live). |
+| `nextool runtime status` | `[ok] runtime online — app v1.0.2 · engine llm-core v1.0.0`. |
+| `nextool model list` | Lists registered packages without error (empty list is valid). |
 
 ## Rollback
 
@@ -109,5 +141,6 @@ history so far; take a file backup before `db:push` on upgrades.
 
 ## See also
 
+- [CLI](cli.md) — command reference for the bundled `nextool` CLI.
 - [Testing](testing.md) — verification workflows before shipping.
 - [Troubleshooting](troubleshooting.md) — runtime issues in production.

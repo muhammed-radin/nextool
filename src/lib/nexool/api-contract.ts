@@ -24,9 +24,13 @@ export interface ToolEntry {
   description: string;
   purpose?: string;
   category: string;
-  environment: 'builtin' | 'virtual-env' | 'dynamic';
+  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function';
   schema: ToolDefinition['schema'];
   handlerKind?: string;
+  /** v1.0.2: JavaScript function source for js-function tools. */
+  functionSource?: string;
+  /** v1.0.2: user-facing tool version string. */
+  toolVersion?: string;
   enabled: boolean;
   stats: ToolStats;
 }
@@ -92,6 +96,28 @@ GET  /api/stream?taskId=&since=        -> SSE  (event: "event" data: NexToolEven
 GET  /api/tools                        -> ToolEntry[]
 POST /api/tools/register { definition: ToolDefinition, handlerKind?, handlerConfig? } -> ToolEntry
 POST /api/tools/:name/toggle { enabled } -> ToolEntry
+GET  /api/tools/:name                  -> ToolEntry (full definition incl. functionSource)
+POST /api/tools/js { name, schema, functionSource, ... } -> ToolEntry   (v1.0.2 Tool IDE save)
+PUT  /api/tools/:name { partial tool } -> ToolEntry                   (v1.0.2 edit; built-ins read-only)
+DELETE /api/tools/:name               -> { deleted: true }           (v1.0.2; built-ins rejected)
+POST /api/tools/test { name | functionSource, params? } -> { mode, status, durationMs, result, error, logs }  (v1.0.2)
+
+POST /api/training { datasetId, config? }        -> TrainingJobSummary (v1.0.2; real TF.js run starts async)
+GET  /api/training                               -> TrainingJobSummary[]
+GET  /api/training/:id                           -> TrainingJobDetail (metrics series + logs)
+DELETE /api/training/:id                         -> { cancelled } | { deleted }
+
+POST /api/benchmark { modelKey, datasetId, suite, limit? } -> BenchmarkRunSummary (v1.0.2; synchronous real run)
+GET  /api/benchmark                              -> BenchmarkRunSummary[]
+GET  /api/benchmark/:id                          -> BenchmarkRunDetail (per-case results)
+
+GET  /api/models/export?id=&format=tfjs|nextool  -> zip download (v1.0.2)
+POST /api/models/import (multipart file)         -> ImportModelResult (v1.0.2)
+
+GET  /api/icons                                  -> { manifest, active } (v1.0.2 branding)
+POST /api/icons (multipart file=icons.zip)       -> { packageId, manifest, accepted, rejected }
+PATCH /api/icons { action:"activate", packageId } -> BrandingManifest
+DELETE /api/icons                                -> { discarded }
 
 GET  /api/memory                       -> MemoryEntryDTO[]
 POST /api/memory { key, value, tags?, source? } -> MemoryEntryDTO

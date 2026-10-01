@@ -14,11 +14,11 @@ What "model" means in NexTool, what is actually installed, and how the Models sc
 | Attribute | Value (from `version.ts` / `/api/models`) |
 | --- | --- |
 | Name | `llm-core` |
-| Version | `1.0.0` — **unchanged in v1.0.1**; only the application around it was enhanced. |
+| Version | `1.0.0` — **unchanged in v1.0.2**; the release added tooling (Tool IDE, training, benchmarking, packaging) around it, not a new decision unit. |
 | Architecture | "LLM CoreModule (tool-matching + parameter generation heads via structured prompting)" |
 | Backend | `z-ai-web-dev-sdk` (server-side only — never imported in client code) |
 | Status | `active` |
-| Notes | "TensorFlow.js runtime is not installed in this environment. The LLM CoreModule is the active engine; the heuristic-fallback matcher covers SDK outages." |
+| Notes | The TensorFlow.js runtime **is installed since v1.0.2** (`@tensorflow/tfjs` 4.22.0, CPU backend). It powers trained-classifier inference and benchmarking — it does **not** replace llm-core as the active engine. |
 
 The engine powers four decision points, all with strict JSON output and timeouts:
 
@@ -50,17 +50,34 @@ times out, or returns unparseable output — every such decision is tagged with
 `GET /api/models` returns:
 
 ```json
-{ "adapters": { "tfjs": false, "nextoolManifest": true, "parquet": false } }
+{ "adapters": { "tfjs": true, "nextoolManifest": true, "parquet": false } }
 ```
 
 | Adapter | Installed? | Meaning |
 | --- | --- | --- |
-| TensorFlow.js (`tfjs`) | **No — not installed in this environment.** | No local tensor inference today. The `.nextool` format and `model.json` + `.bin` layout exist as the standard TF.js packaging for a future adapter (see [Model Format](model-format.md)). |
-| `.nextool` manifest validator | Yes | `POST /api/models/load` validates and registers manifests (status `registered`; inference stays on llm-core). |
-| Parquet | **No — not installed.** | Dataset import/export is JSON-only; parquet requests get an honest 400 `PARQUET_UNAVAILABLE` (see [Datasets](datasets.md)). |
+| TensorFlow.js (`tfjs`) | **Yes — since v1.0.2** (`@tensorflow/tfjs` 4.22.0, CPU/pure-JS backend in Node). | Real training (`runTrainingJob`), real classifier inference (`tf.loadLayersModel(tf.io.fromMemory)` + `tf.predict` in the benchmark engine), and real load-validation on import. |
+| `.nextool` manifest validator | Yes | `POST /api/models/load` validates and registers manifests (status `registered`); the v1.0.2 import path additionally accepts binary packages. |
+| Parquet | **No — not installed.** | Dataset import/export is JSON-only; parquet requests get an honest 400 `PARQUET_UNAVAILABLE`, and `nextool dataset import` rejects `.parquet` explicitly (see [Datasets](datasets.md)). |
 
-The Models view renders this exactly: the active engine card, an adapters panel with the
-per-adapter booleans, and the registered packages list with their manifests as JSON.
+## Trained classifier checkpoints (v1.0.2)
+
+A completed training job registers a real runnable package with
+`format: 'tfjs-trained-classifier'`: the manifest embeds `modelTopology`, `weightSpecs`
+and base64 `weightData`, plus `classes`, `vocabSize`, `trainingConfig`, `finalMetrics`,
+dataset lineage and `parameterCount`. Checkpoints are used by the benchmark engine
+(model key = the record id) and can be exported as binary zips. They are tool
+*selectors* — they never generate parameters and are never activated as the runtime
+engine. See [Training](training.md).
+
+## Export & import (v1.0.2)
+
+| Operation | How |
+| --- | --- |
+| Export dropdown | Models view → package row → **Export Current Model** → `tfjs` zip or `.nextool` package (see [Model Format](model-format.md)). |
+| Export API | `GET /api/models/export?id={modelRecordId}&format=tfjs\|nextool` — streams the zip. Only manifests with native TFJS weights are exportable. |
+| Import dialog | Models view → **Import model** → upload `.nextool`, native tfjs zip, or bare `.json` manifest (v1.0.1 compatibility, imported with a *not runnable* warning). |
+| Import API | `POST /api/models/import` (multipart `file`, ≤ 25 MiB). Binary packages must pass a real `tf.loadLayersModel` compatibility check; failures surface verbatim. |
+| CLI | `nextool model export / import / list / info` (see [CLI](../operations/cli.md)). |
 
 ## Dataset versioning
 
@@ -88,9 +105,11 @@ for what these numbers can and cannot tell you.
 | --- | --- |
 | `GET /api/models` | Engine info + packages (max 100, newest first) + adapter booleans. |
 | `POST /api/models/load` | Validate + register a `.nextool` manifest → `400 INVALID_MANIFEST` on failure. |
+| `GET /api/models/export?id=&format=tfjs\|nextool` | Download the zip package (v1.0.2). |
+| `POST /api/models/import` | Multipart import: `.nextool` / tfjs zip / bare manifest (v1.0.2). |
 
 ## Related
 
-- [Model Format](model-format.md) — the `.nextool` manifest contract.
-- [Training](training.md) / [Evaluation](evaluation.md) — what exists today vs what
-  awaits the TF.js adapter.
+- [Model Format](model-format.md) — both export layouts, metadata fields, import checks.
+- [Training](training.md) / [Benchmarks](benchmarks.md) — producing and scoring
+  trained classifiers.

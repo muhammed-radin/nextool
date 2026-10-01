@@ -9,7 +9,7 @@
  * <md, glass sidebar on ≥md), real runtime connection indicator.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Toaster } from '@/components/ui/sonner';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +20,8 @@ import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { APP_NAME, APP_VERSION } from '@/lib/nexool/version';
+import { getTool, ApiClientError } from '@/lib/nexool/client';
+import type { ToolEntry } from '@/lib/nexool/api-contract';
 import { useConsoleStore, shortId, type ConsoleView } from './console-store';
 import { RuntimeConnectionStatus } from './runtime-connection-status';
 import { GlobalStreamProvider, NotificationsProvider, SystemStatsProvider, useGlobalStream, useNotifications, useSystemStats } from './providers';
@@ -29,6 +31,9 @@ import TaskConsoleView from './views/task-console';
 import TaskPreviewView from './views/task-preview';
 import LiveMonitorView from './views/live-monitor';
 import ToolsView from './views/tools';
+import ToolEditorView from './views/tool-editor';
+import TrainingView from './views/training';
+import BenchmarkView from './views/benchmark';
 import MemoryView from './views/memory';
 import LiveStateView from './views/live-state';
 import EventsView from './views/events';
@@ -44,6 +49,8 @@ import {
   Box,
   Database,
   FileJson,
+  FlaskConical,
+  GraduationCap,
   History,
   LayoutDashboard,
   ListFilter,
@@ -60,6 +67,8 @@ const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'task-console', label: 'Task Console', icon: TerminalSquare },
   { view: 'live-monitor', label: 'Live Monitor', icon: RadioTower },
   { view: 'tools', label: 'Tools', icon: Wrench },
+  { view: 'training', label: 'Training', icon: GraduationCap },
+  { view: 'benchmark', label: 'Benchmark', icon: FlaskConical },
   { view: 'memory', label: 'Memory', icon: Database },
   { view: 'live-state', label: 'Live State', icon: Activity },
   { view: 'events', label: 'Events', icon: ListFilter },
@@ -392,9 +401,80 @@ function TaskPreviewNavLinkMobile({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+function ToolEditorRoute() {
+  const toolEditor = useConsoleStore((s) => s.toolEditor);
+  const closeToolEditor = useConsoleStore((s) => s.closeToolEditor);
+  // The parent remounts this route per editor session (key=toolEditorKey), so
+  // the prefill state can be initialized lazily without effect-time setState.
+  const [state, setState] = useState<{ entry: ToolEntry | null; error: string | null }>(() => ({
+    entry: toolEditor && toolEditor.mode !== 'edit' ? toolEditor.source ?? null : null,
+    error: null,
+  }));
+  const { entry, error } = state;
+
+  useEffect(() => {
+    if (!toolEditor || toolEditor.mode !== 'edit' || !toolEditor.name) return;
+    let alive = true;
+    getTool(toolEditor.name)
+      .then((d) => {
+        if (alive) setState({ entry: d, error: null });
+      })
+      .catch((e) => {
+        if (alive) setState({ entry: null, error: e instanceof ApiClientError ? e.message : 'Tool not found' });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [toolEditor]);
+
+  if (!toolEditor) return null;
+
+  const loading = toolEditor.mode === 'edit' && entry === null && error === null;
+
+  if (error) {
+    return (
+      <div className="space-y-4">
+        <p role="alert" className="rounded-lg border border-rose-400/30 bg-rose-400/5 p-4 text-sm text-rose-300">{error}</p>
+        <Button variant="outline" size="sm" onClick={closeToolEditor}>← Back to tools</Button>
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div className="h-16 w-full animate-pulse rounded-lg bg-white/[0.06]" />
+        <div className="h-96 w-full animate-pulse rounded-lg bg-white/[0.05]" />
+      </div>
+    );
+  }
+
+  const initial = toolEditor.mode === 'edit'
+    ? entry
+    : entry
+      ? {
+          ...entry,
+          name: entry.name.includes('.') ? `${entry.name.split('.')[0]}.copy` : `${entry.name}.copy`,
+          toolVersion: '1.0.0',
+          stats: { callCount: 0, successCount: 0, failureCount: 0, timeoutCount: 0, avgMs: 0, enabled: true },
+        }
+      : null;
+
+  return (
+    <ToolEditorView
+      toolName={toolEditor.mode === 'edit' ? toolEditor.name : null}
+      initial={initial}
+      onSaved={() => closeToolEditor()}
+      onDeleted={() => closeToolEditor()}
+      onClose={closeToolEditor}
+    />
+  );
+}
+
 function ViewRouter() {
   const activeView = useConsoleStore((s) => s.activeView);
   const selectedTaskId = useConsoleStore((s) => s.selectedTaskId);
+  const openToolEditor = useConsoleStore((s) => s.openToolEditor);
+  const toolEditorKey = useConsoleStore((s) => s.toolEditorKey);
 
   const view = (() => {
     switch (activeView) {
@@ -405,7 +485,13 @@ function ViewRouter() {
       case 'live-monitor':
         return <LiveMonitorView />;
       case 'tools':
-        return <ToolsView />;
+        return <ToolsView onOpenEditor={openToolEditor} />;
+      case 'tool-editor':
+        return <ToolEditorRoute key={toolEditorKey} />;
+      case 'training':
+        return <TrainingView />;
+      case 'benchmark':
+        return <BenchmarkView />;
       case 'memory':
         return <MemoryView />;
       case 'live-state':

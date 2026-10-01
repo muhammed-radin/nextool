@@ -11,6 +11,9 @@ import type {
   ContextComposition, ToolExecution, MemoryEntryDTO, HistoryEntryDTO,
   NotificationDTO, GeneratedImageDTO, ActiveEngineInfo, ModelPackageInfo,
   DatasetInfo, DatasetImportPayload, DatasetExample, NexToolSettings,
+  TrainingConfig, TrainingJobSummary, TrainingJobDetail,
+  BenchmarkConfig, BenchmarkRunSummary, BenchmarkRunDetail,
+  BrandingManifest,
 } from './types';
 import type { TaskDetail, ToolEntry } from './api-contract';
 
@@ -140,6 +143,164 @@ export const registerTool = (payload: RegisterToolPayload) =>
 export const toggleTool = (name: string, enabled: boolean) =>
   apiFetch<ToolEntry>(`/api/tools/${encodeURIComponent(name)}/toggle`, body({ enabled }));
 
+// ---------- Tools v1.0.2 (Tool IDE) ----------
+
+export interface JsToolPayload {
+  name: string;
+  description?: string;
+  purpose?: string;
+  category?: string;
+  toolVersion?: string;
+  schema: ToolDefinition['schema'];
+  functionSource: string;
+  enabled?: boolean;
+}
+
+export const registerJsTool = (payload: JsToolPayload) =>
+  apiFetch<ToolEntry>('/api/tools/js', body(payload));
+
+export const getTool = (name: string) =>
+  apiFetch<ToolEntry>(`/api/tools/${encodeURIComponent(name)}`);
+
+export const updateTool = (name: string, payload: Partial<JsToolPayload> & { enabled?: boolean; renameTo?: string }) => {
+  const { renameTo, ...rest } = payload;
+  return apiFetch<ToolEntry>(`/api/tools/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(renameTo ? { ...rest, name: renameTo } : rest),
+  });
+};
+
+export const deleteTool = (name: string) =>
+  apiFetch<{ deleted: boolean; name: string }>(`/api/tools/${encodeURIComponent(name)}`, { method: 'DELETE' });
+
+export interface ToolTestResult {
+  mode: 'registered' | 'test-source';
+  status: 'completed' | 'failed' | 'timeout' | 'cancelled' | string;
+  durationMs: number;
+  result: unknown;
+  error: { code: string; message: string } | null;
+  params?: Record<string, unknown>;
+  logs: string[];
+}
+
+export const testTool = (payload: { name?: string; functionSource?: string; params?: Record<string, unknown> }) =>
+  apiFetch<ToolTestResult>('/api/tools/test', body(payload));
+
+// ---------- Training (v1.0.2) ----------
+
+export const listTrainingJobs = () => apiFetch<TrainingJobSummary[]>('/api/training');
+
+export interface CreateTrainingPayload {
+  datasetId: string;
+  config?: Partial<TrainingConfig>;
+}
+
+export const createTrainingJob = (payload: CreateTrainingPayload) =>
+  apiFetch<TrainingJobSummary>('/api/training', body(payload));
+
+export const getTrainingJob = (id: string) =>
+  apiFetch<TrainingJobDetail>(`/api/training/${encodeURIComponent(id)}`);
+
+/** Cancel (running) or remove (finished) a training job. */
+export const cancelTrainingJob = (id: string) =>
+  apiFetch<{ cancelled?: boolean; deleted?: boolean }>(`/api/training/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+// ---------- Benchmark (v1.0.2) ----------
+
+export const listBenchmarkRuns = () => apiFetch<BenchmarkRunSummary[]>('/api/benchmark');
+
+export interface CreateBenchmarkPayload extends BenchmarkConfig {
+  label?: string;
+}
+
+export const runBenchmarkJob = (payload: CreateBenchmarkPayload) =>
+  apiFetch<BenchmarkRunSummary>('/api/benchmark', body(payload));
+
+export const getBenchmarkRun = (id: string) =>
+  apiFetch<BenchmarkRunDetail>(`/api/benchmark/${encodeURIComponent(id)}`);
+
+// ---------- Model packages (v1.0.2) ----------
+
+export const modelExportUrl = (id: string, format: 'tfjs' | 'nextool') =>
+  `/api/models/export?id=${encodeURIComponent(id)}&format=${format}`;
+
+export const importModelPackage = async (file: File) => {
+  const form = new FormData();
+  form.set('file', file);
+  let res: Response;
+  try {
+    res = await fetch('/api/models/import', { method: 'POST', body: form });
+  } catch {
+    throw new ApiClientError('Network unreachable — runtime may be offline', 'network_error', 0);
+  }
+  const json = (await res.json().catch(() => null)) as ApiEnvelope<ImportModelResult> | null;
+  if (!res.ok || !json || json.ok !== true) {
+    const err = json && 'error' in json ? json.error : undefined;
+    throw new ApiClientError(err?.message ?? `Import failed (HTTP ${res.status})`, err?.code ?? 'http_error', res.status);
+  }
+  return json.data;
+};
+
+export interface ImportModelResult {
+  name: string;
+  version: string;
+  format: string;
+  modelRecordId: string;
+  runnable: boolean;
+  metadata: {
+    packageName: string;
+    applicationVersion: string;
+    modelVersion: string;
+    architecture: string;
+    parameterCount: number;
+    datasetVersion: string | null;
+    createdAt: string;
+    tfjsCompatibility: string;
+    packageFormat: string;
+    notes?: string;
+  } | null;
+  warnings: string[];
+}
+
+// ---------- Branding icons (v1.0.2) ----------
+
+export interface BrandingState {
+  manifest: (BrandingManifest & { packageId: string }) | null;
+  active: (BrandingManifest & { packageId: string }) | null;
+}
+
+export const getBranding = () => apiFetch<BrandingState>('/api/icons');
+
+export const uploadIconPackage = async (file: File) => {
+  const form = new FormData();
+  form.set('file', file);
+  let res: Response;
+  try {
+    res = await fetch('/api/icons', { method: 'POST', body: form });
+  } catch {
+    throw new ApiClientError('Network unreachable — runtime may be offline', 'network_error', 0);
+  }
+  const json = (await res.json().catch(() => null)) as ApiEnvelope<IconUploadResult> | null;
+  if (!res.ok || !json || json.ok !== true) {
+    const err = json && 'error' in json ? json.error : undefined;
+    throw new ApiClientError(err?.message ?? `Upload rejected (HTTP ${res.status})`, err?.code ?? 'http_error', res.status);
+  }
+  return json.data;
+};
+
+export interface IconUploadResult {
+  packageId: string;
+  manifest: BrandingManifest;
+  accepted: { file: string; width: number | null; height: number | null; bytes: number }[];
+  rejected: { file: string; reason: string }[];
+}
+
+export const activateIconPackage = (packageId: string) =>
+  apiFetch<BrandingManifest>('/api/icons', { method: 'PATCH', body: JSON.stringify({ action: 'activate', packageId }) });
+
+export const discardIconPackage = () =>
+  apiFetch<{ discarded: boolean }>('/api/icons', { method: 'DELETE' });
+
 // ---------- Memory ----------
 
 export const listMemory = () => apiFetch<MemoryEntryDTO[]>('/api/memory');
@@ -174,6 +335,8 @@ export interface ModelsInfo {
   engine: ActiveEngineInfo;
   packages: ModelPackageInfo[];
   adapters: { tfjs: boolean; nextoolManifest: boolean; parquet: boolean };
+  /** v1.0.2: application version from the runtime. */
+  appVersion?: string;
 }
 
 export const getModels = () => apiFetch<ModelsInfo>('/api/models');

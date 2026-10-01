@@ -6,9 +6,11 @@ order: 1
 
 # API Reference
 
-Every HTTP endpoint in NexTool Q1 v1.0.1. All routes are Next.js route handlers
+Every HTTP endpoint in NexTool Q1 v1.0.2. All routes are Next.js route handlers
 (`runtime = 'nodejs'`, `dynamic = 'force-dynamic'`) under `src/app/api/`. JSON in/out,
-except the SSE stream.
+except the SSE stream, the model export download (zip) and the icons upload (multipart).
+Mutating endpoints validate bodies with zod schemas (`src/lib/nexool/schemas.ts`) —
+field-level failures return 400 `INVALID_PARAMS`/`INVALID_REQUEST`.
 
 ## Envelope contract
 
@@ -22,8 +24,10 @@ Every response is an `ApiEnvelope`:
 ```
 
 Error codes used by routes: `INVALID_PARAMS`, `INVALID_REQUEST`, `TASK_CREATE_FAILED`,
-`NOT_FOUND` (404), `REGISTER_FAILED`, `INVALID_MANIFEST`, `INVALID_EXAMPLES`,
-`PARQUET_UNAVAILABLE`, `DOC_NOT_FOUND` (404). The frontend client adds
+`NOT_FOUND` (404), `REGISTER_FAILED`, `ALREADY_EXISTS` (409), `READ_ONLY` (403),
+`INVALID_MANIFEST`, `INVALID_EXAMPLES`, `PARQUET_UNAVAILABLE`, `BENCHMARK_FAILED`,
+`EXPORT_FAILED`, `ICONS_INVALID`, `DOC_NOT_FOUND` (404), plus per-domain 500 codes
+(`TRAINING_*`, `BENCHMARK_*`, `ICONS_*`). The frontend client adds
 `network_error` / `bad_json` / `http_error` locally.
 
 ---
@@ -148,6 +152,40 @@ Enable/disable. Request: `{ "enabled": boolean }` → `ToolEntry`. The path segm
 be URL-encoded (names contain dots, e.g. `server.health`). Errors: `INVALID_PARAMS`,
 `NOT_FOUND` (404).
 
+### GET /api/tools/{name}
+Full entry for one tool (definition, stats, enabled, and `functionSource` +
+`toolVersion` for `js-function` tools). The path segment is URL-decoded server-side.
+Errors: `NOT_FOUND` (404).
+
+### POST /api/tools/js
+Register a `js-function` tool authored in the Tool IDE. Request:
+`{ name (namespace.action, required), description?, purpose?, category?, toolVersion?,
+schema: { type: "object", properties: ToolParamDef[] (≤ 40) }, functionSource (required,
+≤ 64 000 chars), enabled? }`. The source is syntax-validated server-side before the row
+is written. Response: 201 `ToolEntry`. Errors: `INVALID_PARAMS` (zod or missing source),
+`ALREADY_EXISTS` (409), `REGISTER_FAILED` (500 wrapper).
+
+### PUT /api/tools/{name}
+Partial update of a user-editable tool (`dynamic` | `js-function`; built-ins and
+virtual-env are read-only). Body is any subset of `{ name (rename), description,
+purpose, category, toolVersion, schema, functionSource, enabled }` — at least one field
+required. Response: updated `ToolEntry`. Errors: `NOT_FOUND` (404), `READ_ONLY`
+(403), `INVALID_PARAMS`.
+
+### DELETE /api/tools/{name}
+Delete a user tool. Built-ins are rejected with `READ_ONLY` (403) — disable them
+instead. Response: `{ "deleted": true, "name": "…" }`. Errors: `NOT_FOUND`, `READ_ONLY`.
+
+### POST /api/tools/test
+Controlled test execution. Request: exactly one of
+`{ name, params? }` (registered tool — runs its real handler pipeline; js tools run
+their saved source with `mode: "test"`) or `{ functionSource, params? }` (unsaved Tool
+IDE source, sandboxed). Response:
+`{ mode: "test-source" | "registered", status: "completed" | "failed" | <executor
+status>, durationMs, result, error, logs: string[] }` — logs are captured only for
+js-function runs. Tests never mutate task state. Errors: `NOT_FOUND` (404),
+`TEST_FAILED` (500). See [Tool Development](../tools/tool-development.md).
+
 ---
 
 ## Memory / History / Notifications / Images
@@ -178,13 +216,109 @@ default 50, clamp 1–200.
 
 ### GET /api/models
 `{ engine: ActiveEngineInfo, packages: ModelPackageInfo[], adapters:
-{ tfjs: false, nextoolManifest: true, parquet: false } }`.
+{ tfjs: true, nextoolManifest: true, parquet: false } }` — TensorFlow.js is installed
+since v1.0.2 (CPU backend); parquet remains honestly unavailable.
 
 ### POST /api/models/load
 Validate + register a `.nextool` manifest: `{ "manifest": { name, version, format:
 "nextool", architecture: object, compatibility: { runtime } } }` → 201
 `ModelPackageInfo` (status `registered`). Errors: `INVALID_MANIFEST` (400) listing every
 failed rule. See [Model Format](../ai-core/model-format.md).
+
+### GET /api/models/export?id={modelRecordId}&format=tfjs|nextool
+Download a REAL zip artifact (`application/zip` or `application/octet-stream` +
+`Content-Disposition: attachment`). `format=tfjs` → `model.json` +
+`group1-shard1of1.bin` + `metadata.json`; `format=nextool` → the `.nextool` package
+layout (see [Model Format](../ai-core/model-format.md)). Only models whose manifest
+carries native TFJS topology + weights are exportable. Errors: `INVALID_PARAMS`,
+`EXPORT_FAILED` (400, e.g. manifest without weights or unknown id).
+
+### POST /api/models/import
+Multipart upload (`file`). Accepts a `.nextool` zip, a native tfjs zip, or a bare JSON
+manifest (v1.0.1 compatibility — imported with the warning *"…not runnable"*). Binary
+packages must pass a real compatibility check (`tf.loadLayersModel`) before
+registration; the TFJS error surfaces to the caller. Limit 25 MiB; zip entry names are
+filtered against path traversal. Response 201: `{ name, version, format,
+modelRecordId, runnable, metadata: ExportedModelMetadata, warnings: string[] }`.
+Errors: 400 with a readable reason.
+
+---
+
+## Training
+
+### GET /api/training
+Newest 50 `TrainingJobSummary[]` (id, dataset lineage, status
+`queued|starting|running|completed|failed|cancelled`, config, epochs, epochsDone,
+error, modelRecordId, timestamps).
+
+### POST /api/training
+Create + START a real training job (fire-and-forget; progress is polled on the job
+row). Request: `{ datasetId (required), config?: TrainingConfig }` — config fields are
+zod-validated and clamped: `epochs` 1–100 (20), `batchSize` 1–128 (8), `learningRate`
+0.0001–1 (0.01), `validationSplit` 0–0.5 (0.2), `shuffle` (true), `vocabSize` 16–1024
+(128), `earlyStoppingPatience` 0–50 (0 = off). Response: 202 `TrainingJobSummary`.
+Errors: `NOT_FOUND` (unknown datasetId), `INVALID_PARAMS`, `TRAINING_CREATE_FAILED`.
+
+### GET /api/training/{id}
+Full `TrainingJobDetail`: summary fields + `metrics: TrainingEpochMetrics[]`
+(`{at, epoch, loss, valLoss, accuracy, valAccuracy, elapsedMs}` per epoch) +
+`logs: TrainingLogLine[]` (`{at, level, message}`, capped 400) + `finalMetrics`
+(`{loss, valLoss, accuracy, valAccuracy, trainMs}`) when completed. Errors:
+`NOT_FOUND`.
+
+### DELETE /api/training/{id}
+Active job (`queued|starting|running`) → cancellation signal, `{ cancelled: true }`
+(the runner stops between epochs; no pause exists). Finished job → deleted,
+`{ deleted: true }`. Errors: `NOT_FOUND`, `TRAINING_CANCEL_FAILED`.
+
+---
+
+## Benchmarks
+
+### POST /api/benchmark
+Run the real benchmark synchronously. Request: `{ modelKey: "llm-core" |
+"heuristic-fallback" | <trained model id>, datasetId, suite: "tool-selection",
+limit? (1–500), timeoutPerCaseMs? (1 000–120 000, default 30 000) }` (strict schema —
+unknown fields are rejected). Response: 201 `BenchmarkRunSummary` (id, label, modelKey,
+dataset lineage, status, `metrics: BenchmarkMetrics`, durationMs). Split preference:
+dataset `test` → `validation` → all labeled examples. A run `label` can be attached
+from the CLI (`nextool benchmark --label …`), which calls the same engine directly.
+Errors: `NOT_FOUND`, `INVALID_PARAMS`, `BENCHMARK_FAILED` (400, e.g. no labeled
+examples / unknown model).
+
+### GET /api/benchmark
+Newest 50 run summaries (history).
+
+### GET /api/benchmark/{id}
+Full run record including per-case rows (request truncated to 240 chars, expectedTool,
+decidedTool, status, correct, confidence, latencyMs, engine). Errors: `NOT_FOUND`.
+
+---
+
+## Branding & icons
+
+### GET /api/icons
+`{ manifest, active }` — the stored branding manifest (staged or active, `null` when
+none) and the active one used by `generateMetadata`.
+
+### POST /api/icons
+Multipart upload of an icons ZIP (`file` field, ≤ 8 MiB). Validated for real: only
+`.png`/`.ico` with safe names, PNG IHDR dimension parsing, `icon-<size>.png` must be
+exactly `<size>×<size>` (sizes 16/32/48/72/96/128/144/152/192/384/512),
+`apple-touch-icon.png` optional, ≤ 2 MiB per file, `favicon.ico` required in the zip
+root. Accepted files are staged under `public/icons/<packageId>/` with
+`status: "staged"`. Response: 201 `{ packageId, manifest, accepted, rejected }` —
+rejected entries carry per-file reasons. Errors: `ICONS_INVALID` (400).
+
+### PATCH /api/icons
+Activate the staged package: `{ action: "activate", packageId }` → the active manifest
+(favicon/apple/icons are then served from `/icons/<packageId>/`, falling back to
+`/logo.svg`). Errors: `INVALID_PARAMS`, `NOT_FOUND` (nothing staged),
+`ICONS_ACTIVATE_FAILED`.
+
+### DELETE /api/icons
+Discard the staged package (files + manifest row); an **active** package survives.
+Response: `{ discarded: boolean }`.
 
 ---
 
@@ -223,7 +357,7 @@ curl -X PUT http://localhost:3000/api/settings -H 'Content-Type: application/jso
 
 ## Documentation
 
-### GET /api/docs — `{ version: "1.0.1", count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: "1.0.2", count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`

@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * Tools (spec §56) — tool registry grid with per-tool enable switch, stats,
- * schema accordion, and dynamic tool registration dialog.
- * v1.0.1: blue gradient glassmorphism — glass cards, sky/cyan accents,
- * glass-strong dialog, 1→2→3 column responsive grid, min-h-11 controls.
+ * Tools (spec §13/§31/§56) — tool registry grid with per-tool enable switch,
+ * stats, schema accordion, dynamic tool registration dialog AND the full
+ * v1.0.2 tool lifecycle: New Tool (Tool IDE) · Edit · Duplicate · Test ·
+ * Enable/Disable · Delete (destructive ops confirmed).
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -13,6 +13,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -21,21 +22,16 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { ApiClientError, listTools, registerTool, toggleTool } from '@/lib/nexool/client';
+import { JsonTree } from '../json-tree';
+import {
+  ApiClientError, deleteTool, listTools, registerTool, testTool, toggleTool,
+} from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
+import type { ToolTestResult } from '@/lib/nexool/client';
 import { EmptyState, ErrorCard, SectionTitle, fmtMs } from '../ui-bits';
-import { FilePlus2, Loader2, Wrench } from 'lucide-react';
-
-const EXAMPLE_PARAMS = JSON.stringify(
-  {
-    properties: [
-      { name: 'input', type: 'string', required: true, description: 'Primary input value' },
-      { name: 'delayMs', type: 'number', required: false, description: 'Optional delay hint' },
-    ],
-  },
-  null,
-  2,
-);
+import {
+  Copy, FilePlus2, Loader2, Pencil, Play, Plus, Squircle, Trash2, Wrench,
+} from 'lucide-react';
 
 function EnvironmentBadge({ environment }: { environment: ToolEntry['environment'] }) {
   if (environment === 'virtual-env') {
@@ -50,36 +46,86 @@ function EnvironmentBadge({ environment }: { environment: ToolEntry['environment
       </TooltipProvider>
     );
   }
+  if (environment === 'js-function') {
+    return <Badge variant="outline" className="border-cyan-400/30 bg-cyan-400/10 font-mono text-[10px] text-cyan-300">js-function</Badge>;
+  }
   if (environment === 'dynamic') {
     return <Badge variant="outline" className="border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-300">dynamic</Badge>;
   }
   return <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">builtin</Badge>;
 }
 
-function ToolCard({ tool, onToggle, toggling }: { tool: ToolEntry; onToggle: (name: string, enabled: boolean) => void; toggling: boolean }) {
+function ToolCard({
+  tool, onToggle, toggling, onEdit, onTest, onDuplicate, onDelete, deleteBusy,
+}: {
+  tool: ToolEntry;
+  onToggle: (name: string, enabled: boolean) => void;
+  toggling: boolean;
+  onEdit: (tool: ToolEntry) => void;
+  onTest: (tool: ToolEntry) => void;
+  onDuplicate: (tool: ToolEntry) => void;
+  onDelete: (tool: ToolEntry) => void;
+  deleteBusy: boolean;
+}) {
   const s = tool.stats;
+  const readOnly = tool.environment === 'builtin' || tool.environment === 'virtual-env';
   return (
     <div className={cn('glass-card flex flex-col rounded-lg p-4', !tool.enabled && 'opacity-70')}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate font-mono text-sm font-semibold text-foreground">{tool.name}</p>
+          <p className="truncate font-mono text-sm font-semibold text-foreground" title={tool.name}>{tool.name}</p>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">{tool.category}</Badge>
             <EnvironmentBadge environment={tool.environment} />
             {tool.handlerKind ? <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-slate-400">handler: {tool.handlerKind}</Badge> : null}
+            {tool.toolVersion ? <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-slate-400">v{tool.toolVersion}</Badge> : null}
           </div>
         </div>
         <Switch checked={tool.enabled} onCheckedChange={(v) => onToggle(tool.name, v)} disabled={toggling} aria-label={`Toggle tool ${tool.name}`} />
       </div>
 
-      <p className="mt-2 text-xs text-foreground/90">{tool.description}</p>
-      {tool.purpose ? <p className="mt-1 text-[11px] italic text-muted-foreground">purpose: {tool.purpose}</p> : null}
+      <p className="mt-2 break-words text-xs text-foreground/90">{tool.description}</p>
+      {tool.purpose ? <p className="mt-1 break-words text-[11px] italic text-muted-foreground">purpose: {tool.purpose}</p> : null}
 
       <div className="mt-3 grid grid-cols-4 gap-2 border-t border-white/[0.07] pt-2 font-mono text-[11px] tabular-nums text-slate-300">
         <span><span className="text-muted-foreground">calls</span> {s.callCount}</span>
         <span className="text-emerald-300"><span className="text-muted-foreground">ok</span> {s.successCount}</span>
         <span className="text-rose-300"><span className="text-muted-foreground">fail</span> {s.failureCount + s.timeoutCount}</span>
         <span><span className="text-muted-foreground">avg</span> {fmtMs(s.avgMs)}</span>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {!readOnly ? (
+          <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onEdit(tool)}>
+            <Pencil className="size-3.5" aria-hidden /> Edit
+          </Button>
+        ) : (
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onDuplicate(tool)}>
+                  <Copy className="size-3.5" aria-hidden /> Duplicate to customize
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Built-ins are read-only — duplicate creates a js-function copy you can edit</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+        <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onTest(tool)}>
+          <Play className="size-3.5" aria-hidden /> Test
+        </Button>
+        {!readOnly ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto min-h-9 border-rose-500/40 text-rose-300 hover:bg-rose-500/10"
+            onClick={() => onDelete(tool)}
+            disabled={deleteBusy}
+            aria-label={`Delete tool ${tool.name}`}
+          >
+            <Trash2 className="size-3.5" aria-hidden />
+          </Button>
+        ) : null}
       </div>
 
       <Accordion type="single" collapsible className="mt-2">
@@ -130,13 +176,36 @@ function ToolCard({ tool, onToggle, toggling }: { tool: ToolEntry; onToggle: (na
   );
 }
 
-export default function ToolsView() {
+const EXAMPLE_PARAMS = JSON.stringify(
+  {
+    properties: [
+      { name: 'input', type: 'string', required: true, description: 'Primary input value' },
+      { name: 'delayMs', type: 'number', required: false, description: 'Optional delay hint' },
+    ],
+  },
+  null,
+  2,
+);
+
+export default function ToolsView({
+  onOpenEditor,
+}: {
+  onOpenEditor: (req: { mode: 'new' | 'edit' | 'duplicate'; name: string | null; source?: ToolEntry }) => void;
+}) {
   const [tools, setTools] = useState<ToolEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toggling, setToggling] = useState<string | null>(null);
   const [regOpen, setRegOpen] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [form, setForm] = useState({ name: '', description: '', category: 'utility', purpose: '', handlerKind: 'echo', handlerConfig: '{}', schema: EXAMPLE_PARAMS });
+
+  const [testTarget, setTestTarget] = useState<ToolEntry | null>(null);
+  const [testParams, setTestParams] = useState('{}');
+  const [testRunning, setTestRunning] = useState(false);
+  const [testResult, setTestResult] = useState<ToolTestResult | null>(null);
+
+  const [deleteCandidate, setDeleteCandidate] = useState<ToolEntry | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -210,6 +279,47 @@ export default function ToolsView() {
     }
   };
 
+  const openTest = (tool: ToolEntry) => {
+    setTestTarget(tool);
+    setTestResult(null);
+    setTestParams('{}');
+  };
+
+  const runTest = async () => {
+    if (!testTarget) return;
+    let params: Record<string, unknown>;
+    try {
+      params = JSON.parse(testParams || '{}');
+    } catch {
+      toast.error('Test params must be valid JSON');
+      return;
+    }
+    setTestRunning(true);
+    try {
+      const result = await testTool({ name: testTarget.name, params });
+      setTestResult(result);
+    } catch (e) {
+      toast.error('Test failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setTestRunning(false);
+    }
+  };
+
+  const doDelete = async () => {
+    if (!deleteCandidate) return;
+    setDeleteBusy(true);
+    try {
+      await deleteTool(deleteCandidate.name);
+      toast.success('Tool deleted', { description: `${deleteCandidate.name} removed from the registry.` });
+      setDeleteCandidate(null);
+      void load();
+    } catch (e) {
+      toast.error('Delete failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   const inputCls = 'min-h-11 border-white/[0.09] bg-white/[0.04] text-sm';
 
   return (
@@ -219,9 +329,23 @@ export default function ToolsView() {
         title="Tools"
         desc="Registry visible to the CoreModule — dynamic matching, no hardcoded ids."
         right={
-          <Button size="sm" className="bg-primary-gradient min-h-9 gap-1.5 text-primary-foreground hover:opacity-90" onClick={() => setRegOpen(true)}>
-            <FilePlus2 className="size-3.5" aria-hidden /> Register tool
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" className="bg-primary-gradient min-h-9 gap-1.5 text-primary-foreground hover:opacity-90" onClick={() => onOpenEditor({ mode: 'new', name: null })}>
+              <Plus className="size-3.5" aria-hidden /> New Tool
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200">
+                  <Squircle className="size-3.5" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="glass-strong">
+                <DropdownMenuItem onClick={() => setRegOpen(true)}>
+                  <FilePlus2 className="size-3.5" aria-hidden /> Register handler tool…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         }
       />
 
@@ -232,20 +356,31 @@ export default function ToolsView() {
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-44 w-full" />)}
         </div>
       ) : tools.length === 0 ? (
-        <EmptyState icon={<Wrench className="size-6" aria-hidden />} title="No tools registered" hint="The runtime has not exposed any tools yet — register one or wait for startup." />
+        <EmptyState icon={<Wrench className="size-6" aria-hidden />} title="No tools registered" hint="Create one with the Tool IDE or register a handler tool." />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {tools.map((tool) => (
-            <ToolCard key={tool.name} tool={tool} onToggle={(n, v) => void onToggle(n, v)} toggling={toggling === tool.name} />
+            <ToolCard
+              key={tool.name}
+              tool={tool}
+              onToggle={(n, v) => void onToggle(n, v)}
+              toggling={toggling === tool.name}
+              onEdit={(t) => onOpenEditor({ mode: 'edit', name: t.name })}
+              onTest={openTest}
+              onDuplicate={(t) => onOpenEditor({ mode: 'duplicate', name: null, source: t })}
+              onDelete={setDeleteCandidate}
+              deleteBusy={deleteBusy}
+            />
           ))}
         </div>
       )}
 
+      {/* Handler-tool registration dialog (dynamic handler kinds) */}
       <Dialog open={regOpen} onOpenChange={setRegOpen}>
         <DialogContent className="glass-strong sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Register dynamic tool</DialogTitle>
-            <DialogDescription>Registers a handler-backed tool the CoreModule can match and execute.</DialogDescription>
+            <DialogTitle>Register handler tool</DialogTitle>
+            <DialogDescription>Registers a built-in-handler-backed tool the CoreModule can match and execute. For full JavaScript tools use the Tool IDE.</DialogDescription>
           </DialogHeader>
           <div className="nextool-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -291,6 +426,73 @@ export default function ToolsView() {
             <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04]" onClick={() => setRegOpen(false)}>Cancel</Button>
             <Button className="bg-primary-gradient min-h-11 text-primary-foreground hover:opacity-90" disabled={registering} onClick={() => void submitRegister()}>
               {registering ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <FilePlus2 className="size-4" aria-hidden />} Register
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Tool test dialog — real execution of the registered tool (§27-30) */}
+      <Dialog open={testTarget !== null} onOpenChange={(open) => !open && setTestTarget(null)}>
+        <DialogContent className="glass-strong sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Test {testTarget?.name}</DialogTitle>
+            <DialogDescription>
+              Executes the ACTUAL registered handler in a controlled test context with a 20s cap.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="nextool-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+            <div className="space-y-1.5">
+              <Label htmlFor="test-params">Input parameters (JSON)</Label>
+              <Textarea id="test-params" value={testParams} onChange={(e) => setTestParams(e.target.value)} rows={5} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" placeholder="{}" />
+            </div>
+            <Button className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90" disabled={testRunning} onClick={() => void runTest()}>
+              {testRunning ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Play className="size-4" aria-hidden />} Run test
+            </Button>
+            {testResult ? (
+              <div className="space-y-2" data-testid="tools-view-test-result">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className={cn('font-mono text-[11px]', testResult.status === 'completed' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' : 'border-rose-400/30 bg-rose-400/10 text-rose-300')}>
+                    {testResult.status}
+                  </Badge>
+                  <span className="font-mono text-xs text-muted-foreground">{fmtMs(testResult.durationMs)}</span>
+                  <span className="font-mono text-[10px] text-slate-500">{testResult.mode}</span>
+                </div>
+                {testResult.error ? (
+                  <p role="alert" className="break-words rounded-md border border-rose-400/30 bg-rose-400/5 px-3 py-2 font-mono text-xs text-rose-300">
+                    {testResult.error.code}: {testResult.error.message}
+                  </p>
+                ) : null}
+                {testResult.logs.length > 0 ? (
+                  <div className="glass-inset nextool-scroll max-h-32 overflow-y-auto rounded-md p-2.5">
+                    {testResult.logs.map((line, i) => (
+                      <p key={i} className="break-words font-mono text-[11px] leading-relaxed text-sky-100/70">{line}</p>
+                    ))}
+                  </div>
+                ) : null}
+                <div>
+                  <p className="mb-1"><Label className="text-[10px] uppercase tracking-wider text-sky-300/80">result</Label></p>
+                  <JsonTree value={testResult.result ?? null} maxHeight={260} />
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04]" onClick={() => setTestTarget(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirm (destructive op, §31) */}
+      <Dialog open={deleteCandidate !== null} onOpenChange={(open) => !open && setDeleteCandidate(null)}>
+        <DialogContent className="glass-strong sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-rose-300">Delete {deleteCandidate?.name}?</DialogTitle>
+            <DialogDescription>The tool is removed from the registry and stops being available to the CoreModule. This cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11" onClick={() => setDeleteCandidate(null)}>Cancel</Button>
+            <Button variant="destructive" className="min-h-11" disabled={deleteBusy} onClick={() => void doDelete()}>
+              {deleteBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Trash2 className="size-4" aria-hidden />} Delete tool
             </Button>
           </DialogFooter>
         </DialogContent>

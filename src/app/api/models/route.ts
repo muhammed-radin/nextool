@@ -4,7 +4,8 @@
 import { ok } from '@/lib/nexool/api-helpers';
 import { db } from '@/lib/db';
 import { getMetrics } from '@/lib/nexool/eventbus';
-import { CORE_MODULE_NAME, CORE_MODULE_VERSION } from '@/lib/nexool/version';
+import { CORE_MODULE_NAME, CORE_MODULE_VERSION, APP_VERSION } from '@/lib/nexool/version';
+import * as tf from '@tensorflow/tfjs';
 import type { ActiveEngineInfo, ModelPackageInfo } from '@/lib/nexool/types';
 
 export const runtime = 'nodejs';
@@ -21,7 +22,7 @@ export async function GET() {
     coreCalls: metrics.coreCalls,
     avgLatencyMs: metrics.coreCalls > 0 ? Math.round(metrics.totalCoreLatencyMs / metrics.coreCalls) : 0,
     lastDecisionAt: metrics.lastDecisionAt,
-    notes: 'TensorFlow.js runtime is not installed in this environment. The LLM CoreModule is the active engine; the heuristic-fallback matcher covers SDK outages.',
+    notes: `v1.0.2: TensorFlow.js ${tf.version.tfjs ?? ''} is installed (CPU backend) — real training, benchmark inference and native model packaging are available. The LLM CoreModule remains the active decision engine; the heuristic-fallback matcher covers SDK outages.`,
   };
 
   const rows = await db.modelRecord.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
@@ -44,6 +45,7 @@ export async function GET() {
   return ok({
     engine,
     packages,
-    adapters: { tfjs: false, nextoolManifest: true, parquet: false },
+    adapters: { tfjs: true, nextoolManifest: true, parquet: false },
+    appVersion: APP_VERSION,
   });
 }

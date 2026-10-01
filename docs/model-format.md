@@ -4,18 +4,92 @@ category: AI Core
 order: 3
 ---
 
-# Model Format — `.nextool` manifests
+# Model Format — packages, zips and manifests
 
-NexTool defines a manifest format for registering model packages. In v1.0.1 the manifest
-validator is fully implemented; the inference adapter that would *load weights* is not
-installed (no TensorFlow.js runtime in this environment). This page documents exactly
-what the validator accepts and how the underlying files relate to the standard TF.js
-format for future adapters.
+NexTool moves real model artifacts since v1.0.2 (`src/lib/nexool/training/model-package.ts`,
+built on `fflate`): trained classifiers are **exported** as downloadable zips and
+**imported** with a genuine TF.js compatibility check. The v1.0.1 `.nextool` manifest
+validator (`POST /api/models/load`) remains unchanged for metadata-only registration.
 
-## The `.nextool` manifest
+## Export layout 1 — native TFJS zip (`format=tfjs`)
+
+Exactly what `tf.loadLayersModel` consumes, plus a NexTool metadata sidecar:
+
+```
+model.zip
+├── model.json               ← { modelTopology, weightsManifest, format: "tfjs-layers-model", generatedBy: "NexTool Q1 v1.0.2" }
+├── group1-shard1of1.bin     ← raw weight payload (referenced by weightsManifest paths)
+└── metadata.json            ← ExportedModelMetadata (below)
+```
+
+Download name: `<packageName>-tfjs-v<version>.zip`.
+
+## Export layout 2 — `.nextool` package (`format=nextool`)
+
+The full NexTool package: manifest + embedded model + metadata:
+
+```
+core.nextool
+├── package.json             ← manifest: name, version, format "nextool-model-package",
+│                              applicationVersion, architecture, parameterCount, datasetVersion,
+│                              classes, vocabSize, finalMetrics, trainingConfig, tfjsCompatibility
+├── model/
+│   ├── model.json           ← { modelTopology, weightsManifest }
+│   └── group1-shard1of1.bin
+└── metadata.json            ← the same ExportedModelMetadata as above
+```
+
+Download name: `<packageName>-v<version>.nextool` (served as
+`application/octet-stream`).
+
+### metadata.json fields (both layouts)
+
+| Field | Content |
+| --- | --- |
+| `packageName` | ModelRecord name |
+| `applicationVersion` | `1.0.2` (the exporting app) |
+| `modelVersion` | ModelRecord version (e.g. `tc-…` for trained classifiers) |
+| `architecture` | `tfjs-sequential` / `tfjs-model` (from topology `className`) or the manifest's architecture string |
+| `parameterCount` | Sum of weight-shape products |
+| `datasetVersion` | From the training manifest lineage; `null` when absent — never invented |
+| `createdAt` | ISO export timestamp |
+| `tfjsCompatibility` | TF.js version that produced the topology |
+| `packageFormat` | `tfjs-zip` or `nextool` |
+| `notes` | ModelRecord note, when present |
+
+**Exportability rule:** only models whose manifest contains topology + weights are
+exportable — trained classifiers (`tfjs-trained-classifier`) and native imports
+(`tfjs-native-import`). A bare manifest (metadata only) fails with an explicit error.
+
+## Import (`POST /api/models/import`, multipart `file`)
+
+| Input | Recognition | Behavior |
+| --- | --- | --- |
+| `.nextool` zip | `package.json` + `model/` entries | Topology + first weight shard extracted, format `tfjs-trained-classifier`, package.json fields (classes/vocabSize/datasetVersion/…) preserved. |
+| native tfjs `.zip` | root `model.json` + shard bins | Format `tfjs-native-import`, version `imported`, warning that benchmark compatibility depends on the architecture. |
+| bare `.json` manifest | file extension | v1.0.1 compatibility path — requires only `name` + `version`, registered **with the warning** *"Bare manifest imported — contains no native TFJS weights, not runnable for benchmarks."* |
+| anything else | — | Rejected: *"Unsupported file type — upload a .nextool, .zip or .json package."* |
+
+Safety and validation:
+
+- **Size limit 25 MiB** per package.
+- **No blind extraction:** zip entry names are filtered against path traversal
+  (`^[\w./-]+$`, no leading `/`, no `..`); archives without readable entries are
+  rejected.
+- **Real compatibility check:** binary packages are loaded via
+  `tf.loadLayersModel(tf.io.fromMemory(...))` *before* registration; a package whose
+  topology/weights do not load is rejected with the TF.js error surfaced verbatim
+  (*"Package failed TFJS compatibility validation: …"*).
+- Response 201: `{ name, version, format, modelRecordId, runnable, metadata,
+  warnings }`. The registered `ModelRecord` stores the parsed package as its manifest.
+
+The same import logic is exposed in the Models view (**Import model** dialog) and via
+`nextool model import <file>` (see [CLI](../operations/cli.md)).
+
+## The `.nextool` manifest (metadata-only path, unchanged)
 
 A JSON object posted to `POST /api/models/load` as `{ "manifest": { … } }`. Validation
-lives in `src/app/api/models/load/route.ts` and checks **all five required fields**:
+checks **all five required fields**:
 
 | Field | Type | Rule | Failure message |
 | --- | --- | --- | --- |
@@ -25,83 +99,24 @@ lives in `src/app/api/models/load/route.ts` and checks **all five required field
 | `architecture` | object | any non-null, non-array object | `architecture must be an object` |
 | `compatibility.runtime` | string | non-empty string | `compatibility.runtime must be a string` |
 
-Any violation → HTTP 400:
-
-```json
-{ "ok": false, "error": { "code": "INVALID_MANIFEST",
-  "message": "Invalid .nextool manifest: format must be \"nextool\"; …" } }
-```
-
-### Example manifest
-
-```json
-{
-  "name": "tool-matcher-mini",
-  "version": "0.1.0",
-  "format": "nextool",
-  "architecture": {
-    "type": "layers",
-    "inputs": [{ "name": "objective_tokens", "shape": [64] }],
-    "outputs": [{ "name": "tool_logits", "shape": [16] }]
-  },
-  "compatibility": { "runtime": "tfjs-node >= 4.0" },
-  "labels": { "tools": ["server.health", "server.restart", "…"] }
-}
-```
-
-Extra fields (like `labels`) are preserved verbatim — the manifest is stored as-is.
-
-## What happens on success
-
-A `ModelRecord` row is created:
-
-| Column | Value |
-| --- | --- |
-| `name` / `version` | from the manifest |
-| `format` | `nextool-manifest` |
-| `status` | `registered` |
-| `manifest` | full JSON, verbatim |
-| `sizeBytes` | byte length of the serialized manifest |
-| `note` | "Registered. Inference adapter not active in this environment — active engine: llm-core." |
-
-Response: HTTP 201 with the `ModelPackageInfo` DTO. **Registration is not activation** —
-the active engine remains llm-core, and the note says so. Rejected/invalid manifests are
-never persisted. `status` values across the system: `registered | active | rejected`.
-
-## model.json + .bin — the standard TF.js layout
-
-The `.nextool` package is designed to wrap the standard TensorFlow.js model directory
-format, so a future adapter can load it without conversion:
-
-```
-mypackage.nextool/          (conceptual bundle)
-├── manifest.nextool.json   ← the manifest documented above
-├── model.json              ← TFJS graph/layers model topology + weightsManifest
-└── group1-shard1of1.bin    ← weight shards (binary, referenced by model.json)
-```
-
-- `model.json` describes the model architecture (`modelTopology`) and lists weight
-  shards with byte offsets — this is the standard TF.js serialization.
-- `.bin` files are the raw weight payloads.
-- In a future adapter, loading would be: validate manifest → resolve compatibility
-  (`compatibility.runtime`) → `tf.loadLayersModel(url/model.json)` → warm up → flip the
-  engine status to `active`.
-
-**Status today: no `tf` runtime is installed; `model.json`/`.bin` handling is specified
-here for adapter authors, not executable in v1.0.1.**
+Any violation → HTTP 400 `INVALID_MANIFEST` listing every failed rule. Success creates
+a `ModelRecord` with `format: 'nextool-manifest'`, `status: 'registered'` and a note
+that it carries no weights. Extra fields are preserved verbatim. Rejected manifests are
+never persisted.
 
 ## Registry & API surface
 
 | Item | Detail |
 | --- | --- |
-| Storage | `ModelRecord` table (SQLite): name, version, format, status, manifest JSON, sizeBytes, note, createdAt. |
-| `GET /api/models` | `engine` (ActiveEngineInfo) + `packages` (max 100, newest first, manifest parsed) + `adapters { tfjs: false, nextoolManifest: true, parquet: false }`. |
-| `POST /api/models/load` | Validation + registration as above. |
-| Console | Models view: load dialog accepts a pasted JSON manifest or a file; 400 reasons surface directly in the UI. |
+| Storage | `ModelRecord` table (SQLite): id, name, version, format, status, manifest JSON, sizeBytes, note, createdAt. Formats in practice: `nextool-manifest`, `tfjs-trained-classifier`, `tfjs-native-import`. |
+| `GET /api/models` | `engine` (ActiveEngineInfo) + `packages` (max 100, newest first) + `adapters { tfjs: true, nextoolManifest: true, parquet: false }`. |
+| `GET /api/models/export` | zip download (see above). |
+| `POST /api/models/import` | multipart import (see above). |
+| `POST /api/models/load` | metadata-only manifest registration. |
 
 ## Versioning rules of thumb
 
-- `version` is per-package semver-like; re-loading the same name+version creates a new
-  record (no dedup) — keep versions distinct to keep the package list meaningful.
+- Trained checkpoint versions look like `tc-<id>`; re-importing/re-training creates new
+  records (no dedup) — keep versions distinct to keep the package list meaningful.
 - The CoreModule's own version (llm-core `1.0.0`) is tracked separately in
   `version.ts` and is unaffected by registered packages.

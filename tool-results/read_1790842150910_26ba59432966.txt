@@ -1,0 +1,573 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→/**
+     4→     4→ * Task Preview (spec §52) — dedicated per-task screen: live detail polling,
+     5→     5→ * control surface (stop / send event / send feedback), plan, executions,
+     6→     6→ * state, context, event timeline and the runtime terminal (§53).
+     7→     7→ * v1.0.1: blue glass surfaces; <lg renders a scrollable tab row (Overview ·
+     8→     8→ * Timeline · Tools · Internals) so 320–430px screens never force wide tables,
+     9→     9→ * lg+ keeps the rich multi-column layout.
+    10→    10→ */
+    11→    11→
+    12→    12→import { useCallback, useEffect, useMemo, useState } from 'react';
+    13→    13→import { toast } from 'sonner';
+    14→    14→import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+    15→    15→import { Badge } from '@/components/ui/badge';
+    16→    16→import { Button } from '@/components/ui/button';
+    17→    17→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+    18→    18→import { Input } from '@/components/ui/input';
+    19→    19→import { Label } from '@/components/ui/label';
+    20→    20→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+    21→    21→import { Skeleton } from '@/components/ui/skeleton';
+    22→    22→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+    23→    23→import { Textarea } from '@/components/ui/textarea';
+    24→    24→import { cn } from '@/lib/utils';
+    25→    25→import { useNexoolStream } from '@/hooks/use-nexool-stream';
+    26→    26→import { useConsoleStore } from '../console-store';
+    27→    27→import { ApiClientError, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
+    28→    28→import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '@/lib/nexool/types';
+    29→    29→import type { TaskDetail } from '@/lib/nexool/api-contract';
+    30→    30→import { RuntimeTerminal } from '../terminal';
+    31→    31→import { EmptyState, ErrorCard, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, fmtClock, fmtMs } from '../ui-bits';
+    32→    32→import {
+    33→    33→  Ban, Braces, CheckCircle2, Circle, CornerDownRight, Flag, Layers, Loader2, MessageSquareWarning, Play, Radio, Send, Square, Wrench, XCircle,
+    34→    34→} from 'lucide-react';
+    35→    35→
+    36→    36→const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting']);
+    37→    37→
+    38→    38→function PlanIcon({ step }: { step: PlanStep }) {
+    39→    39→  if (step.status === 'in_progress') return <Loader2 className="size-3.5 animate-spin text-sky-300" aria-hidden />;
+    40→    40→  if (step.status === 'completed') return <CheckCircle2 className="size-3.5 text-emerald-400" aria-hidden />;
+    41→    41→  if (step.status === 'failed') return <XCircle className="size-3.5 text-rose-400" aria-hidden />;
+    42→    42→  return <Circle className="size-3.5 text-slate-600" aria-hidden />;
+    43→    43→}
+    44→    44→
+    45→    45→function ExecutionsPanel({ executions }: { executions: ToolExecution[] | null }) {
+    46→    46→  if (executions === null) {
+    47→    47→    return <div className="space-y-2">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div>;
+    48→    48→  }
+    49→    49→  if (executions.length === 0) return <EmptyState title="No tool calls yet" hint="Executions appear as the CoreModule dispatches tools." />;
+    50→    50→  return (
+    51→    51→    <div className="space-y-2">
+    52→    52→      {executions.map((ex) => (
+    53→    53→        <div key={ex.executionId} className="glass-card rounded-md px-3 py-2">
+    54→    54→          <div className="flex flex-wrap items-center gap-2">
+    55→    55→            <StatusChip status={ex.status} />
+    56→    56→            <span className="font-mono text-xs font-semibold text-foreground">{ex.tool}</span>
+    57→    57→            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+    58→    58→              {ex.durationMs !== undefined ? fmtMs(ex.durationMs) : 'running…'} · {fmtClock(ex.startedAt)}
+    59→    59→            </span>
+    60→    60→          </div>
+    61→    61→          {ex.error ? <p className="mt-1 font-mono text-[11px] text-rose-300">{ex.error.code}: {ex.error.message}</p> : null}
+    62→    62→          <Accordion type="single" collapsible className="mt-1">
+    63→    63→            <AccordionItem value="io" className="border-none">
+    64→    64→              <AccordionTrigger className="py-1 text-[11px] text-muted-foreground hover:text-sky-300 hover:no-underline">params / result</AccordionTrigger>
+    65→    65→              <AccordionContent className="space-y-2 pb-1">
+    66→    66→                <div>
+    67→    67→                  <p className="mb-1"><TechLabel className="text-[9px]">params</TechLabel></p>
+    68→    68→                  <JsonBlock value={ex.params ?? {}} maxHeight="max-h-40" />
+    69→    69→                </div>
+    70→    70→                <div>
+    71→    71→                  <p className="mb-1"><TechLabel className="text-[9px]">result</TechLabel></p>
+    72→    72→                  <JsonBlock value={ex.result ?? null} maxHeight="max-h-40" />
+    73→    73→                </div>
+    74→    74→              </AccordionContent>
+    75→    75→            </AccordionItem>
+    76→    76→          </Accordion>
+    77→    77→        </div>
+    78→    78→      ))}
+    79→    79→    </div>
+    80→    80→  );
+    81→    81→}
+    82→    82→
+    83→    83→function ContextPanel({ title, value, count }: { title: string; value: unknown; count?: number }) {
+    84→    84→  return (
+    85→    85→    <div className="glass-card rounded-md p-3">
+    86→    86→      <p className="mb-1.5 flex items-center justify-between gap-2">
+    87→    87→        <TechLabel className="text-[9px]">{title}</TechLabel>
+    88→    88→        {count !== undefined ? <Badge variant="outline" className="border-white/[0.09] px-1.5 py-0 font-mono text-[10px] text-muted-foreground">{count}</Badge> : null}
+    89→    89→      </p>
+    90→    90→      {value === null || value === undefined ? (
+    91→    91→        <p className="text-[11px] text-muted-foreground/60">empty</p>
+    92→    92→      ) : (
+    93→    93→        <JsonBlock value={value} maxHeight="max-h-44" className="p-2" />
+    94→    94→      )}
+    95→    95→    </div>
+    96→    96→  );
+    97→    97→}
+    98→    98→
+    99→    99→export default function TaskPreviewView({ taskId }: { taskId: string }) {
+   100→   100→  const setActiveView = useConsoleStore((s) => s.setActiveView);
+   101→   101→
+   102→   102→  const [detail, setDetail] = useState<TaskDetail | null>(null);
+   103→   103→  const [detailError, setDetailError] = useState<string | null>(null);
+   104→   104→  const [executions, setExecutions] = useState<ToolExecution[] | null>(null);
+   105→   105→  const [context, setContext] = useState<ContextComposition | null>(null);
+   106→   106→  const [backfill, setBackfill] = useState<NexToolEvent[]>([]);
+   107→   107→
+   108→   108→  const [stopOpen, setStopOpen] = useState(false);
+   109→   109→  const [stopping, setStopping] = useState(false);
+   110→   110→  const [eventOpen, setEventOpen] = useState(false);
+   111→   111→  const [eventType, setEventType] = useState('user.message');
+   112→   112→  const [eventPayload, setEventPayload] = useState('{}');
+   113→   113→  const [feedbackOpen, setFeedbackOpen] = useState(false);
+   114→   114→  const [feedbackMsg, setFeedbackMsg] = useState('Incorrect decision.');
+   115→   115→  const [feedbackAction, setFeedbackAction] = useState('');
+   116→   116→  const [busy, setBusy] = useState(false);
+   117→   117→
+   118→   118→  const { events: streamEvents } = useNexoolStream({ taskId, max: 300 });
+   119→   119→
+   120→   120→  // Backfill historical events from REST, then merge with live SSE (dedupe by id).
+   121→   121→  useEffect(() => {
+   122→   122→    let alive = true;
+   123→   123→    getTaskEvents(taskId, { limit: 200 })
+   124→   124→      .then((d) => {
+   125→   125→        if (alive) setBackfill(d);
+   126→   126→      })
+   127→   127→      .catch(() => {
+   128→   128→        /* honest: timeline will simply show live events only */
+   129→   129→      });
+   130→   130→    return () => {
+   131→   131→      alive = false;
+   132→   132→    };
+   133→   133→  }, [taskId]);
+   134→   134→
+   135→   135→  const taskEvents = useMemo(() => {
+   136→   136→    const byId = new Map<string, NexToolEvent>();
+   137→   137→    for (const ev of [...backfill, ...streamEvents]) byId.set(ev.id, ev);
+   138→   138→    return [...byId.values()].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+   139→   139→  }, [backfill, streamEvents]);
+   140→   140→
+   141→   141→  const isActive = detail ? ACTIVE_STATUSES.has(detail.status) : true;
+   142→   142→
+   143→   143→  const loadDetail = useCallback(async () => {
+   144→   144→    try {
+   145→   145→      const d = await getTaskDetail(taskId);
+   146→   146→      setDetail(d);
+   147→   147→      setDetailError(null);
+   148→   148→    } catch (e) {
+   149→   149→      setDetailError(e instanceof ApiClientError ? e.message : 'Task unavailable');
+   150→   150→    }
+   151→   151→  }, [taskId]);
+   152→   152→
+   153→   153→  const loadSide = useCallback(async () => {
+   154→   154→    const [ex, ctx] = await Promise.allSettled([getTaskExecutions(taskId), getTaskContext(taskId)]);
+   155→   155→    if (ex.status === 'fulfilled') setExecutions(ex.value);
+   156→   156→    if (ctx.status === 'fulfilled') setContext(ctx.value);
+   157→   157→  }, [taskId]);
+   158→   158→
+   159→   159→  useEffect(() => {
+   160→   160→    void loadDetail();
+   161→   161→    void loadSide();
+   162→   162→  }, [loadDetail, loadSide]);
+   163→   163→
+   164→   164→  useEffect(() => {
+   165→   165→    if (!isActive) return;
+   166→   166→    const t = setInterval(() => {
+   167→   167→      void loadDetail();
+   168→   168→      void loadSide();
+   169→   169→    }, 2500);
+   170→   170→    return () => clearInterval(t);
+   171→   171→  }, [isActive, loadDetail, loadSide]);
+   172→   172→
+   173→   173→  const doStop = async () => {
+   174→   174→    setStopping(true);
+   175→   175→    try {
+   176→   176→      await stopTask(taskId);
+   177→   177→      toast.success('Stop signal sent', { description: `Task #${taskId.slice(0, 8)} cancellation requested.` });
+   178→   178→      setStopOpen(false);
+   179→   179→      void loadDetail();
+   180→   180→    } catch (e) {
+   181→   181→      toast.error('Stop failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   182→   182→    } finally {
+   183→   183→      setStopping(false);
+   184→   184→    }
+   185→   185→  };
+   186→   186→
+   187→   187→  const doSendEvent = async () => {
+   188→   188→    let payload: unknown;
+   189→   189→    try {
+   190→   190→      payload = eventPayload.trim() ? JSON.parse(eventPayload) : {};
+   191→   191→    } catch {
+   192→   192→      toast.error('Invalid JSON payload');
+   193→   193→      return;
+   194→   194→    }
+   195→   195→    setBusy(true);
+   196→   196→    try {
+   197→   197→      await sendTaskEvent(taskId, { type: eventType, payload: payload as Record<string, unknown> });
+   198→   198→      toast.success('Event injected', { description: `${eventType} → task #${taskId.slice(0, 8)}` });
+   199→   199→      setEventOpen(false);
+   200→   200→    } catch (e) {
+   201→   201→      toast.error('Event injection failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   202→   202→    } finally {
+   203→   203→      setBusy(false);
+   204→   204→    }
+   205→   205→  };
+   206→   206→
+   207→   207→  const doSendFeedback = async () => {
+   208→   208→    if (!feedbackMsg.trim()) {
+   209→   209→      toast.error('Feedback message required');
+   210→   210→      return;
+   211→   211→    }
+   212→   212→    setBusy(true);
+   213→   213→    try {
+   214→   214→      await sendTaskFeedback(taskId, {
+   215→   215→        message: feedbackMsg.trim(),
+   216→   216→        ...(feedbackAction.trim() ? { correctAction: feedbackAction.trim() } : {}),
+   217→   217→      });
+   218→   218→      toast.success('Feedback delivered', { description: 'The runtime emitted a user.feedback event.' });
+   219→   219→      setFeedbackOpen(false);
+   220→   220→    } catch (e) {
+   221→   221→      toast.error('Feedback failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   222→   222→    } finally {
+   223→   223→      setBusy(false);
+   224→   224→    }
+   225→   225→  };
+   226→   226→
+   227→   227→  if (detailError && detail === null) {
+   228→   228→    return (
+   229→   229→      <div className="space-y-4">
+   230→   230→        <Button variant="ghost" size="sm" className="min-h-11 text-muted-foreground hover:text-foreground" onClick={() => setActiveView('dashboard')}>
+   231→   231→          ← Back to dashboard
+   232→   232→        </Button>
+   233→   233→        <ErrorCard title="Task unavailable" message={detailError} onRetry={loadDetail} />
+   234→   234→      </div>
+   235→   235→    );
+   236→   236→  }
+   237→   237→
+   238→   238→  if (detail === null) {
+   239→   239→    return (
+   240→   240→      <div className="space-y-4">
+   241→   241→        <Skeleton className="h-28 w-full" />
+   242→   242→        <div className="grid gap-4 lg:grid-cols-2">
+   243→   243→          <Skeleton className="h-40 w-full" />
+   244→   244→          <Skeleton className="h-40 w-full" />
+   245→   245→        </div>
+   246→   246→      </div>
+   247→   247→    );
+   248→   248→  }
+   249→   249→
+   250→   250→  const state = detail.state;
+   251→   251→  const duration = detail.durationMs ?? (detail.startedAt ? Date.now() - new Date(detail.startedAt).getTime() : undefined);
+   252→   252→  const planSteps = detail.plan ?? state?.plan ?? [];
+   253→   253→
+   254→   254→  // ---- shared section fragments (rendered in mobile tabs AND desktop columns) ----
+   255→   255→
+   256→   256→  const goalCard = (
+   257→   257→    <section aria-label="Current goal" className="glass-card rounded-lg p-4">
+   258→   258→      <SectionTitle icon={<Flag className="size-4 text-sky-300" aria-hidden />} title="Current goal" />
+   259→   259→      <p className="mt-2 text-sm text-foreground/90">{state?.goal || '—'}</p>
+   260→   260→      <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+   261→   261→        iteration {state?.iterationCount ?? 0} · tool calls {state?.toolCallCount ?? 0}
+   262→   262→      </p>
+   263→   263→    </section>
+   264→   264→  );
+   265→   265→
+   266→   266→  const subgoalCard = (
+   267→   267→    <section aria-label="Active subgoal" className="glass-card rounded-lg p-4">
+   268→   268→      <SectionTitle icon={<CornerDownRight className="size-4 text-sky-300" aria-hidden />} title="Active subgoal" />
+   269→   269→      {state?.activeSubgoal ? (
+   270→   270→        <>
+   271→   271→          <p className="mt-2 text-sm font-medium text-foreground">{state.activeSubgoal.title}</p>
+   272→   272→          <p className="mt-1 text-xs text-muted-foreground">{state.activeSubgoal.reason}</p>
+   273→   273→        </>
+   274→   274→      ) : (
+   275→   275→        <p className="mt-2 text-xs text-muted-foreground/70">No active subgoal — {state?.subgoals?.length ?? 0} subgoal(s) so far.</p>
+   276→   276→      )}
+   277→   277→    </section>
+   278→   278→  );
+   279→   279→
+   280→   280→  const planSection = (
+   281→   281→    <section aria-label="Plan" className="glass-panel rounded-lg p-4">
+   282→   282→      <SectionTitle icon={<Play className="size-4 text-sky-300" aria-hidden />} title="Plan" desc="Steps produced by the planner." />
+   283→   283→      <div className="mt-3">
+   284→   284→        {planSteps.length === 0 ? (
+   285→   285→          <EmptyState title="No plan yet" hint="The planner publishes steps once the task starts executing." />
+   286→   286→        ) : (
+   287→   287→          <ol className="nextool-scroll max-h-64 space-y-1.5 overflow-y-auto pr-1">
+   288→   288→            {planSteps.map((step) => (
+   289→   289→              <li key={step.id} className="glass-card flex items-start gap-2 rounded-md px-3 py-2">
+   290→   290→                <span className="mt-0.5"><PlanIcon step={step} /></span>
+   291→   291→                <span className="min-w-0 flex-1">
+   292→   292→                  <span className="block text-xs text-foreground/90">{step.title}</span>
+   293→   293→                  {step.detail ? <span className="block text-[11px] text-muted-foreground">{step.detail}</span> : null}
+   294→   294→                </span>
+   295→   295→                <Badge variant="outline" className="border-white/[0.09] font-mono text-[9px] uppercase text-muted-foreground">{step.kind}</Badge>
+   296→   296→              </li>
+   297→   297→            ))}
+   298→   298→          </ol>
+   299→   299→        )}
+   300→   300→      </div>
+   301→   301→    </section>
+   302→   302→  );
+   303→   303→
+   304→   304→  const toolsSection = (
+   305→   305→    <section aria-label="Tool calls" className="glass-panel rounded-lg p-4">
+   306→   306→      <SectionTitle icon={<Wrench className="size-4 text-sky-300" aria-hidden />} title="Tool calls" desc="Executions with params and results." />
+   307→   307→      <div className="mt-3"><ExecutionsPanel executions={executions} /></div>
+   308→   308→    </section>
+   309→   309→  );
+   310→   310→
+   311→   311→  const stateSection = (
+   312→   312→    <section aria-label="Task state" className="glass-panel rounded-lg p-4">
+   313→   313→      <SectionTitle icon={<Braces className="size-4 text-sky-300" aria-hidden />} title="State" desc="MainState snapshot (live JSON)." />
+   314→   314→      <div className="mt-3">
+   315→   315→        <JsonBlock value={state ?? {}} maxHeight="max-h-80" />
+   316→   316→      </div>
+   317→   317→    </section>
+   318→   318→  );
+   319→   319→
+   320→   320→  const contextSection = (
+   321→   321→    <section aria-label="Context composition" className="glass-panel rounded-lg p-4">
+   322→   322→      <SectionTitle icon={<Layers className="size-4 text-sky-300" aria-hidden />} title="Context" desc="Previous + delta + observation + memory + history (assembled by the runtime)." />
+   323→   323→      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+   324→   324→        <ContextPanel title="previous context" value={context?.previousContext ?? null} />
+   325→   325→        <ContextPanel title="delta" value={context?.delta ?? null} />
+   326→   326→        <ContextPanel title="new observation" value={context?.observation ?? null} />
+   327→   327→        <ContextPanel title="memory refs" value={context?.memory ?? null} count={context?.memory?.length} />
+   328→   328→        <ContextPanel title="history refs" value={context?.history ?? null} count={context?.history?.length} />
+   329→   329→        <div className="glass-card rounded-md p-3">
+   330→   330→          <p className="mb-1.5"><TechLabel className="text-[9px]">assembled at</TechLabel></p>
+   331→   331→          <p className="font-mono text-xs text-foreground/90">{context ? <TimeAgo iso={context.assembledAt} /> : '—'}</p>
+   332→   332→        </div>
+   333→   333→      </div>
+   334→   334→    </section>
+   335→   335→  );
+   336→   336→
+   337→   337→  const timelineSection = (
+   338→   338→    <section aria-label="Event timeline" className="glass-panel rounded-lg p-4">
+   339→   339→      <SectionTitle icon={<Radio className="size-4 text-sky-300" aria-hidden />} title="Events timeline" desc="This task's events — REST backfill + live stream (newest last)." />
+   340→   340→      <div className="mt-3">
+   341→   341→        {taskEvents.length === 0 ? (
+   342→   342→          <EmptyState title="No events for this task yet" hint="Runtime events appear here as the task executes." />
+   343→   343→        ) : (
+   344→   344→          <ol className="nextool-scroll relative max-h-96 space-y-2 overflow-y-auto border-l border-white/[0.08] pl-4 pr-1">
+   345→   345→            {taskEvents.map((ev) => (
+   346→   346→              <li key={ev.id} className="relative">
+   347→   347→                <span
+   348→   348→                  aria-hidden
+   349→   349→                  className={cn('absolute -left-[21px] top-1.5 size-2 rounded-full ring-2 ring-card', SOURCE_COLORS[ev.source] ?? 'bg-slate-600')}
+   350→   350→                />
+   351→   351→                <div className="flex flex-wrap items-center gap-1.5">
+   352→   352→                  <span className="font-mono text-[10px] text-muted-foreground">[{fmtClock(ev.createdAt)}]</span>
+   353→   353→                  <span className="rounded border border-white/[0.09] px-1 font-mono text-[9px] uppercase text-slate-300">{ev.source}</span>
+   354→   354→                  <span className="rounded border border-white/[0.09] px-1 font-mono text-[9px] text-cyan-300/90">{ev.type}</span>
+   355→   355→                  <span className="min-w-0 flex-1 truncate text-xs text-foreground/85">{ev.message}</span>
+   356→   356→                </div>
+   357→   357→                {ev.data ? <JsonBlock value={ev.data} maxHeight="max-h-32" className="mt-1" /> : null}
+   358→   358→              </li>
+   359→   359→            ))}
+   360→   360→          </ol>
+   361→   361→        )}
+   362→   362→      </div>
+   363→   363→    </section>
+   364→   364→  );
+   365→   365→
+   366→   366→  const terminal = <RuntimeTerminal taskId={taskId} events={taskEvents} />;
+   367→   367→
+   368→   368→  return (
+   369→   369→    <div className="space-y-4">
+   370→   370→      <Button variant="ghost" size="sm" className="min-h-11 text-muted-foreground hover:text-foreground" onClick={() => setActiveView('dashboard')}>
+   371→   371→        ← Back to dashboard
+   372→   372→      </Button>
+   373→   373→
+   374→   374→      {/* Header card — task, status, controls (always visible) */}
+   375→   375→      <section aria-label="Task overview" className="glass-panel rounded-lg p-4 md:p-6">
+   376→   376→        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+   377→   377→          <div className="min-w-0 flex-1">
+   378→   378→            <p className="break-all font-mono text-xs text-foreground/90">{detail.request}</p>
+   379→   379→            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+   380→   380→              <StatusChip status={detail.status} />
+   381→   381→              <Badge variant="outline" className={cn('font-mono text-[10px]', detail.mode === 'live' ? 'border-sky-400/30 bg-sky-400/10 text-sky-300' : 'border-white/[0.09] text-muted-foreground')}>
+   382→   382→                {detail.mode}
+   383→   383→              </Badge>
+   384→   384→              <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">L{detail.reasoningLevel}</Badge>
+   385→   385→              {detail.sessionId ? <span className="font-mono text-[10px] text-muted-foreground">session {detail.sessionId.slice(0, 12)}</span> : null}
+   386→   386→              <span className="font-mono text-[10px] text-muted-foreground">#{detail.id.slice(0, 8)}</span>
+   387→   387→            </div>
+   388→   388→            <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
+   389→   389→              {detail.steps} steps · {detail.toolCalls} tools{duration !== undefined ? ` · ${fmtMs(duration)}` : ''}
+   390→   390→            </p>
+   391→   391→          </div>
+   392→   392→          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+   393→   393→            <Button
+   394→   394→              variant="outline"
+   395→   395→              size="sm"
+   396→   396→              className="min-h-11 justify-center border-white/[0.09] bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]"
+   397→   397→              onClick={() => setEventOpen(true)}
+   398→   398→            >
+   399→   399→              <Send className="size-3.5" aria-hidden /> Send event
+   400→   400→            </Button>
+   401→   401→            <Button
+   402→   402→              variant="outline"
+   403→   403→              size="sm"
+   404→   404→              className="min-h-11 justify-center border-white/[0.09] bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]"
+   405→   405→              onClick={() => setFeedbackOpen(true)}
+   406→   406→            >
+   407→   407→              <MessageSquareWarning className="size-3.5" aria-hidden /> Feedback
+   408→   408→            </Button>
+   409→   409→            {ACTIVE_STATUSES.has(detail.status) ? (
+   410→   410→              <Button
+   411→   411→                variant="outline"
+   412→   412→                size="sm"
+   413→   413→                className="col-span-2 min-h-11 justify-center border-rose-500/40 text-rose-300 hover:bg-rose-500/10 sm:col-span-1"
+   414→   414→                onClick={() => setStopOpen(true)}
+   415→   415→              >
+   416→   416→                <Square className="size-3.5" aria-hidden /> Stop task
+   417→   417→              </Button>
+   418→   418→            ) : null}
+   419→   419→          </div>
+   420→   420→        </div>
+   421→   421→        {detail.statusDetail ? <p className="mt-2 text-xs text-muted-foreground">{detail.statusDetail}</p> : null}
+   422→   422→        {detail.error ? <p className="mt-2 font-mono text-xs text-rose-300">{detail.error.code} [{detail.error.stage}]: {detail.error.message}</p> : null}
+   423→   423→      </section>
+   424→   424→
+   425→   425→      {/* Mobile: segmented tabs — Overview · Timeline · Tools · Internals */}
+   426→   426→      <div className="lg:hidden">
+   427→   427→        <Tabs defaultValue="overview" className="gap-3">
+   428→   428→          <TabsList className="glass-card h-auto w-full justify-start gap-1 overflow-x-auto rounded-lg p-1 nextool-scroll" aria-label="Task sections">
+   429→   429→            <TabsTrigger
+   430→   430→              value="overview"
+   431→   431→              className="flex-none min-h-9 px-3 text-xs data-[state=active]:bg-primary-gradient-soft data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-sky-400/25 dark:data-[state=active]:text-sky-100"
+   432→   432→            >
+   433→   433→              Overview
+   434→   434→            </TabsTrigger>
+   435→   435→            <TabsTrigger
+   436→   436→              value="timeline"
+   437→   437→              className="flex-none min-h-9 px-3 text-xs data-[state=active]:bg-primary-gradient-soft data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-sky-400/25 dark:data-[state=active]:text-sky-100"
+   438→   438→            >
+   439→   439→              Timeline
+   440→   440→            </TabsTrigger>
+   441→   441→            <TabsTrigger
+   442→   442→              value="tools"
+   443→   443→              className="flex-none min-h-9 px-3 text-xs data-[state=active]:bg-primary-gradient-soft data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-sky-400/25 dark:data-[state=active]:text-sky-100"
+   444→   444→            >
+   445→   445→              Tools
+   446→   446→            </TabsTrigger>
+   447→   447→            <TabsTrigger
+   448→   448→              value="internals"
+   449→   449→              className="flex-none min-h-9 px-3 text-xs data-[state=active]:bg-primary-gradient-soft data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-sky-400/25 dark:data-[state=active]:text-sky-100"
+   450→   450→            >
+   451→   451→              Internals
+   452→   452→            </TabsTrigger>
+   453→   453→          </TabsList>
+   454→   454→          <TabsContent value="overview" className="mt-3 space-y-4 outline-none">
+   455→   455→            {goalCard}
+   456→   456→            {subgoalCard}
+   457→   457→            {planSection}
+   458→   458→          </TabsContent>
+   459→   459→          <TabsContent value="timeline" className="mt-3 space-y-4 outline-none">
+   460→   460→            {timelineSection}
+   461→   461→            {terminal}
+   462→   462→          </TabsContent>
+   463→   463→          <TabsContent value="tools" className="mt-3 space-y-4 outline-none">
+   464→   464→            {toolsSection}
+   465→   465→          </TabsContent>
+   466→   466→          <TabsContent value="internals" className="mt-3 space-y-4 outline-none">
+   467→   467→            {stateSection}
+   468→   468→            {contextSection}
+   469→   469→          </TabsContent>
+   470→   470→        </Tabs>
+   471→   471→      </div>
+   472→   472→
+   473→   473→      {/* Desktop (lg+): rich multi-column layout */}
+   474→   474→      <div className="hidden space-y-4 lg:block">
+   475→   475→        <div className="grid gap-4 md:grid-cols-2">
+   476→   476→          {goalCard}
+   477→   477→          {subgoalCard}
+   478→   478→        </div>
+   479→   479→
+   480→   480→        {planSection}
+   481→   481→
+   482→   482→        <div className="grid gap-4 lg:grid-cols-2">
+   483→   483→          {toolsSection}
+   484→   484→          {stateSection}
+   485→   485→        </div>
+   486→   486→
+   487→   487→        {contextSection}
+   488→   488→
+   489→   489→        {timelineSection}
+   490→   490→
+   491→   491→        {terminal}
+   492→   492→      </div>
+   493→   493→
+   494→   494→      {/* Stop confirm dialog */}
+   495→   495→      <Dialog open={stopOpen} onOpenChange={setStopOpen}>
+   496→   496→        <DialogContent className="glass-strong sm:max-w-md">
+   497→   497→          <DialogHeader>
+   498→   498→            <DialogTitle className="flex items-center gap-2 text-rose-300"><Ban className="size-4" aria-hidden /> Stop task?</DialogTitle>
+   499→   499→            <DialogDescription>
+   500→   500→              Cancellation is sent to the runtime: active executions are aborted and the task terminates with status <code className="font-mono">stopped</code>. This cannot be undone.
+   501→   501→            </DialogDescription>
+   502→   502→          </DialogHeader>
+   503→   503→          <DialogFooter>
+   504→   504→            <Button variant="outline" className="min-h-11" onClick={() => setStopOpen(false)}>Cancel</Button>
+   505→   505→            <Button variant="destructive" className="min-h-11" disabled={stopping} onClick={() => void doStop()}>
+   506→   506→              {stopping ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Square className="size-4" aria-hidden />} Stop task
+   507→   507→            </Button>
+   508→   508→          </DialogFooter>
+   509→   509→        </DialogContent>
+   510→   510→      </Dialog>
+   511→   511→
+   512→   512→      {/* Send event dialog */}
+   513→   513→      <Dialog open={eventOpen} onOpenChange={setEventOpen}>
+   514→   514→        <DialogContent className="glass-strong sm:max-w-md">
+   515→   515→          <DialogHeader>
+   516→   516→            <DialogTitle>Send event to task</DialogTitle>
+   517→   517→            <DialogDescription>Injects a runtime event. <code className="font-mono">scheduled.force</code> wakes live-mode ticks immediately.</DialogDescription>
+   518→   518→          </DialogHeader>
+   519→   519→          <div className="space-y-3">
+   520→   520→            <div className="space-y-1.5">
+   521→   521→              <Label htmlFor="ev-type">Event type</Label>
+   522→   522→              <Select value={eventType} onValueChange={setEventType}>
+   523→   523→                <SelectTrigger id="ev-type" className="min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm"><SelectValue /></SelectTrigger>
+   524→   524→                <SelectContent className="glass-strong">
+   525→   525→                  <SelectItem value="user.message">user.message</SelectItem>
+   526→   526→                  <SelectItem value="environment.custom">environment.custom</SelectItem>
+   527→   527→                  <SelectItem value="scheduled.force">scheduled.force</SelectItem>
+   528→   528→                </SelectContent>
+   529→   529→              </Select>
+   530→   530→            </div>
+   531→   531→            <div className="space-y-1.5">
+   532→   532→              <Label htmlFor="ev-payload">Payload (JSON)</Label>
+   533→   533→              <Textarea id="ev-payload" value={eventPayload} onChange={(e) => setEventPayload(e.target.value)} rows={4} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" placeholder="{}" />
+   534→   534→            </div>
+   535→   535→          </div>
+   536→   536→          <DialogFooter>
+   537→   537→            <Button variant="outline" className="min-h-11" onClick={() => setEventOpen(false)}>Cancel</Button>
+   538→   538→            <Button className="min-h-11 bg-primary-gradient text-primary-foreground hover:opacity-90" disabled={busy} onClick={() => void doSendEvent()}>
+   539→   539→              {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Send className="size-4" aria-hidden />} Send
+   540→   540→            </Button>
+   541→   541→          </DialogFooter>
+   542→   542→        </DialogContent>
+   543→   543→      </Dialog>
+   544→   544→
+   545→   545→      {/* Feedback dialog (spec §60) */}
+   546→   546→      <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>
+   547→   547→        <DialogContent className="glass-strong sm:max-w-md">
+   548→   548→          <DialogHeader>
+   549→   549→            <DialogTitle className="flex items-center gap-2 text-amber-300"><MessageSquareWarning className="size-4" aria-hidden /> Send feedback</DialogTitle>
+   550→   550→            <DialogDescription>Tell the runtime a decision was wrong. It records a user.feedback event and adapts context.</DialogDescription>
+   551→   551→          </DialogHeader>
+   552→   552→          <div className="space-y-3">
+   553→   553→            <div className="space-y-1.5">
+   554→   554→              <Label htmlFor="fb-msg">What was incorrect?</Label>
+   555→   555→              <Textarea id="fb-msg" value={feedbackMsg} onChange={(e) => setFeedbackMsg(e.target.value)} rows={3} className="border-white/[0.09] bg-white/[0.04] text-sm" />
+   556→   556→            </div>
+   557→   557→            <div className="space-y-1.5">
+   558→   558→              <Label htmlFor="fb-action">Correct action <span className="text-muted-foreground">(optional)</span></Label>
+   559→   559→              <Input id="fb-action" value={feedbackAction} onChange={(e) => setFeedbackAction(e.target.value)} className="min-h-11 border-white/[0.09] bg-white/[0.04] text-sm" placeholder="e.g. restart api-01 before health check" />
+   560→   560→            </div>
+   561→   561→          </div>
+   562→   562→          <DialogFooter>
+   563→   563→            <Button variant="outline" className="min-h-11" onClick={() => setFeedbackOpen(false)}>Cancel</Button>
+   564→   564→            <Button className="min-h-11 bg-amber-500/90 text-slate-950 hover:bg-amber-400" disabled={busy} onClick={() => void doSendFeedback()}>
+   565→   565→              {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <MessageSquareWarning className="size-4" aria-hidden />} Send feedback
+   566→   566→            </Button>
+   567→   567→          </DialogFooter>
+   568→   568→        </DialogContent>
+   569→   569→      </Dialog>
+   570→   570→    </div>
+   571→   571→  );
+   572→   572→}
+   573→   573→

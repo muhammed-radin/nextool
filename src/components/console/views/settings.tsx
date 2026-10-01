@@ -9,7 +9,7 @@
  * glassmorphism panels, min-h-11 controls.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,12 +18,12 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
-import { ApiClientError, getSettings, updateSettings } from '@/lib/nexool/client';
+import { ApiClientError, activateIconPackage, discardIconPackage, getBranding, getSettings, updateSettings, uploadIconPackage, type IconUploadResult } from '@/lib/nexool/client';
 import type { NexToolSettings } from '@/lib/nexool/types';
 import { APP_NAME, APP_VERSION, RELEASE_NAME, CORE_MODULE_VERSION, CORE_MODULE_NAME } from '@/lib/nexool/version';
 import { useSystemStats } from '../providers';
 import { ErrorCard, SectionTitle, TechLabel, fmtMs } from '../ui-bits';
-import { AlertTriangle, Info, Loader2, Save, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ImageUp, Info, Loader2, Palette, Save, SlidersHorizontal, Trash2 } from 'lucide-react';
 
 const REASONING_CAPTIONS: Record<number, string> = {
   1: 'ultra-fast', 2: 'fast', 3: 'balanced', 4: 'thorough', 5: 'deep', 6: 'maximum',
@@ -77,6 +77,169 @@ function VersionRow({ label, version, note, highlight }: { label: string; versio
         {version}
       </span>
     </div>
+  );
+}
+
+/**
+ * v1.0.2 §57-61 — Branding / icon package management. Upload a ZIP of
+ * favicon.ico + sized PNG icons; the service validates structure + real PNG
+ * dimensions, stages the package and provides previews BEFORE activation.
+ */
+function BrandingSection() {
+  const [state, setState] = useState<{ manifest: Record<string, unknown> | null; active: Record<string, unknown> | null } | null>(null);
+  const [staged, setStaged] = useState<IconUploadResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const s = await getBranding();
+      setState({ manifest: s.manifest as unknown as Record<string, unknown>, active: s.active as unknown as Record<string, unknown> });
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiClientError ? e.message : 'Branding state unavailable');
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const onUpload = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const result = await uploadIconPackage(file);
+      setStaged(result);
+      toast.success('Icon package staged', {
+        description: `${result.accepted.length} asset(s) accepted${result.rejected.length ? `, ${result.rejected.length} rejected` : ''}. Preview below, then Apply.`,
+      });
+      void load();
+    } catch (e) {
+      toast.error('Icon package rejected', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async () => {
+    if (!staged) return;
+    setBusy(true);
+    try {
+      await activateIconPackage(staged.packageId);
+      toast.success('Icons applied', { description: 'Favicon and app icons now point to the new package — reload to see them.' });
+      setStaged(null);
+      void load();
+    } catch (e) {
+      toast.error('Apply failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const discard = async () => {
+    setBusy(true);
+    try {
+      await discardIconPackage();
+      setStaged(null);
+      void load();
+      toast.success('Staged package discarded');
+    } catch (e) {
+      toast.error('Discard failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const active = state?.active as { packageId?: string; assets?: { file: string; width: number | null; height: number | null; bytes: number }[] } | null;
+
+  return (
+    <section aria-label="Branding and icons" className="glass-panel rounded-lg p-4 md:p-6">
+      <SectionTitle
+        icon={<Palette className="size-4 text-sky-300" aria-hidden />}
+        title="Branding & icons"
+        desc="Upload an icons ZIP (favicon.ico + icon-<size>.png + apple-touch-icon.png). Files are validated for structure, naming and real pixel dimensions."
+        right={active ? (
+          <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 font-mono text-[10px] text-emerald-300">
+            <CheckCircle2 className="size-3" aria-hidden /> active package
+          </Badge>
+        ) : null}
+      />
+      {error ? <div className="mt-3"><ErrorCard title="Branding unavailable" message={error} onRetry={load} /></div> : null}
+
+      <input ref={fileRef} type="file" accept=".zip" className="hidden" onChange={(e) => void onUpload(e.target.files?.[0])} aria-label="Choose icons ZIP" />
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <Button variant="outline" className="min-h-11 w-full border-dashed border-white/[0.15] bg-white/[0.04] sm:w-auto" onClick={() => fileRef.current?.click()} disabled={busy}>
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ImageUp className="size-4" aria-hidden />} Upload icons.zip…
+        </Button>
+        <p className="break-words text-[11px] text-muted-foreground">
+          Expected entries: <span className="font-mono">favicon.ico</span>, <span className="font-mono">icon-16..512.png</span>, <span className="font-mono">apple-touch-icon.png</span> (≤ 2 MiB/file).
+        </p>
+      </div>
+
+      {/* Preview before applying (§61) */}
+      {staged ? (
+        <div className="mt-4 space-y-3 rounded-lg border border-sky-400/25 bg-sky-400/[0.05] p-3" data-testid="icon-preview">
+          <TechLabel>preview — staged package (not yet applied)</TechLabel>
+          <div className="flex flex-wrap items-end gap-4">
+            {staged.accepted.filter((a) => a.width).map((a) => (
+              <div key={a.file} className="flex flex-col items-center gap-1">
+                <span
+                  role="img"
+                  aria-label={`Icon ${a.file}`}
+                  className="flex items-center justify-center rounded-md border border-white/10 bg-white/[0.05]"
+                  style={{ width: Math.min(a.width ?? 32, 64), height: Math.min(a.height ?? 32, 64) }}
+                >
+                  <img src={`/icons/${staged.packageId}/${a.file}`} alt={a.file} className="max-h-full max-w-full" />
+                </span>
+                <span className="font-mono text-[9px] text-muted-foreground">{a.width}×{a.height}</span>
+              </div>
+            ))}
+            <div className="flex flex-col items-center gap-1">
+              <span className="flex h-11 w-11 items-center justify-center rounded bg-white/[0.05] font-tech text-[8px] uppercase text-slate-300">ico</span>
+              <span className="font-mono text-[9px] text-muted-foreground">favicon.ico</span>
+            </div>
+          </div>
+          {staged.rejected.length > 0 ? (
+            <div className="rounded-md border border-amber-400/30 bg-amber-400/[0.06] p-2">
+              <p className="text-[11px] font-medium text-amber-300">Rejected entries ({staged.rejected.length})</p>
+              <ul className="mt-1 space-y-0.5">
+                {staged.rejected.slice(0, 6).map((r) => (
+                  <li key={r.file} className="break-words font-mono text-[10px] text-amber-200/80">{r.file}: {r.reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <Button className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90" onClick={() => void apply()} disabled={busy}>
+              <CheckCircle2 className="size-4" aria-hidden /> Apply icons
+            </Button>
+            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04] text-slate-200" onClick={() => void discard()} disabled={busy}>
+              <Trash2 className="size-4" aria-hidden /> Discard
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Active package summary */}
+      {active?.assets ? (
+        <div className="mt-3 glass-card rounded-md px-3 py-2.5">
+          <p className="font-mono text-[11px] text-muted-foreground">
+            package <span className="text-sky-300">{active.packageId}</span> · {active.assets.length} assets · served from <span className="font-mono">/icons/{active.packageId}/</span> via Next.js metadata
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {active.assets.map((a) => (
+              <Badge key={a.file} variant="outline" className="border-white/[0.09] font-mono text-[10px] text-slate-300">
+                {a.file}{a.width ? ` · ${a.width}×${a.height}` : ''}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      ) : state && !active ? (
+        <p className="mt-3 text-[11px] text-muted-foreground">No active icon package — default /logo.svg is used.</p>
+      ) : null}
+    </section>
   );
 }
 
@@ -198,6 +361,9 @@ export default function SettingsView() {
 
       {/* About / Version — application vs model vs dataset, honest when unknown */}
       <AboutSection />
+
+      {/* Branding / icon package management (v1.0.2 §57-61) */}
+      <BrandingSection />
 
       {error && server === null ? (
         <ErrorCard title="Settings unavailable" message={error} onRetry={load} />

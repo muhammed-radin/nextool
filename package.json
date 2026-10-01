@@ -1,7 +1,7 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.1",
-  "description": "NexTool Q1 v1.0.1 — specialized AI task-processing, planning, observation, automation and tool-execution runtime with operations console",
+  "version": "1.0.2",
+  "description": "NexTool Q1 v1.0.2 — specialized AI task-processing, planning, observation, automation and tool-execution runtime with operations console, Tool IDE, training, benchmarking and CLI",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
@@ -11,7 +11,8 @@
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "cli": "bun run scripts/nextool.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -19,6 +20,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^5.1.1",
     "@mdxeditor/editor": "^3.39.1",
+    "@monaco-editor/react": "^4.7.0",
     "@prisma/client": "^6.11.1",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",
@@ -50,14 +52,19 @@
     "@reactuses/core": "^6.0.5",
     "@tanstack/react-query": "^5.82.0",
     "@tanstack/react-table": "^8.21.3",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@uiw/react-json-view": "^2.0.0-alpha.34",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "commander": "^14.0.0",
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
+    "fflate": "^0.8.2",
     "framer-motion": "^12.23.2",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.525.0",
+    "monaco-editor": "^0.52.2",
     "next": "^16.1.1",
     "next-auth": "^4.24.11",
     "next-intl": "^4.3.4",
@@ -84,6 +91,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/bun": "^1.4.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "bun-types": "^1.3.4",
@@ -92,5 +100,8 @@
     "tailwindcss": "^4",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
+  },
+  "bin": {
+    "nextool": "./scripts/nextool.ts"
   }
 }

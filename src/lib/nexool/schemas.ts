@@ -123,7 +123,7 @@ export const toolDefinitionSchema = z
     description: nonEmpty(1000),
     purpose: z.string().trim().max(1000).optional(),
     category: nonEmpty(60),
-    environment: z.enum(['builtin', 'virtual-env', 'dynamic']),
+    environment: z.enum(['builtin', 'virtual-env', 'dynamic', 'js-function']),
     schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }).strict(),
   })
   .strict();
@@ -214,4 +214,92 @@ export const settingsSchema = z
     realTimeTransport: z.literal('sse'),
   })
   .partial()
+  .strict();
+
+// ==================== v1.0.2 ====================
+
+// ---------- Tool IDE ----------
+
+/** POST /api/tools/js — register a js-function tool (Tool IDE "Save") */
+export const registerJsToolSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(3)
+      .max(160)
+      .regex(/^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*$/, 'must look like namespace.action (lowercase)'),
+    description: z.string().trim().max(1000).optional(),
+    purpose: z.string().trim().max(1000).optional(),
+    category: z.string().trim().max(60).optional(),
+    toolVersion: z.string().trim().max(40).optional(),
+    schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }),
+    functionSource: z.string().min(1).max(64_000),
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+/** PUT /api/tools/:name — partial update of a user-editable tool */
+export const updateToolSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(3)
+      .max(160)
+      .regex(/^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*$/, 'must look like namespace.action (lowercase)')
+      .optional(),
+    description: z.string().trim().max(1000).optional(),
+    purpose: z.string().trim().max(1000).optional(),
+    category: z.string().trim().max(60).optional(),
+    toolVersion: z.string().trim().max(40).optional(),
+    schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }).optional(),
+    functionSource: z.string().min(1).max(64_000).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'body must contain at least one field' });
+
+/** POST /api/tools/test — run a tool in the controlled test context */
+export const testToolSchema = z
+  .object({
+    name: z.string().trim().min(1).max(160).optional(),
+    functionSource: z.string().max(64_000).optional(),
+    params: jsonObject.optional(),
+  })
+  .refine((v) => !!v.name !== !!v.functionSource, {
+    message: 'provide either a registered tool name or an unsaved functionSource — not both',
+  });
+
+// ---------- Training ----------
+
+export const trainingConfigSchema = z
+  .object({
+    epochs: z.number().int().min(1).max(100).default(20),
+    batchSize: z.number().int().min(1).max(128).default(8),
+    learningRate: z.number().min(0.0001).max(1).default(0.01),
+    validationSplit: z.number().min(0).max(0.5).default(0.2),
+    shuffle: z.boolean().default(true),
+    earlyStoppingPatience: z.number().int().min(0).max(50).optional(),
+    vocabSize: z.number().int().min(16).max(1024).optional(),
+  })
+  .strict();
+
+export const createTrainingJobSchema = z
+  .object({
+    datasetId: z.string().trim().min(1).max(100),
+    config: trainingConfigSchema.optional(),
+  })
+  .strict();
+
+// ---------- Benchmark ----------
+
+export const createBenchmarkRunSchema = z
+  .object({
+    modelKey: z.enum(['llm-core', 'heuristic-fallback']).or(z.string().trim().min(1).max(160)),
+    datasetId: z.string().trim().min(1).max(100),
+    suite: z.literal('tool-selection'),
+    limit: z.number().int().min(1).max(500).optional(),
+    timeoutPerCaseMs: z.number().int().min(1000).max(120_000).optional(),
+    label: z.string().trim().max(80).optional(),
+  })
   .strict();

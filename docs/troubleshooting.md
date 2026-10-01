@@ -54,8 +54,8 @@ console/entity references match the actual UI.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | 400 `INVALID_MANIFEST` | One or more rules failed (name, semver-like version, `format:"nextool"`, architecture object, `compatibility.runtime`) | The error message lists every failed rule; fix and re-submit (see [Model Format](../ai-core/model-format.md)). |
-| Loaded but engine still llm-core | Expected — inference adapter not installed | Honest state; packages stay `registered`. |
-| `tfjs: false` / `parquet: false` in adapters | Adapters not installed in this environment | Not fixable by config; stated intentionally. |
+| Loaded but engine still llm-core | Expected — a registered package does not replace the active engine; only trained classifiers run inside training/benchmark | Honest state; packages stay `registered` (see [Models](../ai-core/models.md)). |
+| `parquet: false` in adapters | Parquet adapter not installed in this environment | Not fixable by config; stated intentionally (`tfjs` is `true` since v1.0.2). |
 
 ## DB issues
 

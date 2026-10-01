@@ -13,6 +13,19 @@ import { serverList, serverHealth, serverRestart, serviceRestart } from './virtu
 import { memoryStore, memoryRecall } from './memory';
 import { notificationSend } from './notify';
 import { imageGenerate } from './image';
+import { runJsTool, validateFunctionSource, JS_TOOL_TIMEOUT_MS } from './js-runner';
+
+// module-scoped syntax cache (compile once per source)
+const syntaxCache = new Map<string, { ok: true } | { ok: false; error: string }>();
+function validateFunctionSourceCached(source: string): { ok: true } | { ok: false; error: string } {
+  const key = `${source.length}:${source}`;
+  const cached = syntaxCache.get(key);
+  if (cached) return cached;
+  const result = validateFunctionSource(source);
+  if (syntaxCache.size > 50) syntaxCache.clear();
+  syntaxCache.set(key, result);
+  return result;
+}
 
 // ---------- Built-in definitions ----------
 
@@ -230,6 +243,12 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
     return builtin;
   }
 
+  if (def.environment === 'js-function' && typeof def.functionSource === 'string' && def.functionSource.trim()) {
+    const jsHandler = makeJsHandler(def.name, def.functionSource);
+    s.handlers.set(def.name, jsHandler);
+    return jsHandler;
+  }
+
   if (def.environment === 'dynamic' && def.handlerKind) {
     const config = def.handlerConfig ?? {};
     let dynamic: ToolHandler | undefined;
@@ -294,6 +313,10 @@ export interface ToolEntryFull {
   definition: ToolDefinition;
   schema: ToolDefinition['schema'];
   handlerKind?: string;
+  /** v1.0.2: JavaScript source for js-function tools. */
+  functionSource?: string;
+  /** v1.0.2: user-facing tool version string. */
+  toolVersion?: string;
   enabled: boolean;
   stats: ToolStats;
   createdAt: string;
@@ -301,7 +324,8 @@ export interface ToolEntryFull {
 
 function rowToEntry(row: {
   name: string; description: string; purpose: string | null; category: string;
-  environment: string; definition: string; handlerKind: string | null; enabled: boolean;
+  environment: string; definition: string; handlerKind: string | null; functionSource?: string | null;
+  toolVersion?: string | null; enabled: boolean;
   callCount: number; successCount: number; failureCount: number; timeoutCount: number;
   totalMs: number; createdAt: Date;
 }): ToolEntryFull {
@@ -311,6 +335,7 @@ function rowToEntry(row: {
   } catch {
     def = { name: row.name, description: row.description, category: row.category, environment: 'builtin', schema: { type: 'object', properties: [] } };
   }
+  const source = row.functionSource ?? def.functionSource;
   return {
     name: row.name,
     description: row.description,
@@ -320,6 +345,8 @@ function rowToEntry(row: {
     definition: def,
     schema: def.schema ?? { type: 'object', properties: [] },
     handlerKind: row.handlerKind ?? undefined,
+    functionSource: source ?? undefined,
+    toolVersion: row.toolVersion ?? def.toolVersion ?? undefined,
     enabled: row.enabled,
     stats: {
       callCount: row.callCount,
@@ -337,6 +364,11 @@ export async function listTools(): Promise<ToolEntryFull[]> {
   await ensureToolsSeeded();
   const rows = await db.toolRecord.findMany({ orderBy: [{ environment: 'asc' }, { name: 'asc' }] });
   return rows.map(rowToEntry);
+}
+
+export async function getToolEntry(name: string): Promise<ToolEntryFull | undefined> {
+  const row = await db.toolRecord.findUnique({ where: { name } });
+  return row ? rowToEntry(row) : undefined;
 }
 
 export async function getEnabledToolDefs(enabledFilter?: string[]): Promise<ToolDefinition[]> {
@@ -382,6 +414,9 @@ export async function registerDynamicTool(
   if (env === 'dynamic' && (!handlerKind || !HANDLER_KINDS.includes(handlerKind))) {
     throw new ToolFailure(`Dynamic tools require handlerKind, one of: ${HANDLER_KINDS.join(', ')}`, 'INVALID_PARAMS');
   }
+  if (env === 'js-function') {
+    throw new ToolFailure('js-function tools must be registered via registerJsTool', 'INVALID_PARAMS');
+  }
   const def: ToolDefinition = {
     ...definition,
     description: definition.description || 'User-registered dynamic tool.',
@@ -412,6 +447,178 @@ export async function registerDynamicTool(
   resolveHandler(def);
   return rowToEntry(row);
 }
+
+export interface JsToolRegistration {
+  name: string;
+  description?: string;
+  purpose?: string;
+  category?: string;
+  schema: ToolDefinition['schema'];
+  functionSource: string;
+  toolVersion?: string;
+  enabled?: boolean;
+}
+
+/**
+ * Register a js-function tool (Tool IDE "Save"). Validates name uniqueness,
+ * schema shape and function syntax; the handler is compiled eagerly so broken
+ * definitions never become active tools (v1.0.2 §24/§25).
+ */
+export async function registerJsTool(input: JsToolRegistration): Promise<ToolEntryFull> {
+  await ensureToolsSeeded();
+  if (!TOOL_NAME_RE.test(input.name)) {
+    throw new ToolFailure('Tool name must match pattern "namespace.action" (lowercase, dots/dashes allowed).', 'INVALID_PARAMS');
+  }
+  if (typeof input.functionSource !== 'string' || input.functionSource.trim().length === 0) {
+    throw new ToolFailure('functionSource is required for js-function tools.', 'INVALID_PARAMS');
+  }
+  const syntax = validateFunctionSourceCached(input.functionSource);
+  if (!syntax.ok) throw new ToolFailure(`Function source rejected: ${syntax.error}`, 'INVALID_FUNCTION');
+  if (!input.schema || !Array.isArray(input.schema.properties)) {
+    throw new ToolFailure('schema with a properties array is required.', 'INVALID_PARAMS');
+  }
+
+  const def: ToolDefinition = {
+    name: input.name,
+    description: input.description?.trim() || 'User-authored JavaScript tool.',
+    purpose: input.purpose?.trim() || undefined,
+    category: input.category?.trim() || 'general',
+    environment: 'js-function',
+    schema: input.schema,
+    functionSource: input.functionSource,
+    toolVersion: input.toolVersion?.trim() || undefined,
+  };
+
+  const exists = await db.toolRecord.findUnique({ where: { name: def.name } });
+  if (exists) throw new ToolFailure(`Tool already registered: ${def.name}`, 'ALREADY_EXISTS');
+
+  const row = await db.toolRecord.create({
+    data: {
+      name: def.name,
+      description: def.description,
+      purpose: def.purpose ?? null,
+      category: def.category,
+      environment: 'js-function',
+      definition: JSON.stringify(def),
+      functionSource: input.functionSource,
+      toolVersion: def.toolVersion ?? null,
+      enabled: input.enabled ?? true,
+    },
+  });
+  return rowToEntry(row);
+}
+
+/**
+ * Update an existing user-editable tool (dynamic or js-function). Built-in and
+ * virtual-env tools are read-only code — their definitions may not be replaced.
+ */
+export async function updateTool(
+  name: string,
+  input: Partial<JsToolRegistration> & { enabled?: boolean },
+): Promise<ToolEntryFull> {
+  const current = await db.toolRecord.findUnique({ where: { name } });
+  if (!current) throw new ToolFailure(`Tool not found: ${name}`, 'NOT_FOUND');
+  if (current.environment === 'builtin' || current.environment === 'virtual-env') {
+    throw new ToolFailure(`Built-in tool ${name} is read-only. Duplicate it to customize.`, 'READ_ONLY');
+  }
+
+  const currentDef = JSON.parse(current.definition) as ToolDefinition;
+  const nextEnvironment = current.environment as ToolDefinition['environment'];
+  const nextSchema = input.schema && Array.isArray(input.schema.properties) ? input.schema : currentDef.schema;
+  const nextDescription = input.description !== undefined ? input.description.trim() || current.description : current.description;
+  const nextPurpose = input.purpose !== undefined ? input.purpose.trim() || null : current.purpose;
+  const nextCategory = input.category !== undefined ? input.category.trim() || current.category : current.category;
+  const nextVersion = input.toolVersion !== undefined ? input.toolVersion.trim() || null : current.toolVersion;
+  const nextSource = input.functionSource !== undefined ? input.functionSource : current.functionSource;
+
+  if (nextEnvironment === 'js-function') {
+    if (typeof nextSource !== 'string' || nextSource.trim().length === 0) {
+      throw new ToolFailure('js-function tools require functionSource.', 'INVALID_PARAMS');
+    }
+    const syntax = validateFunctionSourceCached(nextSource);
+    if (!syntax.ok) throw new ToolFailure(`Function source rejected: ${syntax.error}`, 'INVALID_FUNCTION');
+  }
+
+  const nextDef: ToolDefinition = {
+    ...currentDef,
+    description: nextDescription,
+    purpose: nextPurpose ?? undefined,
+    category: nextCategory,
+    schema: nextSchema,
+    functionSource: nextEnvironment === 'js-function' ? nextSource ?? undefined : undefined,
+    toolVersion: nextVersion ?? undefined,
+  };
+
+  const row = await db.toolRecord.update({
+    where: { name },
+    data: {
+      description: nextDescription,
+      purpose: nextPurpose,
+      category: nextCategory,
+      definition: JSON.stringify(nextDef),
+      functionSource: nextEnvironment === 'js-function' ? nextSource : null,
+      toolVersion: nextVersion,
+      ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    },
+  });
+  // Drop any cached handler so the next execution picks up the new source/config.
+  handlerState().handlers.delete(name);
+  return rowToEntry(row);
+}
+
+/** Delete a user tool. Built-ins cannot be deleted. */
+export async function deleteTool(name: string): Promise<{ deleted: boolean; name: string }> {
+  const current = await db.toolRecord.findUnique({ where: { name }, select: { environment: true } });
+  if (!current) throw new ToolFailure(`Tool not found: ${name}`, 'NOT_FOUND');
+  if (current.environment === 'builtin' || current.environment === 'virtual-env') {
+    throw new ToolFailure(`Built-in tool ${name} cannot be deleted. Disable it instead.`, 'READ_ONLY');
+  }
+  await db.toolRecord.delete({ where: { name } });
+  handlerState().handlers.delete(name);
+  return { deleted: true, name };
+}
+
+// ---------- v1.0.2: js-function tool handlers ----------
+
+/** Build the sandboxed handler for a js-function tool from its stored source. */
+function makeJsHandler(name: string, source: string): ToolHandler {
+  return async (params, ctx) => {
+    const run = await runJsTool(
+      source,
+      params,
+      {
+        executionId: ctx.executionId,
+        taskId: ctx.taskId,
+        mode: 'production',
+        now: new Date().toISOString(),
+        log: () => {}, // production logs are intentionally discarded (kept capped in tests)
+      },
+    );
+    if (!run.ok) {
+      throw new ToolFailure(run.error?.message ?? 'js-function tool failed', run.error?.code ?? 'TOOL_FAILURE');
+    }
+    return run.result;
+  };
+}
+
+/** Test-only execution of a js-function tool source (Tool IDE "Test Tool"). */
+export async function testJsToolSource(
+  source: string,
+  params: Record<string, unknown>,
+  opts: { taskId?: string } = {},
+): Promise<{ ok: boolean; result?: unknown; error?: { code: string; message: string }; logs: string[]; durationMs: number }> {
+  const started = Date.now();
+  const run = await runJsTool(source, params, {
+    executionId: `test_${Date.now().toString(36)}`,
+    taskId: opts.taskId,
+    mode: 'test',
+    now: new Date().toISOString(),
+    log: () => {},
+  });
+  return { ...run, durationMs: Date.now() - started };
+}
+
+export { JS_TOOL_TIMEOUT_MS };
 
 export async function toggleTool(name: string, enabled: boolean): Promise<ToolEntryFull> {
   const row = await db.toolRecord.update({ where: { name }, data: { enabled } });

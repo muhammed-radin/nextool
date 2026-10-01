@@ -198,17 +198,19 @@ export function TypeChip({ type, className }: { type: string; className?: string
 
 // ---------- JSON ----------
 
+import { JsonTree } from './json-tree';
+
+/**
+ * v1.0.2 — ONE consistent JSON viewer for the whole console. Objects/arrays
+ * render as an interactive tree (expand/collapse, copy); primitives render as
+ * text. (spec §74-77)
+ */
 export function JsonBlock({ value, className, maxHeight = 'max-h-80' }: { value: unknown; className?: string; maxHeight?: string }) {
-  let text: string;
-  try {
-    text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  } catch {
-    text = String(value);
-  }
+  const px = maxHeight.includes('px') ? Number(maxHeight.replace(/[^0-9]/g, '')) || 320 : undefined;
   return (
-    <pre className={cn('nextool-scroll glass-inset overflow-auto rounded-md p-3 font-mono text-xs leading-relaxed text-sky-100/80', maxHeight, className)}>
-      {text}
-    </pre>
+    <div className={className}>
+      <JsonTree value={value} maxHeight={px ?? 320} />
+    </div>
   );
 }
 
@@ -366,4 +368,183 @@ export function EventRow({ event, defaultOpen = false }: { event: NexToolEvent; 
       {open && hasData ? <JsonBlock value={event.data} maxHeight="max-h-48" className="mt-2" /> : null}
     </div>
   );
+}
+
+// ---------- v1.0.2: runtime status / terminal / checklist derivation ----------
+
+/** The single task-status vocabulary used by the console (spec §71). */
+export const TASK_STATUS_VOCABULARY = [
+  'idle', 'queued', 'starting', 'planning', 'running', 'waiting',
+  'observing', 'completed', 'failed', 'cancelled', 'stopped',
+] as const;
+export type ConsoleTaskStatus = (typeof TASK_STATUS_VOCABULARY)[number];
+
+export interface DerivedTaskRuntime {
+  /** Human-readable console status — derived, never hardcoded. */
+  status: ConsoleTaskStatus;
+  /** Currently executing tool (e.g. "server.health") or null. */
+  activeTool: string | null;
+  /** True while something is actively executing (drives the terminal cursor). */
+  active: boolean;
+}
+
+const ACTIVE_TASK_STATUSES = new Set(['queued', 'running', 'waiting']);
+
+/**
+ * Derive the real runtime state of a task from its status + event stream.
+ * Used by Task Preview, Live Monitor, the terminal and the status bar — one
+ * source of truth so pages cannot invent statuses (spec §72/§83).
+ */
+export function deriveTaskRuntime(
+  taskStatus: string | undefined,
+  events: NexToolEvent[],
+): DerivedTaskRuntime {
+  const last = events.length > 0 ? events[events.length - 1] : undefined;
+  const activeTool = (() => {
+    // walk backwards to the latest tool.started not followed by its completion
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.source !== 'tool') continue;
+      const tool = (ev.data as { tool?: string } | undefined)?.tool;
+      if (ev.type === 'tool.started' && typeof tool === 'string') return tool;
+      if (ev.type === 'tool.completed' || ev.type === 'tool.failed' || ev.type === 'tool.timeout' || ev.type === 'tool.cancelled') {
+        const t = (ev.data as { tool?: string } | undefined)?.tool;
+        if (typeof t === 'string') return null; // latest tool cycle ended
+      }
+    }
+    return null;
+  })();
+
+  if (!taskStatus) {
+    return { status: 'idle', activeTool: null, active: false };
+  }
+  if (taskStatus === 'completed') return { status: 'completed', activeTool: null, active: false };
+  if (taskStatus === 'failed') return { status: 'failed', activeTool: null, active: false };
+  if (taskStatus === 'stopped' || taskStatus === 'cancelled') return { status: taskStatus, activeTool: null, active: false };
+  if (!ACTIVE_TASK_STATUSES.has(taskStatus)) {
+    return { status: 'idle', activeTool: null, active: false };
+  }
+
+  // Active task — refine from the latest event
+  const type = last?.type ?? '';
+  if (activeTool) return { status: 'running', activeTool, active: true };
+  if (type.startsWith('task.created') || type.startsWith('task.started')) return { status: 'starting', activeTool: null, active: false };
+  if (type.startsWith('planner') || type.startsWith('core')) return { status: 'planning', activeTool: null, active: false };
+  if (type.startsWith('observer')) return { status: 'observing', activeTool: null, active: false };
+  if (type.startsWith('task.waiting')) return { status: 'waiting', activeTool: null, active: false };
+  if (type.startsWith('tool.completed')) return { status: 'observing', activeTool: null, active: false };
+  return { status: taskStatus === 'queued' ? 'queued' : 'running', activeTool: null, active: taskStatus === 'running' };
+}
+
+/**
+ * Terminal status line (spec §7-11). Format: `[status]: Tool called <tool> █`
+ * while a tool runs; honest idle/completed/failed lines otherwise. Never a
+ * hardcoded shell prompt.
+ */
+export function terminalStatusLine(rt: DerivedTaskRuntime): {
+  label: string; text: string; blinking: boolean;
+  tone: 'muted' | 'ok' | 'warn' | 'err' | 'info';
+} {
+  switch (rt.status) {
+    case 'running':
+      return rt.activeTool
+        ? { label: '[running]', text: `Tool called ${rt.activeTool}`, blinking: true, tone: 'info' }
+        : { label: '[running]', text: 'executing plan', blinking: true, tone: 'info' };
+    case 'planning':
+      return { label: '[planning]', text: 'core module selecting tool', blinking: false, tone: 'info' };
+    case 'observing':
+      return { label: '[observing]', text: 'observer evaluating result', blinking: false, tone: 'info' };
+    case 'waiting':
+      return { label: '[waiting]', text: 'waiting for next scheduled tick', blinking: false, tone: 'warn' };
+    case 'starting':
+      return { label: '[starting]', text: 'task accepted — initializing', blinking: false, tone: 'info' };
+    case 'queued':
+      return { label: '[queued]', text: 'task queued', blinking: false, tone: 'muted' };
+    case 'completed':
+      return { label: '[completed]', text: 'task completed', blinking: false, tone: 'ok' };
+    case 'failed':
+      return { label: '[failed]', text: 'task failed', blinking: false, tone: 'err' };
+    case 'stopped':
+      return { label: '[stopped]', text: 'task stopped by user', blinking: false, tone: 'muted' };
+    case 'cancelled':
+      return { label: '[cancelled]', text: 'task cancelled', blinking: false, tone: 'muted' };
+    default:
+      return { label: '[idle]', text: 'runtime standing by — submit a task to begin', blinking: false, tone: 'muted' };
+  }
+}
+
+export interface ChecklistItem {
+  id: string;
+  title: string;
+  detail?: string;
+  /** [✓] completed · [-] running · [ ] pending · [!] failed · [~] waiting/skipped */
+  state: 'completed' | 'running' | 'pending' | 'failed' | 'waiting';
+  kind: string;
+}
+
+/**
+ * Build the live checklist from the ACTUAL plan (spec §62-65). Falls back to
+ * terminal events when no plan exists. Returns null percent when no plan is
+ * present — the UI shows an indeterminate state instead of a fake number.
+ */
+export function deriveChecklist(
+  plan: { id: string; title: string; detail?: string; status: string; kind: string }[] | undefined,
+  events: NexToolEvent[],
+): { items: ChecklistItem[]; percent: number | null } {
+  const toState = (s: string): ChecklistItem['state'] =>
+    s === 'completed' ? 'completed'
+    : s === 'in_progress' ? 'running'
+    : s === 'failed' ? 'failed'
+    : s === 'skipped' ? 'waiting'
+    : 'pending';
+
+  if (plan && plan.length > 0) {
+    const items: ChecklistItem[] = plan.map((s) => ({
+      id: s.id,
+      title: s.title,
+      detail: s.detail,
+      state: toState(s.status),
+      kind: s.kind,
+    }));
+    const done = items.filter((i) => i.state === 'completed' || i.state === 'waiting' || i.state === 'failed').length;
+    return { items, percent: Math.round((done / items.length) * 100) };
+  }
+
+  // No plan: derive from real task lifecycle events (honest, no invented steps).
+  const items: ChecklistItem[] = [];
+  const markTool = (tool: string, state: ChecklistItem['state']) => {
+    const item = items.find((i) => i.title === `Tool called ${tool}` && i.state === 'running');
+    if (item) item.state = state;
+  };
+  for (const ev of events) {
+    if (ev.type === 'task.started' && !items.some((i) => i.id === 'evt-started')) {
+      items.push({ id: 'evt-started', title: 'Task started', state: 'completed', kind: 'action' });
+    }
+    if (ev.type === 'tool.started') {
+      const tool = (ev.data as { tool?: string } | undefined)?.tool;
+      const id = `evt-tool-${ev.id}`;
+      // A second call of the same tool closes the previous cycle.
+      markTool(tool ?? '', 'completed');
+      if (tool) items.push({ id, title: `Tool called ${tool}`, state: 'running', kind: 'action' });
+    }
+    if (ev.type === 'tool.completed') {
+      const tool = (ev.data as { tool?: string } | undefined)?.tool;
+      if (tool) markTool(tool, 'completed');
+    }
+    if (ev.type === 'tool.failed' || ev.type === 'tool.timeout') {
+      const tool = (ev.data as { tool?: string } | undefined)?.tool;
+      if (tool) markTool(tool, 'failed');
+    }
+    if (ev.type === 'task.completed' && !items.some((i) => i.id === 'evt-completed')) {
+      items.filter((i) => i.state === 'running').forEach((i) => { i.state = 'completed'; });
+      items.push({ id: 'evt-completed', title: 'Task completed', state: 'completed', kind: 'verification' });
+    }
+    if (ev.type === 'task.failed' && !items.some((i) => i.id === 'evt-failed')) {
+      items.filter((i) => i.state === 'running').forEach((i) => { i.state = 'failed'; });
+      items.push({ id: 'evt-failed', title: 'Task failed', state: 'failed', kind: 'verification' });
+    }
+  }
+  if (items.length === 0) return { items: [], percent: null };
+  const done = items.filter((i) => i.state === 'completed' || i.state === 'failed').length;
+  return { items, percent: Math.round((done / items.length) * 100) };
 }

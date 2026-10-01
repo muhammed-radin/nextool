@@ -12,14 +12,15 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
-import { ApiClientError, getModels, loadModel } from '@/lib/nexool/client';
+import { ApiClientError, getModels, importModelPackage, loadModel, modelExportUrl } from '@/lib/nexool/client';
 import type { ModelsInfo } from '@/lib/nexool/client';
 import { useSystemStats } from '../providers';
 import { EmptyState, ErrorCard, JsonBlock, SectionTitle, TimeAgo, fmtMs, statusTone } from '../ui-bits';
-import { Box, CheckCircle2, Cpu, FileUp, Loader2, MinusCircle, Upload } from 'lucide-react';
+import { Box, CheckCircle2, Cpu, Download, Loader2, MinusCircle, PackageOpen, Upload } from 'lucide-react';
 
 function AdapterRow({ label, available, note }: { label: string; available: boolean; note: string }) {
   return (
@@ -45,6 +46,7 @@ export default function ModelsView() {
   const [manifestText, setManifestText] = useState('');
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -59,12 +61,6 @@ export default function ModelsView() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  const onFile = async (file: File | undefined) => {
-    if (!file) return;
-    const text = await file.text();
-    setManifestText(text);
-  };
 
   const submitLoad = async () => {
     let manifest: unknown;
@@ -90,6 +86,35 @@ export default function ModelsView() {
     }
   };
 
+  /** v1.0.2 §44-46: real package import (.nextool / tfjs zip / bare manifest). */
+  const onImportFile = async (file: File | undefined) => {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const result = await importModelPackage(file);
+      toast.success('Package imported', {
+        description: `${result.name} v${result.version}${result.runnable ? ' (runnable for benchmarks)' : ''}`,
+      });
+      for (const w of result.warnings) toast.warning(w);
+      setLoadOpen(false);
+      void load();
+    } catch (e) {
+      toast.error('Import rejected', {
+        description: e instanceof ApiClientError ? e.message : 'Unknown error',
+      });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  /** v1.0.2 §44-45: trigger a real zip download of the current/selected model. */
+  const exportPackage = (id: string, format: 'tfjs' | 'nextool') => {
+    window.location.href = modelExportUrl(id, format);
+  };
+
+  const isExportable = (p: { format: string }) => p.format === 'tfjs-trained-classifier' || p.format === 'tfjs-native-import';
+  const hasExportable = (info?.packages ?? []).some(isExportable);
+
   const engineStatus = info?.engine.status ?? 'active';
 
   return (
@@ -99,9 +124,33 @@ export default function ModelsView() {
         title="Models"
         desc="Active decision engine, adapter availability and registered .nextool packages."
         right={
-          <Button size="sm" className="bg-primary-gradient min-h-9 gap-1.5 text-primary-foreground hover:opacity-90" onClick={() => setLoadOpen(true)}>
-            <Upload className="size-3.5" aria-hidden /> Load .nextool package
-          </Button>
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="min-h-9 gap-1.5 border-sky-400/30 bg-sky-400/[0.07] text-sky-300 hover:bg-sky-400/10" disabled={!hasExportable}>
+                  <Download className="size-3.5" aria-hidden /> Export Current Model
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="glass-strong min-w-64">
+                <DropdownMenuLabel className="font-tech text-[9px] uppercase tracking-widest text-sky-300/70">export current model</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {(info?.packages ?? []).filter(isExportable).map((p) => (
+                  <div key={p.id} className="px-1 py-0.5">
+                    <p className="px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{p.name} v{p.version}</p>
+                    <DropdownMenuItem onClick={() => exportPackage(p.id, 'tfjs')}>
+                      <Download className="size-3.5" aria-hidden /> native TFJS (model.json + .bin zip)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => exportPackage(p.id, 'nextool')}>
+                      <Download className="size-3.5" aria-hidden /> .nextool package
+                    </DropdownMenuItem>
+                  </div>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button size="sm" className="bg-primary-gradient min-h-9 gap-1.5 text-primary-foreground hover:opacity-90" onClick={() => setLoadOpen(true)}>
+              <Upload className="size-3.5" aria-hidden /> Import model
+            </Button>
+          </div>
         }
       />
 
@@ -231,13 +280,13 @@ export default function ModelsView() {
         </>
       )}
 
-      {/* Load package dialog */}
+      {/* Load / import package dialog */}
       <Dialog open={loadOpen} onOpenChange={setLoadOpen}>
         <DialogContent className="glass-strong sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Load .nextool package</DialogTitle>
+            <DialogTitle>Import model package</DialogTitle>
             <DialogDescription>
-              Upload a <code className="font-mono">.nextool</code>/<code className="font-mono">.json</code> manifest or paste it. Invalid manifests are rejected with the validator&apos;s reason.
+              Upload a <code className="font-mono">.nextool</code> package, a native TFJS zip (<code className="font-mono">model.json + .bin</code>), or a bare <code className="font-mono">.json</code> manifest. Binary packages are compatibility-validated (real TFJS load check) before registration.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -245,14 +294,17 @@ export default function ModelsView() {
               <input
                 ref={fileRef}
                 type="file"
-                accept=".nextool,.json,application/json"
+                accept=".nextool,.zip,.json"
                 className="hidden"
-                onChange={(e) => void onFile(e.target.files?.[0])}
-                aria-label="Choose manifest file"
+                onChange={(e) => void onImportFile(e.target.files?.[0])}
+                aria-label="Choose model package file"
               />
-              <Button variant="outline" className="min-h-11 w-full border-dashed border-white/[0.15] bg-white/[0.04] text-foreground/90" onClick={() => fileRef.current?.click()}>
-                <FileUp className="size-4" aria-hidden /> Choose file…
+              <Button variant="outline" className="min-h-11 w-full border-dashed border-white/[0.15] bg-white/[0.04] text-foreground/90" onClick={() => fileRef.current?.click()} disabled={importing}>
+                {importing ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <PackageOpen className="size-4" aria-hidden />} Choose package file…
               </Button>
+            </div>
+            <div className="relative text-center text-[10px] uppercase tracking-widest text-muted-foreground/60">
+              <span className="bg-transparent">or paste a bare manifest</span>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="manifest-json">Manifest JSON</Label>
@@ -260,7 +312,7 @@ export default function ModelsView() {
                 id="manifest-json"
                 value={manifestText}
                 onChange={(e) => setManifestText(e.target.value)}
-                rows={8}
+                rows={6}
                 className="border-white/[0.09] bg-white/[0.04] font-mono text-xs"
                 placeholder='{"name":"my-pack","version":"1.0.0","format":"nextool","architecture":"…","compatibility":"…"}'
               />

@@ -198,7 +198,7 @@ export default function DashboardView() {
           </section>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <section aria-label="Recent tasks" className="glass-panel rounded-lg p-4">
+            <section aria-label="Recent tasks" className="glass-panel min-w-0 rounded-lg p-4">
               <SectionTitle
                 icon={<TerminalSquare className="size-4 text-sky-300" aria-hidden />}
                 title="Recent tasks"
@@ -209,7 +209,7 @@ export default function DashboardView() {
               </div>
             </section>
 
-            <section aria-label="Recent events" className="glass-panel rounded-lg p-4">
+            <section aria-label="Recent events" className="glass-panel min-w-0 rounded-lg p-4">
               <SectionTitle
                 icon={<Radio className="size-4 text-sky-300" aria-hidden />}
                 title="Recent events"
