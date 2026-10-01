@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============ NexTool Q1 v1.0.0 ============
+
+model Task {
+  id             String     @id
+  name           String?
+  request        String
+  goal           String?
+  mode           String     // goal | live
+  reasoningLevel Int        @default(4)
+  status         String     // queued | running | waiting | completed | failed | stopped | cancelled
+  statusDetail   String?
+  config         String     @default("{}") // JSON TaskConfig
+  state          String     @default("{}") // JSON MainStateModel (serializable)
+  plan           String?    // JSON PlanStep[]
+  finalResult    String?    // JSON structured final result
+  error          String?    // JSON { code, message, stage }
+  steps          Int        @default(0)
+  toolCalls      Int        @default(0)
+  durationMs     Int?
+  sessionId      String?
+  createdAt      DateTime   @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  updatedAt      DateTime   @updatedAt
+  events         TaskEvent[]
+  history        HistoryEntry[]
+}
+
+model TaskEvent {
+  id        String   @id @default(cuid())
+  taskId    String?
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  type      String   // task.created, planner.*, core.*, tool.*, observer.*, state.*, subgoal.*, goal.*, env.*, user.*, error.*
+  source    String   // runtime | planner | observer | core | tool | environment | user | system
+  message   String
+  data      String? // JSON payload
+  priority  Int      @default(5) // 1 = emergency .. 9 = tick
+  createdAt DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([type])
+}
+
+model ToolRecord {
+  name          String   @id
+  description   String
+  purpose       String?
+  category      String   @default("general")
+  environment   String   @default("builtin") // builtin | virtual-env | dynamic
+  definition    String // JSON full ToolDefinition (schema etc.)
+  handlerKind   String? // dynamic handler: echo | delay | http_get | time | uuid
+  handlerConfig String? // JSON
+  enabled       Boolean  @default(true)
+  callCount     Int      @default(0)
+  successCount  Int      @default(0)
+  failureCount  Int      @default(0)
+  timeoutCount  Int      @default(0)
+  totalMs       Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model MemoryEntry {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String // JSON
+  tags      String? // JSON string[]
+  source    String   @default("user") // user | runtime | tool
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model HistoryEntry {
+  id        String   @id @default(cuid())
+  taskId    String?
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  action    String
+  params    String? // JSON
+  result    String? // JSON
+  status    String // completed | failed | timeout | cancelled
+  timestamp DateTime @default(now())
+
+  @@index([taskId, timestamp])
+}
+
+model Setting {
+  key       String   @id
+  value     String // JSON
+  updatedAt DateTime @updatedAt
+}
+
+model ModelRecord {
+  id         String   @id @default(cuid())
+  name       String
+  version    String
+  format     String // nextool-manifest
+  status     String // registered | active | rejected
+  manifest   String // JSON
+  sizeBytes  Int?
+  note       String?
+  createdAt  DateTime @default(now())
+}
+
+model DatasetRecord {
+  id         String   @id @default(cuid())
+  name       String
+  version    String
+  format     String   @default("json") // json | parquet(unavailable)
+  trainSize  Int      @default(0)
+  valSize    Int      @default(0)
+  testSize   Int      @default(0)
+  examples   String   @default("[]") // JSON
+  categories String? // JSON string[]
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model NotificationRecord {
+  id        String   @id @default(cuid())
+  title     String
+  body      String
+  source    String   @default("tool") // tool | runtime | user
+  taskId    String?
+  level     String   @default("info") // info | warning | critical
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model GeneratedImage {
+  id        String   @id @default(cuid())
+  path      String
+  prompt    String
+  size      String?
+  taskId    String?
+  createdAt DateTime @default(now())
+}
