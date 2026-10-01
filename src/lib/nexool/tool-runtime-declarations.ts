@@ -124,3 +124,157 @@ export function getReferenceEntries(schema: ToolSchema | undefined | null): {
     })(),
   ];
 }
+
+// ==================== v1.0.5 — nodejs environment (§3.6/§3.7) ====================
+
+/**
+ * Light-but-real type surface for the RESTRICTED Node.js environment. The
+ * generated extraLib includes ONLY modules present in the runtime's allowlist
+ * (mirrored by /api/tools/environments — the same source the reference panel
+ * renders). Non-allowlisted module ids hit the final `require(id: string)`
+ * overload, so IntelliSense NEVER suggests a module the runtime would reject.
+ */
+const NODE_MODULE_TYPE_SURFACE: Record<string, string> = {
+  buffer: `interface NodeBufferModule {
+  Buffer: typeof Buffer;
+}`,
+  crypto: `interface NodeHash {
+  update(data: string | Buffer): NodeHash;
+  digest(encoding?: string): string | Buffer;
+}
+interface NodeHmac {
+  update(data: string | Buffer): NodeHmac;
+  digest(encoding?: string): string | Buffer;
+}
+interface NodeCryptoModule {
+  createHash(algorithm: string): NodeHash;
+  createHmac(algorithm: string, key: string): NodeHmac;
+  randomBytes(size: number): Buffer;
+  randomUUID(): string;
+  timingSafeEqual(a: Buffer, b: Buffer): boolean;
+}`,
+  events: `interface NodeEventsModule {
+  EventEmitter: new () => {
+    on(event: string, listener: (...args: unknown[]) => void): void;
+    once(event: string, listener: (...args: unknown[]) => void): void;
+    emit(event: string, ...args: unknown[]): boolean;
+    off(event: string, listener: (...args: unknown[]) => void): void;
+  };
+  once(emitter: unknown, name: string): Promise<unknown[]>;
+}`,
+  path: `interface NodePathModule {
+  join(...segments: string[]): string;
+  resolve(...segments: string[]): string;
+  basename(p: string, ext?: string): string;
+  dirname(p: string): string;
+  extname(p: string): string;
+  parse(p: string): { root: string; dir: string; base: string; ext: string; name: string };
+  format(p: Partial<{ root: string; dir: string; base: string; ext: string; name: string }>): string;
+  isAbsolute(p: string): boolean;
+  sep: string;
+}`,
+  querystring: `interface NodeQuerystringModule {
+  parse(str: string, sep?: string, eq?: string): Record<string, unknown>;
+  stringify(obj: Record<string, unknown>, sep?: string, eq?: string): string;
+  escape(str: string): string;
+  unescape(str: string): string;
+}`,
+  string_decoder: `interface NodeStringDecoder {
+  write(buffer: Buffer): string;
+  end(buffer?: Buffer): string;
+}
+interface NodeStringDecoderModule {
+  StringDecoder: new (encoding?: string) => NodeStringDecoder;
+}`,
+  url: `interface NodeUrlModule {
+  URL: typeof URL;
+  URLSearchParams: typeof URLSearchParams;
+  pathToFileURL(p: string): URL;
+  fileURLToPath(url: URL | string): string;
+}`,
+  util: `interface NodeUtilModule {
+  inspect(value: unknown, options?: { depth?: number; colors?: boolean; breakLength?: number }): string;
+  format(format: string, ...args: unknown[]): string;
+  types: Record<string, (value: unknown) => boolean>;
+  promisify(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => Promise<unknown>;
+}`,
+  assert: `interface NodeAssertModule {
+  ok(value: unknown, message?: string): void;
+  equal(actual: unknown, expected: unknown, message?: string): void;
+  notEqual(actual: unknown, expected: unknown, message?: string): void;
+  deepEqual(actual: unknown, expected: unknown, message?: string): void;
+  strictEqual(actual: unknown, expected: unknown, message?: string): void;
+  throws(fn: () => unknown, message?: string): void;
+  fail(message?: string): never;
+}`,
+  zlib: `interface NodeZlibModule {
+  gzipSync(data: string | Buffer, options?: Record<string, unknown>): Buffer;
+  gunzipSync(data: Buffer, options?: Record<string, unknown>): Buffer;
+  deflateSync(data: string | Buffer, options?: Record<string, unknown>): Buffer;
+  inflateSync(data: Buffer, options?: Record<string, unknown>): Buffer;
+  brotliCompressSync(data: string | Buffer): Buffer;
+  brotliDecompressSync(data: Buffer): Buffer;
+}`,
+};
+
+const NODE_GLOBALS_DECLARATIONS = `
+// ---- globals available in the nodejs sandbox (restricted Node.js env) ----
+declare const Buffer: {
+  from(value: string, encoding?: string): BufferInstance;
+  alloc(size: number, fill?: string | number): BufferInstance;
+  concat(list: BufferInstance[]): BufferInstance;
+  isBuffer(value: unknown): value is BufferInstance;
+  byteLength(value: string, encoding?: string): number;
+};
+interface BufferInstance {
+  length: number;
+  toString(encoding?: string, start?: number, end?: number): string;
+  toJSON(): { type: string; data: number[] };
+  equals(other: BufferInstance): boolean;
+  slice(start?: number, end?: number): BufferInstance;
+  write(text: string, encoding?: string): number;
+}
+declare const TextEncoder: new () => { encode(input?: string): Uint8Array; encoding: string };
+declare const TextDecoder: new (label?: string) => { decode(input?: Uint8Array | BufferInstance): string; encoding: string };
+declare const URL: typeof URL;
+declare const URLSearchParams: typeof URLSearchParams;
+declare function atob(data: string): string;
+declare function btoa(data: string): string;
+declare function structuredClone<T>(value: T): T;
+`;
+
+/**
+ * extraLib for a `nodejs` tool: the shared runtime contract + restricted
+ * Node.js surface built from the LIVE allowlist (§3.7 — IntelliSense knows
+ * exactly what the runtime accepts, nothing more).
+ */
+export function buildNodeExtraLib(
+  schema: ToolSchema | undefined | null,
+  node: { modules: Record<string, unknown> } | null | undefined,
+): string {
+  const allowlist = node?.modules ? Object.keys(node.modules) : [];
+  const requireOverloads: string[] = [];
+  for (const name of allowlist) {
+    const iface = NODE_MODULE_TYPE_SURFACE[name] ?? `interface NodeModule_${name.replace(/[^a-z0-9]/gi, '_')} { [key: string]: unknown }`;
+    const safe = `NodeModule_${name.replace(/[^a-z0-9]/gi, '_')}`;
+    requireOverloads.push(`${iface}\ndeclare function require(id: '${name}'): ${safe};\ndeclare function require(id: 'node:${name}'): ${safe};`);
+  }
+  requireOverloads.push(
+    `/** Any other module is rejected at runtime — see the References pane. */\ndeclare function require(id: string): never;`,
+  );
+  return `${RUNTIME_DECLARATIONS}\n${NODE_GLOBALS_DECLARATIONS}\n${requireOverloads.join('\n')}\n\n${buildParamsDeclaration(schema)}`;
+}
+
+/** Reference entries for the nodejs environment pane (rendered alongside the live allowlist data). */
+export function getNodeReferenceEntries(schema: ToolSchema | undefined | null): {
+  name: string; type: string; description: string;
+}[] {
+  return [
+    ...getReferenceEntries(schema),
+    { name: 'require(...)', type: '(id: string) => module', description: 'Allowlisted Node.js modules only — unknown ids fail with a clear error.' },
+    { name: 'await import(...)', type: '(id: string) => Promise<module>', description: 'Dynamic import passes through the SAME allowlist as require().' },
+    { name: 'Buffer', type: 'Buffer', description: 'Binary data — also importable from the "buffer" module.' },
+    { name: 'TextEncoder / TextDecoder', type: 'constructor', description: 'UTF-8 conversion helpers.' },
+    { name: 'URL / URLSearchParams', type: 'constructor', description: 'URL parsing without network access.' },
+  ];
+}

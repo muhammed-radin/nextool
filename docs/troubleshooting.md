@@ -39,6 +39,8 @@ console/entity references match the actual UI.
 | Execution ends `timeout` (`TIMEOUT`) | Handler exceeded `toolTimeoutMs` (default 30 s, executor floor 250 ms) | Raise the task's `toolTimeoutMs` (max 300 000) or fix the slow handler; `delay.wait` caps at 10 s. |
 | Tool won't toggle | Wrong name encoding | Tool names contain dots — URL-encode the path segment: `/api/tools/server.health/toggle`. |
 | CoreModule says `cannot_execute` | Chosen tool disabled or excluded by the task's `enabledTools` allow-list | Re-enable the tool or widen the allow-list in Task Console. |
+| **Test Tool blanked the editor** (function code gone) | Should be impossible since v1.0.5 — test runs never write back into the editor, and non-edit `onChange` events (model swaps) are coerced to the previous value | If you ever see it on an old build: hard-refresh the page (the stored source is untouched on the server — re-open the tool); on a current build please report it, the invariants are unit-tested |
+| `Module "x" is not available in the NexTool Node.js environment.` | Expected sandbox behavior — a `nodejs` tool used `require()`/`import()` on a module outside the allowlist (`buffer, crypto, events, path, querystring, string_decoder, url, util, assert, zlib`) | Rework the tool with the allowed modules, or move the capability into a dynamic handler / built-in; the live allowlist is served by `GET /api/tools/environments` and shown in the IDE References panel (see [Tool Development](../tools/tool-development.md)) |
 
 ## Live task issues
 
@@ -90,6 +92,13 @@ data or dependency problems, and every message says which.
 | Import dialog says "Tool already exists" | A registry tool already uses that name | Choose **Replace existing tool** (PUT overwrite), **Import as copy** (auto `base.copy`, `base.copy-2` … name), or **Cancel** — nothing is overwritten without confirmation |
 | Import rejected after preview with `REGISTER_FAILED` / syntax error | The backend re-validates source syntax with the real sandbox compiler | Fix the function source; the console editor shows the same compile error on save |
 
+## Documentation viewer links (v1.0.5 fix)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| A docs link opened a 404 / broke out of the viewer | Pre-v1.0.5 the built-in viewer left internal markdown links (`../ai-core/core-module.md`) to the browser, which has no such path | Fixed in v1.0.5 — the centralized link resolver navigates internal links WITHIN the Docs view. Hard-refresh once if you still have a pre-1.0.5 bundle cached; genuinely missing pages show the in-viewer "Documentation page not found" card instead |
+| An anchored link opened the page but did not scroll | The anchor predates the generated heading ids (dash-collapse edge case) | Fixed in v1.0.5 — cross-page anchors auto-scroll using the same GitHub-style heading slug; a fallback matches older dash-collapsed anchors |
+
 ## DB issues
 
 | Symptom | Cause | Fix |
@@ -108,6 +117,7 @@ data or dependency problems, and every message says which.
 | More sheet missing some screens | Old build / not scrolled | The 70 dvh sheet scrolls and contains every view; Task Preview appears only once a task is selected. |
 | Text blurry / panels heavy on phone | Expected: mobile reduces blur for performance | By design (< 768 px profile); not a bug. |
 | Safe-area gaps on notched devices | `viewportFit=cover` not applied | It is set in `layout.tsx`; ensure you are on the v1.0.1 layout. |
+| **Import model dialog overflows on mobile** | Should be fixed in v1.0.5 — the dialog is a flex column capped at `85dvh` with one scrollable body and stacked full-width buttons | If seen on an old build, hard-refresh; on a current build report it (verified at 320/390 px — see [Mobile](mobile.md#v105-mobile-refinements)) |
 
 ## Env / config problems
 

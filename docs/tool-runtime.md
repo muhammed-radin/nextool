@@ -62,6 +62,10 @@ flowchart LR
    them onto `failed` with the handler's code (`TOOL_FAILURE` default,
    `INVALID_PARAMS`, `SERVICE_UNAVAILABLE`, `INVALID_CONFIG`, …). A timeout message
    detection flips the status to `timeout` with code `TIMEOUT`.
+6. **Sandbox invocation hardening (v1.0.5)** — `js-function` and `nodejs` tools are
+   invoked *inside* the `node:vm` context under the 4 s sync timeout, so a body
+   without `await` (a runaway `for(;;)` loop) is bounded by the vm timeout instead of
+   hanging the host event loop until the async 10 s cap.
 
 ## Parallel independent calls (v1.0.3)
 
@@ -105,6 +109,50 @@ Dependent operations are simply steps **without** a shared group — the loop ex
 them sequentially in plan order, so step N+1 can use step N's observation as context.
 There is no automatic dataflow between executions; dependencies are expressed through
 plan order and the context bundle.
+
+## The nodejs execution environment (v1.0.5)
+
+`environment: 'nodejs'` tools run in `src/lib/nexool/tools/node-runner.ts` — a
+restricted Node.js JavaScript environment with the same `execute(params, context)`
+contract and the same structured-result shape as the `js-function` runner
+(`js-runner.ts`), so the executor, `POST /api/tools/test` and the CLI share one path
+per environment:
+
+- **Allowlisted modules only** — `require()`/`await import()` resolve through
+  `NODE_MODULE_ALLOWLIST` (`buffer`, `crypto`, `events`, `path`, `querystring`,
+  `string_decoder`, `url`, `util`, `assert`, `zlib`). Anything else fails with
+  `Module "x" is not available in the NexTool Node.js environment.` — deliberately
+  blocked modules (`child_process`, `cluster`, `vm`, `worker_threads`, `fs`, `os`,
+  `net`, `dgram`, `http`, `https`, `process`) append their reason.
+- **Dynamic `import()` without host flags** — `import("x")` call sites are rewritten
+  at compile time to an allowlist shim (`__nexoolDynamicImport`) with the same
+  allowlist as `require()`, because the stock `vm` dynamic-import callback would need
+  `--experimental-vm-modules`.
+- **No `process`, no timers, no `fetch`** — the sandbox globals are exactly
+  `params`, `context`, a capped `console` (100 lines × 2000 chars), `Buffer`,
+  `TextEncoder`, `TextDecoder`, `URL`, `URLSearchParams`, `atob`/`btoa` and
+  `structuredClone`.
+- **Execution limits** — source ≤ 64 000 chars; sync cap 4 s enforced at the function
+  invocation (bounds no-`await` runaway loops without freezing the host event loop);
+  async watchdog 10 s (`TIMEOUT`); heap-growth sentinel 256 MiB (`MEMORY` — an honest
+  in-process guard: it aborts the tool result but cannot revoke memory already
+  allocated in the host realm); result ≤ 64 KiB serialized, depth ≤ 12.
+- The authoring-side contract (allowlist table, globals, error wording) is documented
+  in [Tool Development](tool-development.md#the-nodejs-environment--restricted-nodejs-v105).
+
+## Runtime capability source: GET /api/tools/environments (v1.0.5)
+
+The handler-kind registry (`HANDLER_KIND_INFO` in `tools/registry.ts`) and the
+Node.js configuration (`NODE_MODULE_ALLOWLIST`, `NODE_BLOCKED_MODULES`,
+`NODE_SANDBOX_GLOBALS`, `NODE_EXECUTION_LIMITS` in `tools/node-runner.ts`) are served
+verbatim by `GET /api/tools/environments` — environments, handler kinds with their
+`configFields`, sandbox limits and the module allowlist/globals. The Tool IDE
+selector, handler-kind UI, IntelliSense declarations and References panel read THIS
+endpoint; there is no hardcoded frontend copy of the runtime capabilities.
+
+The `http_get` handler kind's structured config — `url` (required) and `timeout`
+(ms, 1000–15000, default 8000) — is declared in the same registry
+(`configFields`) and enforced by the handler at execution time.
 
 ## Failure, cancel and retry semantics
 
@@ -155,5 +203,6 @@ event wake tries again.
 ## See also
 
 - [Tools](tools.md) — definitions, registration, handler kinds.
+- [Tool Development](tool-development.md) — the Tool IDE and both function-tool sandboxes.
 - [Runtime](../architecture/runtime.md) — task-level limits and cancellation.
 - [Events](../architecture/events.md) — tool event catalog.

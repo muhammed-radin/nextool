@@ -128,7 +128,9 @@ export const toolDefinitionSchema = z
     description: nonEmpty(1000),
     purpose: z.string().trim().max(1000).optional(),
     category: nonEmpty(60),
-    environment: z.enum(['builtin', 'virtual-env', 'dynamic', 'js-function']),
+    // v1.0.5: nodejs joins the set (rejected by registerDynamicTool with a
+    // pointed message — nodejs tools register via /api/tools/js instead).
+    environment: z.enum(['builtin', 'virtual-env', 'dynamic', 'js-function', 'nodejs']),
     schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }).strict(),
   })
   .strict();
@@ -227,7 +229,12 @@ export const settingsSchema = z
 
 // ---------- Tool IDE ----------
 
-/** POST /api/tools/js — register a js-function tool (Tool IDE "Save") */
+/** Structured metadata record (v1.0.5 §2.7) — flat string key/value pairs. */
+export const metadataRecordSchema = z
+  .record(z.string().trim().min(1).max(120), z.string().max(2000))
+  .refine((v) => Object.keys(v).length <= 50, { message: 'metadata supports at most 50 key/value pairs' });
+
+/** POST /api/tools/js — register a function tool (js-function | nodejs, Tool IDE "Save") */
 export const registerJsToolSchema = z
   .object({
     name: z
@@ -240,8 +247,12 @@ export const registerJsToolSchema = z
     purpose: z.string().trim().max(1000).optional(),
     category: z.string().trim().max(60).optional(),
     toolVersion: z.string().trim().max(40).optional(),
+    // v1.0.5 §3: the restricted Node.js environment registers through the same
+    // endpoint — one registration system, two function sandboxes.
+    environment: z.enum(['js-function', 'nodejs']).optional(),
     schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }),
     functionSource: z.string().min(1).max(64_000),
+    metadata: metadataRecordSchema.optional(),
     enabled: z.boolean().optional(),
   })
   .strict();
@@ -260,17 +271,25 @@ export const updateToolSchema = z
     purpose: z.string().trim().max(1000).optional(),
     category: z.string().trim().max(60).optional(),
     toolVersion: z.string().trim().max(40).optional(),
+    /** v1.0.5: js-function ⇄ nodejs switch for user function tools. */
+    environment: z.enum(['js-function', 'nodejs']).optional(),
     schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }).optional(),
     functionSource: z.string().min(1).max(64_000).optional(),
+    metadata: metadataRecordSchema.optional(),
+    /** v1.0.5: dynamic tools only — validated against the real handler registry. */
+    handlerKind: z.enum(['echo', 'delay', 'http_get', 'uuid']).optional(),
+    handlerConfig: jsonObject.optional(),
     enabled: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'body must contain at least one field' });
 
-/** POST /api/tools/test — run a tool in the controlled test context */
+/** POST /api/tools/test — run a tool in the controlled test context (v1.0.5: environment-aware) */
 export const testToolSchema = z
   .object({
     name: z.string().trim().min(1).max(160).optional(),
     functionSource: z.string().max(64_000).optional(),
+    /** v1.0.5 §1.2/§4.5: which sandbox executes an UNSAVED editor source. */
+    environment: z.enum(['js-function', 'nodejs']).optional(),
     params: jsonObject.optional(),
   })
   .refine((v) => !!v.name !== !!v.functionSource, {

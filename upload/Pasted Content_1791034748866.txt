@@ -1,0 +1,1961 @@
+# NexTool Q1 — v1.0.11
+
+## THE EMPOWERMENT
+
+Continue from the completed **NexTool Q1 v1.0.10** codebase.
+
+Do not rebuild NexTool.
+
+Preserve all existing functionality unless explicitly changed below.
+
+This release contains runtime recovery, documentation/version synchronization, a new unrestricted tool environment, hierarchical auto-execution control, and another AI training upgrade.
+
+---
+
+# 0. GIT FIRST — PUSH CURRENT v1.0.10 BEFORE ANY v1.0.11 WORK
+
+The previous two Git pushes failed because the GitHub username may be incorrect.
+
+Before changing any source code:
+
+## Step 1 — inspect current Git state
+
+```bash
+git status
+git branch --show-current
+git log --oneline -10
+git remote -v
+```
+
+The target repository is:
+
+```text
+https://github.com/muhammed-radin/nextool.git
+```
+
+Current target branch:
+
+```text
+dev
+```
+
+## Step 2 — authenticate using the supplied credentials
+
+GitHub username candidates, in this order:
+
+```text
+muhammed-radin
+mhd-radin
+```
+
+Try:
+
+```text
+muhammed-radin
+```
+
+first.
+
+If authentication/push fails because that username is not valid for the repository, retry using:
+
+```text
+mhd-radin
+```
+
+Do not immediately conclude that the repository is inaccessible.
+
+Use the provided token as the credential:
+
+```text
+REDACTED_GITHUB_TOKEN
+```
+
+Treat this token as a Git credential.
+
+Do not log it, print it, commit it, place it in source code, add it to documentation, or permanently embed it into the repository.
+
+Use a temporary/local authentication mechanism.
+
+## Step 3 — push v1.0.10
+
+Before beginning v1.0.11:
+
+```bash
+git status
+git add .
+git commit -m "release: NexTool v1.0.10"
+git push origin dev
+```
+
+If v1.0.10 is already committed, do not create a duplicate empty commit.
+
+The critical requirement is:
+
+```text
+CURRENT v1.0.10
+        ↓
+SUCCESSFULLY PUSHED TO dev
+        ↓
+ONLY THEN START v1.0.11
+```
+
+Do not begin v1.0.11 implementation until this checkpoint succeeds.
+
+---
+
+# 1. PRE-PLAN RECOVERY — FAILED STEP MUST CREATE A RECOVERY SUBGOAL
+
+Current pre-plan behavior:
+
+```text
+Main Goal
+   ↓
+Pre-plan multiple steps
+   ↓
+Execute steps
+   ↓
+One step fails
+   ↓
+Entire task stops
+```
+
+Change this only for:
+
+```text
+plannerType = pre-plan
+```
+
+Do not change the one-by-one planner behavior from v1.0.10.
+
+---
+
+# 2. NEW PRE-PLAN FAILURE RECOVERY FLOW
+
+When a pre-planned step fails or produces an unexpected/unusable result:
+
+```text
+MAIN GOAL
+   ↓
+PRE-PLAN
+   ↓
+STEP 1
+   ↓
+STEP 2 ← failure / unexpected response
+   ↓
+STOP NORMAL PLAN TEMPORARILY
+   ↓
+OBSERVE FAILURE
+   ↓
+CREATE RECOVERY SUBGOAL
+   ↓
+PRE-PLAN RECOVERY SUBGOAL
+   ↓
+EXECUTE RECOVERY STEPS
+   ↓
+RECOVERY SUCCESS?
+ ┌───────────────┐
+ │ YES           │ NO
+ ↓               ↓
+RESTORE         RETRY / REPLAN
+MAIN FLOW       RECOVERY
+ ↓               ↓
+CONTINUE        ATTEMPTS
+MAIN PLAN        ↓
+                MAX ATTEMPTS
+                ↓
+              END TASK
+```
+
+The original main goal remains intact.
+
+The main pre-plan is not discarded merely because one step failed.
+
+---
+
+# 3. FAILURE DETECTION
+
+Treat a pre-plan step as requiring recovery when:
+
+```text
+tool execution failed
+tool timeout
+tool returned an error
+unexpected response
+invalid/unusable result
+verification failed
+required expected state was not reached
+observer determines the step outcome is not usable
+```
+
+Do not classify ordinary expected intermediate results as failures.
+
+The Observer should remain the authority for determining whether the result is acceptable.
+
+---
+
+# 4. FREEZE THE MAIN PLAN DURING RECOVERY
+
+When a planned step fails:
+
+```text
+Main plan:
+✓ Step 1
+✗ Step 2
+○ Step 3
+○ Step 4
+```
+
+do not immediately execute:
+
+```text
+Step 3
+```
+
+Instead:
+
+```text
+Step 2 → recovery required
+```
+
+Create a recovery subgoal.
+
+Example:
+
+```text
+Main Goal:
+Restore API server.
+
+Main pre-plan:
+1. Check health
+2. Restart service
+3. Verify health
+4. Report status
+
+Step 2 fails:
+permission denied
+```
+
+Create:
+
+```text
+Recovery Subgoal:
+Recover from permission failure so the main service-restart goal can continue.
+```
+
+---
+
+# 5. RECOVERY SUBGOAL MUST HAVE ITS OWN PRE-PLAN
+
+The recovery system must use the existing pre-plan strategy.
+
+Example:
+
+```text
+Recovery Subgoal
+ ↓
+Pre-plan
+ ↓
+1. Inspect service state
+2. Check available restart method
+3. Use alternate recovery tool
+4. Verify service
+```
+
+Do not use the one-by-one planner for this requirement.
+
+This feature applies only to failed **pre-plan steps**.
+
+---
+
+# 6. RETURN TO THE MAIN PLAN AFTER SUCCESS
+
+When recovery succeeds:
+
+```text
+Recovery completed
+        ↓
+Verify main-goal state
+        ↓
+Restore main plan
+        ↓
+Determine next valid unfinished step
+        ↓
+Continue main goal
+```
+
+Do not restart the entire task unnecessarily.
+
+Do not repeat already completed successful steps unless the new recovery state invalidated them.
+
+---
+
+# 7. MAIN PLAN MUST BE STATE-AWARE AFTER RECOVERY
+
+Do not blindly continue at the exact array index.
+
+Re-evaluate:
+
+```text
+completed steps
+failed step
+recovery results
+current MainState
+latest observations
+goal status
+remaining plan validity
+```
+
+Then determine which original main-plan steps are still relevant.
+
+Example:
+
+```text
+Main plan:
+1. inspect
+2. restart
+3. verify
+4. report
+
+Step 2 failed.
+Recovery performed an alternate restart successfully.
+
+After recovery:
+Step 2 may already be satisfied.
+```
+
+Therefore the runtime may continue from:
+
+```text
+3. verify
+```
+
+instead of repeating step 2.
+
+---
+
+# 8. RECOVERY ATTEMPT LIMIT
+
+Recovery must not loop forever.
+
+Introduce a configurable recovery attempt limit for failed pre-plan steps.
+
+Suggested default:
+
+```text
+4 attempts
+```
+
+Allowed range should be defined through the centralized configuration limits system.
+
+Recommended:
+
+```text
+default = 4
+min = 2
+max = 4
+```
+
+The implementation must use the project's existing configuration-limits schema.
+
+Do not hard-code the value in the task loop if a configuration-limits entry is available.
+
+---
+
+# 9. WHAT COUNTS AS AN ATTEMPT
+
+An attempt means a meaningful recovery cycle:
+
+```text
+Observe
+→ create/revise recovery subgoal
+→ pre-plan recovery
+→ execute recovery plan
+→ verify
+```
+
+Do not increment the counter for:
+
+```text
+UI refresh
+SSE replay
+status polling
+ordinary planner events
+```
+
+Do increment when an actual recovery attempt is executed.
+
+---
+
+# 10. RECOVERY SUCCESS
+
+Recovery succeeds only when the Observer can establish that:
+
+```text
+the failed condition has been resolved
+```
+
+or:
+
+```text
+the main goal can safely continue
+```
+
+Do not treat merely receiving an HTTP 200 or a tool execution `completed` status as sufficient when the task requires actual state verification.
+
+---
+
+# 11. RECOVERY FAILURE
+
+If the recovery subgoal fails:
+
+```text
+Attempt 1
+→ fail
+
+Attempt 2
+→ fail
+
+Attempt 3
+→ fail
+
+Attempt 4
+→ fail
+```
+
+Then:
+
+```text
+Observe final failure
+        ↓
+record useful final state
+        ↓
+terminate task
+```
+
+The task must end honestly as failed/stopped according to the existing task lifecycle.
+
+Do not continue blindly through the remaining original main-plan steps.
+
+---
+
+# 12. UNRECOVERABLE / UNEXPECTED RESULT
+
+When the Observer determines that the situation cannot safely proceed:
+
+```text
+recoverability = false
+```
+
+end the task immediately.
+
+Do not waste the remaining retry budget when recovery is clearly impossible.
+
+---
+
+# 13. RECOVERY EVENTS
+
+Add explicit structured runtime events.
+
+Examples:
+
+```text
+planner.recovery_started
+planner.recovery_plan_built
+planner.recovery_attempt
+planner.recovery_succeeded
+planner.recovery_failed
+planner.recovery_exhausted
+planner.main_plan_resumed
+planner.main_plan_aborted
+```
+
+Example payload:
+
+```json
+{
+  "taskId": "...",
+  "failedStepId": "step_2",
+  "attempt": 2,
+  "maxAttempts": 4,
+  "reason": "service.restart returned permission denied"
+}
+```
+
+Do not flood SSE with duplicate state events.
+
+---
+
+# 14. TASK PREVIEW RECOVERY UI
+
+Task Preview should make recovery understandable.
+
+Example:
+
+```text
+Main Plan
+
+✓ Check server health
+✗ Restart service
+
+Recovery
+↳ Recover restart failure
+   ✓ Inspect service
+   ✓ Use alternate recovery path
+   ✓ Verify service
+
+↻ Main plan resumed
+
+→ Verify server health
+○ Report final state
+```
+
+If recovery is exhausted:
+
+```text
+Recovery failed
+
+Attempts: 4 / 4
+
+Main task ended because the failed step could not be recovered.
+```
+
+Do not hide recovery activity inside the generic execution list.
+
+---
+
+# 15. DO NOT CHANGE ONE-BY-ONE RECOVERY SEMANTICS
+
+The v1.0.10 one-by-one planner is already designed to:
+
+```text
+observe
+→ plan one step
+→ execute
+→ observe
+→ plan next step
+```
+
+Do not retrofit the pre-plan recovery machinery into one-by-one mode.
+
+One-by-one naturally replans after failure.
+
+The special recovery-subgoal mechanism in this release is for:
+
+```text
+PRE-PLAN
+```
+
+only.
+
+---
+
+# 16. VERSION SYNCHRONIZATION — ALL DOCUMENTATION + UI
+
+Update all NexTool documentation for:
+
+```text
+v1.0.11
+```
+
+Do not update only README.
+
+Search the complete repository for stale version references.
+
+Update all relevant:
+
+```text
+README
+docs
+release notes
+architecture docs
+tool docs
+training docs
+planner docs
+configuration docs
+API docs
+testing docs
+deployment docs
+UI version display
+About/version labels
+documentation index
+model documentation
+dataset documentation
+CLI version output
+runtime version metadata
+```
+
+Do not alter historical changelog/version entries whose purpose is to preserve previous release history.
+
+Add a new v1.0.11 release section instead.
+
+---
+
+# 17. MODEL VERSION UPDATE
+
+The v1.0.10 model was:
+
+```text
+1.0.1
+```
+
+For the v1.0.11 training release, update the relevant trained AI model version appropriately.
+
+Use:
+
+```text
+1.0.2
+```
+
+for the new trained model generation if the model architecture remains compatible.
+
+Preserve historical:
+
+```text
+1.0.0
+1.0.1
+```
+
+identities.
+
+Do not merely change the display string without actually producing a new trained/validated checkpoint.
+
+---
+
+# 18. DATASET VERSION UPDATE
+
+Update the active NexTool AI training dataset version for this release.
+
+Use:
+
+```text
+1.0.2
+```
+
+for the new training dataset generation, unless the existing dataset versioning scheme in the repository requires a more specific compatible version.
+
+Preserve historical datasets.
+
+Do not rename old datasets destructively.
+
+Document exactly which dataset revision produced model 1.0.2.
+
+---
+
+# 19. UI VERSION DISPLAY
+
+Verify and update all visible version indicators.
+
+Examples:
+
+```text
+Settings → About
+Models
+Datasets
+Documentation
+Footer/version badge
+CLI output
+system metadata
+```
+
+Expected release:
+
+```text
+NexTool Q1 v1.0.11
+```
+
+Do not leave a visible `v1.0.10` where the current application version should be displayed.
+
+Historical release references are allowed.
+
+---
+
+# 20. NEW TOOL ENVIRONMENT — `freedom-node`
+
+Add a new tool execution environment:
+
+```text
+freedom-node
+```
+
+This environment is intentionally different from the existing restricted environments.
+
+Its purpose is to provide a tool with complete Node.js freedom.
+
+It must not inherit the normal:
+
+```text
+js-function
+virtual filesystem
+network policy
+request limits
+file-entry limits
+sandbox restrictions
+```
+
+unless explicitly required by another non-contradictory runtime safety mechanism.
+
+---
+
+# 21. FREEDOM-NODE SEMANTICS
+
+`freedom-node` means the tool is allowed to access normal Node.js capabilities.
+
+Examples include:
+
+```text
+fs
+path
+os
+child_process
+process
+Buffer
+streams
+native Node modules
+npm
+external commands
+network access
+real filesystem
+environment variables
+```
+
+where available to the host runtime.
+
+The environment must be intentionally different from the existing hardened `js-function` sandbox.
+
+---
+
+# 22. FREEDOM-NODE MUST BE EXPLICIT
+
+Do not silently convert existing tools to `freedom-node`.
+
+Existing environments remain unchanged.
+
+Only tools explicitly created/imported with:
+
+```text
+environment = "freedom-node"
+```
+
+receive these semantics.
+
+Existing:
+
+```text
+js-function
+virtual-env
+dynamic
+builtin
+```
+
+behavior must remain intact.
+
+---
+
+# 23. REAL FILESYSTEM ACCESS
+
+`freedom-node` may access the real host filesystem.
+
+Do not redirect its file operations into the normal NexTool virtual filesystem.
+
+Example:
+
+```js
+import fs from "node:fs";
+```
+
+must operate against the real Node process filesystem available to the runtime.
+
+---
+
+# 24. NETWORK ACCESS
+
+`freedom-node` does not use the normal Network Policy request restrictions.
+
+It may perform normal Node network operations.
+
+Do not silently cap it with the standard:
+
+```text
+request count
+response size
+redirect count
+network timeout
+URL import restriction
+```
+
+configuration used by restricted environments.
+
+---
+
+# 25. VFS CONFIGURATION REQUIREMENT
+
+The existing centralized configuration limits system must contain separate filesystem configuration.
+
+The user requirement is:
+
+```text
+vfs
+```
+
+for restricted virtual filesystem limits.
+
+The unrestricted escape configuration should be represented as:
+
+```text
+fs
+```
+
+where the existing configuration architecture permits that distinction.
+
+Do not create an unrelated third filesystem configuration system.
+
+---
+
+# 26. FREEDOM-NODE + `fs` CONFIGURATION
+
+`freedom-node` must use the `fs` configuration path to determine that real filesystem restrictions are not being applied by NexTool's normal VFS limiter.
+
+Example conceptual configuration:
+
+```json
+{
+  "vfs": {
+    "...": "restricted virtual filesystem limits"
+  },
+  "fs": {
+    "enabled": true,
+    "restricted": false
+  }
+}
+```
+
+Use the project's real configuration-limits schema rather than blindly copying this exact shape if the current file uses another structure.
+
+The important semantics are:
+
+```text
+vfs = normal restricted tool filesystem
+fs = unrestricted freedom-node filesystem mode
+```
+
+---
+
+# 27. CRITICAL: SETTINGS UI MUST NOT ENABLE THE ESCAPE
+
+The normal Settings UI must not contain a control that lets the user change:
+
+```text
+vfs → fs
+```
+
+or otherwise grant unrestricted real-filesystem freedom.
+
+The `fs`/freedom switch must be controlled through the configuration file/system only.
+
+Do not expose:
+
+```text
+"Disable VFS limits"
+"Enable real filesystem"
+"Full filesystem access"
+"Escape sandbox"
+```
+
+as a normal Settings toggle.
+
+---
+
+# 28. CONFIGURATION-ONLY GATE
+
+The code must explicitly check the centralized configuration before allowing:
+
+```text
+freedom-node → real filesystem
+```
+
+If the configuration does not authorize `fs` mode:
+
+```text
+freedom-node
+→ do not grant filesystem escape
+```
+
+Fail closed.
+
+Do not allow the frontend to override this.
+
+---
+
+# 29. FREEDOM-NODE ENVIRONMENT IN TOOL CREATION
+
+Update Tool Create/Edit.
+
+Environment options should include:
+
+```text
+builtin
+virtual-env
+dynamic
+js-function
+freedom-node
+```
+
+The Tool IDE should clearly warn:
+
+```text
+freedom-node
+Full host Node.js access. File system, network, processes, and host-level capabilities may be available.
+```
+
+Do not imply that this is equivalent to the restricted `js-function` sandbox.
+
+---
+
+# 30. FREEDOM-NODE TOOL IMPORT/EXPORT
+
+Update the portable tool schema so:
+
+```json
+"environment": "freedom-node"
+```
+
+is valid.
+
+Validation must recognize it.
+
+Export/import round trips must preserve the environment exactly.
+
+---
+
+# 31. FREEDOM-NODE CODE EXECUTION
+
+Use a dedicated runtime implementation.
+
+Do not weaken:
+
+```text
+src/lib/nexool/tools/js-runner.ts
+```
+
+globally just to implement `freedom-node`.
+
+Prefer:
+
+```text
+js-runner
+freedom-node-runner
+```
+
+or an equivalent clearly separated runtime path.
+
+The existing restricted environment must stay restricted.
+
+---
+
+# 32. FREEDOM-NODE TIMEOUT/RESOURCE SEMANTICS
+
+"Full freedom" refers to removal of the normal VFS/network/tool sandbox limitations.
+
+Still preserve the higher-level task lifecycle and cancellation infrastructure so NexTool can correctly track:
+
+```text
+started
+running
+completed
+failed
+cancelled/stopped
+```
+
+Do not allow an untracked subprocess to corrupt task state.
+
+If host-level processes cannot be forcefully terminated reliably, report that truthfully in the runtime status instead of pretending cancellation succeeded.
+
+---
+
+# 33. FREEDOM-NODE LOGGING
+
+Never expose secrets from:
+
+```text
+process.env
+credential files
+host configuration
+```
+
+in the UI automatically.
+
+Normal tool output should still be captured using the existing execution result/event architecture.
+
+Do not dump an unrestricted environment's entire process environment into logs.
+
+---
+
+# 34. AUTO-EXECUTION OVERRIDE HIERARCHY
+
+Implement a clear hierarchy.
+
+Required layers:
+
+```text
+1. Global auto-execution config — Settings
+2. Tool auto-execution config — Tool Create/Edit
+3. Task Console auto-execution config
+```
+
+---
+
+# 35. GLOBAL AUTO-EXECUTION — HIGHEST PRIORITY
+
+Global Settings is the highest-priority setting.
+
+If global auto-execution is explicitly enabled:
+
+```text
+GLOBAL = ENABLED
+```
+
+it overrides the lower-level contents/configuration.
+
+Example:
+
+```text
+Global = ON
+Tool = OFF
+Task = OFF
+```
+
+Effective behavior:
+
+```text
+AUTO-EXECUTE = ON
+```
+
+The lower-level values must not override the global enable.
+
+---
+
+# 36. TOOL-LEVEL AUTO-EXECUTION
+
+Each tool may have its own auto-execution setting in:
+
+```text
+Tools → Create/Edit
+```
+
+When global auto-execution does not force behavior, the tool configuration may override the Task Console setting.
+
+Example:
+
+```text
+Global = not forcing enable
+Tool = ON
+Task = OFF
+```
+
+Effective behavior:
+
+```text
+AUTO-EXECUTE = ON
+```
+
+Tool-level configuration has higher precedence than the Task Console configuration.
+
+---
+
+# 37. TASK CONSOLE AUTO-EXECUTION
+
+Task Console provides the lowest-level task-specific preference.
+
+Example:
+
+```text
+Global = not forcing enable
+Tool = not forcing enable
+Task = ON
+```
+
+Effective:
+
+```text
+AUTO-EXECUTE = ON
+```
+
+The Task Console must not override a higher-priority global or tool-level decision.
+
+---
+
+# 38. USE EXPLICIT RESOLUTION SEMANTICS
+
+Do not implement precedence as accidental boolean merging.
+
+Create one centralized resolver, for example:
+
+```text
+resolveAutoExecution(...)
+```
+
+It should return something explicit such as:
+
+```json
+{
+  "enabled": true,
+  "source": "global"
+}
+```
+
+or:
+
+```json
+{
+  "enabled": true,
+  "source": "tool"
+}
+```
+
+or:
+
+```json
+{
+  "enabled": true,
+  "source": "task"
+}
+```
+
+or:
+
+```json
+{
+  "enabled": false,
+  "source": "default"
+}
+```
+
+Use that resolver everywhere auto-execution decisions are made.
+
+---
+
+# 39. AUTO-EXECUTION TEST MATRIX
+
+Test at minimum:
+
+```text
+Global ON
+Tool OFF
+Task OFF
+→ ON
+
+Global ON
+Tool ON
+Task OFF
+→ ON
+
+Global OFF
+Tool ON
+Task OFF
+→ ON
+
+Global OFF
+Tool OFF
+Task ON
+→ ON
+
+Global OFF
+Tool OFF
+Task OFF
+→ OFF
+```
+
+Also test any existing explicit approval/confirmation behavior.
+
+Do not break existing user-approval flows.
+
+---
+
+# 40. TOOL UI
+
+Tool Create/Edit should expose:
+
+```text
+Auto-execution
+[ Enabled / Disabled / inherit ]
+```
+
+or an equivalent UX consistent with the rest of the application.
+
+Make the precedence visible.
+
+For example:
+
+```text
+Effective auto-execution:
+GLOBAL ENABLED
+```
+
+when the global setting is forcing the behavior.
+
+---
+
+# 41. TASK CONSOLE UI
+
+Task Console should expose its local auto-execution preference.
+
+When overridden by a higher-priority layer, show a small explanation:
+
+```text
+Controlled by global auto-execution setting
+```
+
+or:
+
+```text
+Controlled by tool configuration
+```
+
+Do not falsely imply that the task setting is authoritative.
+
+---
+
+# 42. SETTINGS UI
+
+Add global auto-execution configuration to Settings.
+
+Global setting must be visibly identified as:
+
+```text
+Global
+Highest priority
+```
+
+Do not expose any filesystem `fs` escape controls here.
+
+---
+
+# 43. GIT CHECKPOINT AFTER TASK 1–4
+
+The user explicitly requires a checkpoint before training.
+
+After completing:
+
+```text
+1. pre-plan recovery
+2. documentation/version updates
+3. freedom-node
+4. auto-execution hierarchy
+```
+
+run:
+
+```bash
+git status
+git diff
+git add .
+git commit -m "feat: add pre-plan recovery, freedom-node, and execution hierarchy"
+git push origin dev
+```
+
+Again use:
+
+```text
+muhammed-radin
+```
+
+first, then:
+
+```text
+mhd-radin
+```
+
+if the first authentication attempt fails.
+
+Do not start the model-training work until this checkpoint push succeeds.
+
+---
+
+# 44. TRAINING UPGRADE — MORE KNOWLEDGE
+
+After the Git checkpoint:
+
+Expand the training system again.
+
+The goal is:
+
+```text
+more knowledge
+better generalization
+better tool selection
+better parameter understanding
+better task understanding
+better planner decisions
+better failure recovery
+lower latency
+```
+
+Do not optimize only for benchmark accuracy.
+
+---
+
+# 45. TRAIN MAIN + CORE MORE DEEPLY
+
+The Main/Core AI must understand much larger task descriptions and Markdown-heavy task inputs.
+
+Inspect all current limits affecting:
+
+```text
+request length
+context length
+description length
+Markdown input
+tool descriptions
+planning input
+tokenization/vectorization
+state encoding
+model input tensors
+database fields
+API body validation
+UI textareas/editors
+```
+
+Do not arbitrarily truncate large task descriptions without a clear reason.
+
+Where current limits are unnecessarily small, expand them safely and consistently.
+
+---
+
+# 46. LARGE DESCRIPTION / MARKDOWN SUPPORT
+
+Add training examples containing:
+
+```text
+large technical descriptions
+Markdown documents
+multi-section task descriptions
+checklists
+tables
+code snippets
+API documentation
+configuration files
+nested structured descriptions
+long operational instructions
+```
+
+Teach the model to identify the actual task objective inside long content.
+
+Example:
+
+```text
+long Markdown document
++
+final instruction near bottom
+```
+
+should still allow correct task understanding.
+
+Do not make the model depend only on the first paragraph.
+
+---
+
+# 47. LONG-CONTEXT TRAINING QUALITY
+
+Include examples where:
+
+```text
+important information
+```
+
+appears:
+
+```text
+near the beginning
+middle
+end
+```
+
+and across Markdown structures:
+
+```text
+# headings
+## sections
+- lists
+1. ordered steps
+tables
+code blocks
+JSON
+YAML
+```
+
+The expected tool/action should remain tied to the complete semantic request.
+
+---
+
+# 48. TEACH MORE KNOWLEDGE
+
+Expand training across NexTool's actual operational domain:
+
+```text
+system diagnostics
+networking
+HTTP APIs
+servers
+services
+filesystem
+processes
+automation
+monitoring
+recovery
+notifications
+memory
+task planning
+live tasks
+state transitions
+error interpretation
+tool selection
+parameter extraction
+goal verification
+technical documentation interpretation
+Markdown interpretation
+JSON/YAML interpretation
+configuration reasoning
+CLI operations
+database-related operational tasks
+developer workflows
+deployment tasks
+testing
+debugging
+```
+
+Use real registered tool semantics.
+
+Do not invent tools just to create examples.
+
+---
+
+# 49. HARD EXAMPLES
+
+Add difficult training examples with:
+
+```text
+similar tools
+same keywords but different intent
+ambiguous wording
+typos
+synonyms
+long descriptions
+irrelevant context
+multiple possible actions
+failed previous attempt
+new state after previous action
+conditional requirements
+verification requirements
+```
+
+The goal is semantic understanding rather than keyword memorization.
+
+---
+
+# 50. MORE ACCURATE + FASTER
+
+Inspect the current model inference path for unnecessary work.
+
+Optimize where safe:
+
+```text
+vectorization
+feature extraction
+input preprocessing
+repeated parsing
+model loading
+checkpoint loading
+inference allocations
+duplicate state encoding
+repeated tool-definition preparation
+```
+
+Do not trade correctness for superficial latency improvements.
+
+Measure before/after latency.
+
+---
+
+# 51. MODEL TRAINING STRATEGY
+
+For the new model generation:
+
+```text
+dataset
+→ clean/validate
+→ train
+→ validation
+→ held-out test
+→ benchmark
+→ latency measurement
+→ error analysis
+→ checkpoint selection
+```
+
+Do not automatically select a checkpoint solely because it has the lowest training loss.
+
+---
+
+# 52. MODEL VERSION
+
+Create a real new model generation:
+
+```text
+Current:
+1.0.1
+
+New:
+1.0.2
+```
+
+The model metadata must record:
+
+```text
+model version
+training dataset version
+training configuration
+checkpoint
+timestamp
+parameter count
+benchmark metrics
+```
+
+The model version must correspond to an actual trained artifact.
+
+---
+
+# 53. DATASET VERSION
+
+Create/update:
+
+```text
+dataset version = 1.0.2
+```
+
+and record:
+
+```text
+number of examples
+train split
+validation split
+test split
+categories
+source
+generation/training notes
+```
+
+Avoid accidental duplicate examples.
+
+---
+
+# 54. TRAIN ALL TRAINABLE LOCAL MODELS
+
+As in v1.0.10:
+
+```text
+inspect model registry
+identify locally trainable models
+train every supported trainable model
+benchmark every supported trained model
+```
+
+Do not falsely claim externally hosted/provider-controlled models were retrained.
+
+---
+
+# 55. PATTERN-AWARE TRAINING
+
+Include the previous task/observer pattern pipeline.
+
+Use verified patterns to create additional training examples for:
+
+```text
+recovery
+verification
+subgoals
+state transitions
+tool sequences
+failure handling
+live operation
+```
+
+Avoid poisoning the dataset with low-confidence patterns.
+
+---
+
+# 56. ERROR ANALYSIS
+
+After training, identify the hardest failed examples.
+
+Categorize failures:
+
+```text
+wrong tool
+wrong parameters
+wrong interpretation
+context ignored
+long-description failure
+Markdown interpretation failure
+recovery failure
+verification failure
+latency regression
+```
+
+Add targeted training examples for the most important weaknesses.
+
+Retrain/re-evaluate.
+
+Do not simply generate random extra examples.
+
+---
+
+# 57. FINAL TRAINING ACCEPTANCE
+
+The new model should demonstrate measurable improvements in:
+
+```text
+tool-selection accuracy
+parameter accuracy
+long-description understanding
+Markdown-heavy task understanding
+recovery scenarios
+unseen wording
+latency
+```
+
+Use actual benchmark measurements.
+
+Do not fabricate improvement numbers.
+
+If a metric becomes worse, record it honestly and investigate before activation.
+
+---
+
+# 58. DOCUMENTATION FOR `freedom-node`
+
+Document:
+
+```text
+environment name
+purpose
+difference from js-function
+real filesystem behavior
+network behavior
+process behavior
+configuration-only filesystem escape
+fs vs vfs semantics
+why Settings cannot enable fs escape
+security implications
+tool creation
+tool import/export
+runtime behavior
+cancellation/limitations
+```
+
+Explicitly state that this is an intentionally unrestricted execution environment.
+
+---
+
+# 59. DOCUMENTATION FOR AUTO-EXECUTION
+
+Document the exact hierarchy:
+
+```text
+Global Settings
+      ↓
+Tool Create/Edit
+      ↓
+Task Console
+```
+
+and show examples.
+
+---
+
+# 60. DOCUMENTATION FOR PRE-PLAN RECOVERY
+
+Document:
+
+```text
+normal pre-plan
+failed step
+recovery subgoal
+recovery pre-plan
+attempts
+success
+main-plan resume
+failure/exhaustion
+```
+
+---
+
+# 61. FULL DOCUMENTATION VERSION AUDIT
+
+Search the entire repository for:
+
+```text
+v1.0.10
+1.0.1
+old dataset version
+old model version
+old release labels
+```
+
+Update references that represent the current version.
+
+Preserve intentional historical references in changelog/history sections.
+
+Do not blindly replace every occurrence.
+
+---
+
+# 62. FULL TESTING
+
+Run the project's standard checks:
+
+```bash
+pnpm install
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
+
+or the exact equivalent scripts defined by the repository.
+
+Then test:
+
+```text
+pre-plan normal completion
+pre-plan failed-step recovery
+recovery success
+recovery second attempt
+recovery exhausted
+one-by-one regression
+live mode regression
+freedom-node tool
+restricted tools regression
+auto-execution hierarchy
+task override
+tool override
+global override
+single tool import/export
+bulk tool import/export
+training
+benchmark
+model import/export
+documentation view
+version UI
+```
+
+---
+
+# 63. FREEDOM-NODE TESTS
+
+Test a `freedom-node` tool that verifies:
+
+```text
+real fs access
+real path operations
+Node built-ins
+network access
+child process execution
+process information
+```
+
+Use harmless verification commands.
+
+Do not use destructive test commands.
+
+Also test that an ordinary:
+
+```text
+js-function
+```
+
+tool does NOT suddenly receive those unrestricted capabilities.
+
+---
+
+# 64. CONFIGURATION SECURITY TEST
+
+Verify:
+
+```text
+Settings UI
+```
+
+cannot change:
+
+```text
+vfs → fs
+```
+
+or grant unrestricted filesystem access.
+
+Verify modifying the actual configuration source is what changes the capability.
+
+Verify the runtime reads the authoritative configuration server-side.
+
+---
+
+# 65. AUTO-EXECUTION TESTS
+
+Test all precedence combinations.
+
+At minimum:
+
+```text
+Global ON / Tool OFF / Task OFF
+Global ON / Tool ON / Task OFF
+Global OFF / Tool ON / Task OFF
+Global OFF / Tool OFF / Task ON
+Global OFF / Tool OFF / Task OFF
+```
+
+Confirm the effective source is displayed correctly.
+
+---
+
+# 66. FINAL GIT PUSH
+
+After all v1.0.11 work is complete:
+
+```bash
+git status
+git diff
+git add .
+git commit -m "feat: NexTool v1.0.11 empowerment"
+git push origin dev
+```
+
+Use GitHub username:
+
+```text
+muhammed-radin
+```
+
+first.
+
+If it fails due to username/repository authentication, retry with:
+
+```text
+mhd-radin
+```
+
+using the supplied token.
+
+Do not create another branch.
+
+Do not perform an unnecessary pull.
+
+After pushing:
+
+```bash
+git status
+git log --oneline -5
+```
+
+Confirm the final commit is present on `dev`.
+
+---
+
+# FINAL v1.0.11 ACCEPTANCE CRITERIA
+
+```text
+✓ current v1.0.10 successfully pushed BEFORE v1.0.11 changes
+✓ pre-plan failed steps create recovery subgoals
+✓ recovery uses pre-plan
+✓ main plan pauses during recovery
+✓ successful recovery resumes main goal
+✓ completed work is not unnecessarily repeated
+✓ recovery attempts are bounded
+✓ exhausted recovery ends the task honestly
+✓ one-by-one planner behavior remains unchanged
+✓ all docs updated to v1.0.11
+✓ current UI version updated
+✓ model version updated to real 1.0.2
+✓ dataset version updated to real 1.0.2
+✓ historical versions preserved
+✓ freedom-node environment implemented
+✓ freedom-node is explicitly selected
+✓ real fs/network/process capabilities available according to configuration
+✓ restricted environments remain restricted
+✓ vfs and fs configuration semantics implemented
+✓ Settings UI cannot grant fs escape
+✓ filesystem escape requires authoritative configuration
+✓ freedom-node import/export works
+✓ global auto-execution hierarchy implemented
+✓ tool-level auto-execution implemented
+✓ task-level auto-execution implemented
+✓ global has highest priority
+✓ tool has priority over task when global is not forcing the result
+✓ task is the lowest-level preference
+✓ effective source is observable
+✓ checkpoint Git push completed before training
+✓ more high-quality training data added
+✓ larger descriptions supported correctly
+✓ Markdown-heavy tasks trained
+✓ main/core understanding improved
+✓ long-input behavior benchmarked
+✓ model latency measured
+✓ all locally trainable models trained
+✓ new checkpoints validated
+✓ error analysis performed
+✓ pattern/recovery knowledge incorporated appropriately
+✓ no fabricated training results
+✓ full documentation updated
+✓ typecheck passes
+✓ lint passes
+✓ tests pass
+✓ build passes
+✓ final commit created
+✓ final commit pushed to dev
+✓ working tree reviewed after push
+```
+
+The central v1.0.11 concept is:
+
+```text
+              THE EMPOWERMENT
+
+PRE-PLAN
+    ↓
+FAILURE
+    ↓
+RECOVERY SUBGOAL
+    ↓
+RECOVERY PRE-PLAN
+    ↓
+SUCCESS
+    ↓
+RETURN TO MAIN GOAL
+    ↓
+CONTINUE
+
++
+
+freedom-node
+    ↓
+explicitly unrestricted execution environment
+
++
+
+AUTO-EXECUTION
+    ↓
+GLOBAL
+    ↓
+TOOL
+    ↓
+TASK
+
++
+
+AI 1.0.2
+    ↓
+more knowledge
+better long-input understanding
+better recovery understanding
+better accuracy
+measured faster inference
+```

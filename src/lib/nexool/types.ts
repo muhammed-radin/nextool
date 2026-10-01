@@ -25,7 +25,16 @@ export interface ToolSchema {
   properties: ToolParamDef[];
 }
 
-export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic' | 'js-function';
+/**
+ * v1.0.5 — `nodejs` joins the environment set: a RESTRICTED Node.js sandbox
+ * (node:vm + module allowlist — no process/fs/net/child_process). See
+ * tools/node-runner.ts for the actual runtime contract.
+ */
+export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs';
+
+/** Environments a developer may author tools for in the Tool IDE (v1.0.5 §2.3). */
+export const AUTHORABLE_ENVIRONMENTS = ['js-function', 'nodejs', 'dynamic'] as const;
+export type AuthorableEnvironment = (typeof AUTHORABLE_ENVIRONMENTS)[number];
 
 export interface ToolDefinition {
   name: string; // e.g. "server.health"
@@ -41,6 +50,10 @@ export interface ToolDefinition {
   functionSource?: string;
   /** js-function tools only (v1.0.2) — free-form user-facing tool version */
   toolVersion?: string;
+  /** v1.0.5 — arbitrary user metadata as structured string key/value pairs.
+   *  Lives inside the stored definition JSON; round-trips through
+   *  create/edit/save/test/duplicate/export/import. */
+  metadata?: Record<string, string>;
 }
 
 export interface ToolStats {

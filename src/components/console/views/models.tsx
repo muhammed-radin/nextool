@@ -5,6 +5,11 @@
  * registered .nextool packages, package loading dialog and live benchmarks.
  * v1.0.1: blue gradient glassmorphism — text-gradient engine hero on glass,
  * honest adapter states kept, glass-strong dialog, min-h-11 controls.
+ * v1.0.5 §5: responsive import modal — flex-column DialogContent capped at
+ * max-h-[85dvh] with a scrollable body between a stable header and footer,
+ * chosen-file chip (break-all + native tooltip + size), stacked full-width
+ * controls on mobile, and in-modal role="alert" error cards (rose-tinted)
+ * for both the file-import and manifest-paste flows.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,7 +25,7 @@ import { ApiClientError, getModels, importModelPackage, loadModel, modelExportUr
 import type { ModelsInfo } from '@/lib/nexool/client';
 import { useSystemStats } from '../providers';
 import { EmptyState, ErrorCard, JsonBlock, SectionTitle, TimeAgo, fmtMs, statusTone } from '../ui-bits';
-import { Box, CheckCircle2, Cpu, Download, Loader2, MinusCircle, PackageOpen, Upload } from 'lucide-react';
+import { AlertTriangle, Box, CheckCircle2, Cpu, Download, Loader2, MinusCircle, PackageOpen, Upload } from 'lucide-react';
 
 function AdapterRow({ label, available, note }: { label: string; available: boolean; note: string }) {
   return (
@@ -38,6 +43,13 @@ function AdapterRow({ label, available, note }: { label: string; available: bool
   );
 }
 
+/** v1.0.5 §5.4: human-readable size for the chosen-package chip. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function ModelsView() {
   const { stats } = useSystemStats();
   const [info, setInfo] = useState<ModelsInfo | null>(null);
@@ -47,6 +59,9 @@ export default function ModelsView() {
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  // v1.0.5 §5.4/§5.5: chosen-file chip + in-modal error card state.
+  const [chosenFile, setChosenFile] = useState<File | null>(null);
+  const [modalError, setModalError] = useState<{ title: string; message: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -62,15 +77,27 @@ export default function ModelsView() {
     void load();
   }, [load]);
 
+  // v1.0.5 §5.5: fresh error/file-chip state every time the dialog opens
+  // (covers both reopen via overlay/close button and the Import model button).
+  useEffect(() => {
+    if (loadOpen) {
+      setModalError(null);
+      setChosenFile(null);
+    }
+  }, [loadOpen]);
+
   const submitLoad = async () => {
     let manifest: unknown;
     try {
       manifest = JSON.parse(manifestText);
     } catch {
+      // v1.0.5 §5.5: surface validation failures inside the modal (toast kept).
+      setModalError({ title: 'Invalid manifest', message: 'Manifest is not valid JSON' });
       toast.error('Manifest is not valid JSON');
       return;
     }
     setBusy(true);
+    setModalError(null);
     try {
       const pkg = await loadModel({ manifest: manifest as Record<string, unknown> });
       toast.success('Package registered', { description: `${pkg.name} v${pkg.version} (${pkg.status})` });
@@ -78,9 +105,9 @@ export default function ModelsView() {
       setManifestText('');
       void load();
     } catch (e) {
-      toast.error('Package rejected', {
-        description: e instanceof ApiClientError ? `${e.message}${e.status ? ` (HTTP ${e.status})` : ''}` : 'Unknown error',
-      });
+      const message = e instanceof ApiClientError ? `${e.message}${e.status ? ` (HTTP ${e.status})` : ''}` : 'Unknown error';
+      setModalError({ title: 'Package rejected', message });
+      toast.error('Package rejected', { description: message });
     } finally {
       setBusy(false);
     }
@@ -89,6 +116,10 @@ export default function ModelsView() {
   /** v1.0.2 §44-46: real package import (.nextool / tfjs zip / bare manifest). */
   const onImportFile = async (file: File | undefined) => {
     if (!file) return;
+    // v1.0.5 §5.4/§5.5: show what was chosen (name + size chip) and clear any
+    // previous in-modal error before this import starts.
+    setChosenFile(file);
+    setModalError(null);
     setImporting(true);
     try {
       const result = await importModelPackage(file);
@@ -99,9 +130,9 @@ export default function ModelsView() {
       setLoadOpen(false);
       void load();
     } catch (e) {
-      toast.error('Import rejected', {
-        description: e instanceof ApiClientError ? e.message : 'Unknown error',
-      });
+      const message = e instanceof ApiClientError ? e.message : 'Unknown error';
+      setModalError({ title: 'Import rejected', message });
+      toast.error('Import rejected', { description: message });
     } finally {
       setImporting(false);
     }
@@ -287,47 +318,89 @@ export default function ModelsView() {
         </>
       )}
 
-      {/* Load / import package dialog */}
+      {/* Load / import package dialog — v1.0.5 §5: responsive flex-column modal.
+          Width: shadcn defaults already cap at max-w-[calc(100%-2rem)] / sm:max-w-lg,
+          so the dialog can never exceed the viewport. Height: max-h-[85dvh] with a
+          scrollable body (min-h-0 flex-1 overflow-y-auto) between a shrink-0 header
+          and footer — the app behind the modal never becomes the scroll container. */}
       <Dialog open={loadOpen} onOpenChange={setLoadOpen}>
-        <DialogContent className="glass-strong sm:max-w-lg">
-          <DialogHeader>
+        <DialogContent data-testid="import-model-dialog" className="glass-strong flex max-h-[85dvh] flex-col gap-4 overflow-hidden p-4 sm:max-w-lg sm:p-6">
+          <DialogHeader className="shrink-0 text-left">
             <DialogTitle>Import model package</DialogTitle>
             <DialogDescription>
               Upload a <code className="font-mono">.nextool</code> package, a native TFJS zip (<code className="font-mono">model.json + .bin</code>), or a bare <code className="font-mono">.json</code> manifest. Binary packages are compatibility-validated (real TFJS load check) before registration.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".nextool,.zip,.json"
-                className="hidden"
-                onChange={(e) => void onImportFile(e.target.files?.[0])}
-                aria-label="Choose model package file"
-              />
-              <Button variant="outline" className="min-h-11 w-full border-dashed border-white/[0.15] bg-white/[0.04] text-foreground/90" onClick={() => fileRef.current?.click()} disabled={importing}>
-                {importing ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <PackageOpen className="size-4" aria-hidden />} Choose package file…
-              </Button>
-            </div>
-            <div className="relative text-center text-[10px] uppercase tracking-widest text-muted-foreground/60">
-              <span className="bg-transparent">or paste a bare manifest</span>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="manifest-json">Manifest JSON</Label>
-              <Textarea
-                id="manifest-json"
-                value={manifestText}
-                onChange={(e) => setManifestText(e.target.value)}
-                rows={6}
-                className="border-white/[0.09] bg-white/[0.04] font-mono text-xs"
-                placeholder='{"name":"my-pack","version":"1.0.0","format":"nextool","architecture":"…","compatibility":"…"}'
-              />
+          {/* §5.3: this body is the only scroll container inside the modal. */}
+          <div className="nextool-scroll min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="space-y-3">
+              {/* §5.2: file section first — full-width choose control + chosen-file chip. */}
+              <div>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".nextool,.zip,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const picked = e.target.files?.[0];
+                    // Reset the input so choosing the SAME file again retriggers
+                    // change (retry after an error must work).
+                    e.target.value = '';
+                    void onImportFile(picked);
+                  }}
+                  aria-label="Choose model package file"
+                />
+                <Button variant="outline" className="min-h-11 w-full border-dashed border-white/[0.15] bg-white/[0.04] text-foreground/90" onClick={() => fileRef.current?.click()} disabled={importing || busy}>
+                  {importing ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <PackageOpen className="size-4" aria-hidden />} Choose package file…
+                </Button>
+              </div>
+              {/* §5.4: chosen-file chip — long names wrap (break-all), full value in
+                  the native tooltip via title, chip never widens the modal. */}
+              {chosenFile ? (
+                <div data-testid="chosen-package-file" className="glass-card flex items-start gap-2 rounded-md px-3 py-2.5">
+                  <PackageOpen className="mt-0.5 size-3.5 shrink-0 text-sky-300" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="break-all font-mono text-[11px] leading-snug text-foreground/90" title={chosenFile.name}>{chosenFile.name}</p>
+                    <p className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{formatBytes(chosenFile.size)}</p>
+                  </div>
+                </div>
+              ) : null}
+              {/* §5.5: in-modal error card (rose-tinted, role="alert"); hidden while
+                  any import/validate request is in flight. */}
+              {modalError && !importing && !busy ? (
+                <div role="alert" data-testid="import-modal-error" className="rounded-md border border-rose-400/30 bg-rose-400/10 p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-rose-300" aria-hidden />
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-rose-300">{modalError.title}</p>
+                      <p className="mt-0.5 break-words font-mono text-[11px] leading-relaxed text-rose-200/90">{modalError.message}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {/* §5.2: divider, then the manifest paste section. */}
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-widest text-muted-foreground/60">
+                <span className="h-px flex-1 bg-white/[0.08]" aria-hidden />
+                or paste a bare manifest
+                <span className="h-px flex-1 bg-white/[0.08]" aria-hidden />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="manifest-json">Manifest JSON</Label>
+                <Textarea
+                  id="manifest-json"
+                  value={manifestText}
+                  onChange={(e) => setManifestText(e.target.value)}
+                  rows={6}
+                  className="border-white/[0.09] bg-white/[0.04] font-mono text-xs"
+                  placeholder='{"name":"my-pack","version":"1.0.0","format":"nextool","architecture":"…","compatibility":"…"}'
+                />
+              </div>
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04]" onClick={() => setLoadOpen(false)}>Cancel</Button>
-            <Button className="bg-primary-gradient min-h-11 text-primary-foreground hover:opacity-90" disabled={busy || !manifestText.trim()} onClick={() => void submitLoad()}>
+          {/* §5.2: actions stacked full-width on mobile, row on ≥sm. */}
+          <DialogFooter className="shrink-0 flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button variant="outline" className="min-h-11 w-full border-white/[0.09] bg-white/[0.04] sm:min-h-9 sm:w-auto" onClick={() => setLoadOpen(false)}>Cancel</Button>
+            <Button className="bg-primary-gradient min-h-11 w-full text-primary-foreground hover:opacity-90 sm:min-h-9 sm:w-auto" disabled={busy || importing || !manifestText.trim()} onClick={() => void submitLoad()}>
               {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <MinusCircle className="size-4" aria-hidden />} Validate &amp; load
             </Button>
           </DialogFooter>

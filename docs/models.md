@@ -75,9 +75,36 @@ engine. See [Training](training.md).
 | --- | --- |
 | Export dropdown | Models view → package row → **Export Current Model** → `tfjs` zip or `.nextool` package (see [Model Format](model-format.md)). |
 | Export API | `GET /api/models/export?id={modelRecordId}&format=tfjs\|nextool` — streams the zip. Only manifests with native TFJS weights are exportable. |
-| Import dialog | Models view → **Import model** → upload `.nextool`, native tfjs zip, or bare `.json` manifest (v1.0.1 compatibility, imported with a *not runnable* warning). |
+| Import dialog | Models view → **Import model** → upload `.nextool`, native tfjs zip, or bare `.json` manifest (v1.0.1 compatibility, imported with a *not runnable* warning). v1.0.5 rework below. |
 | Import API | `POST /api/models/import` (multipart `file`, ≤ 25 MiB). Binary packages must pass a real `tf.loadLayersModel` compatibility check; failures surface verbatim. |
 | CLI | `nextool model export / import / list / info` (see [CLI](../operations/cli.md)). |
+
+## The Import model dialog (v1.0.5 rework)
+
+The **Import model** dialog was rebuilt responsively (the shadcn width caps were
+already viewport-safe; the rework is about height, layout and error surfacing):
+
+- **Scrollable body between stable rails** — the modal is a flex column capped at
+  `85dvh`: title + description stay pinned on top, the action buttons stay pinned in
+  the footer, and only the middle (file section, manifest textarea, errors) scrolls —
+  long manifests can no longer push the buttons off-screen.
+- **Stacked mobile layout** — on phones the flow is one column: choose button
+  (full-width, ≥ 44 px tall) → chosen-file chip → error card → hairline divider
+  ("or paste a bare manifest") → manifest textarea → full-width **Cancel** and
+  **Validate & load** buttons. Desktop keeps the row footer, right-aligned.
+- **Chosen-file chip** — after picking a file, its name renders in a mono chip with
+  `break-all` (long names wrap inside the modal instead of widening it) plus a native
+  tooltip carrying the full filename and its size (B/KB/MB). Re-choosing the **same**
+  file after an error re-triggers the input (the selection is reset).
+- **Validation errors render INSIDE the modal** — a rose `role="alert"` card shows
+  manifest parse failures and `POST /api/models/load` / `POST /api/models/import`
+  rejections (e.g. `Package rejected / Invalid .nextool manifest: version must be
+  semver-like…`) with the message preserved verbatim. The card clears on a new file,
+  on starting either flow, and whenever the dialog reopens.
+- Everything else is unchanged: hidden `accept=".nextool,.zip,.json"` input,
+  manifest-paste flow, success/warning toasts, and the load() refresh on success.
+
+See [Mobile](mobile.md#v105-mobile-refinements) for the verified breakpoints.
 
 ## Dataset versioning
 

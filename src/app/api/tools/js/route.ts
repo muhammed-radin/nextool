@@ -1,7 +1,8 @@
 /**
- * POST /api/tools/js — register a js-function tool authored in the Tool IDE.
- * Function source is syntax-validated server-side before registration; broken
- * definitions never become active tools (v1.0.2 §24/§25).
+ * POST /api/tools/js — register a function tool authored in the Tool IDE.
+ * v1.0.5: accepts environment "js-function" (default) or "nodejs" — ONE
+ * registration system, two restricted sandboxes. Function source is validated
+ * server-side by the matching sandbox before registration.
  */
 import { ok, fail, parseBody } from '@/lib/nexool/api-helpers';
 import { registerJsTool } from '@/lib/nexool/tools/registry';
@@ -22,6 +23,8 @@ export async function POST(req: Request) {
       purpose: body.purpose,
       category: body.category,
       toolVersion: body.toolVersion,
+      environment: body.environment,
+      metadata: body.metadata,
       schema: body.schema,
       functionSource: body.functionSource,
       enabled: body.enabled,

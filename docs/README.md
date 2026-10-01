@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.4** — release name: *"UI Refinements, Tool Sync, Tool Import/Export & Responsive Improvements"* |
-| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2–v1.0.4 add tooling around it; trained classifier checkpoints carry their own versions) |
+| **Application version** | **1.0.5** — release name: *"Tool Runtime & Editor Improvements, Node.js Tool Environment, Responsive Model Import, and Documentation Routing"* |
+| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2–v1.0.5 add tooling around it; trained classifier checkpoints carry their own versions) |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
@@ -42,75 +42,95 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | AI Core | [Benchmarks](benchmarks.md) | The real `tool-selection` benchmark: model keys, split preference, exact metric definitions, history. |
 | Modes | [Goal Mode](goal-mode.md) | Full lifecycle with sequence diagram and a real example. |
 | Modes | [Live Mode](live-mode.md) | Activation, intervals, event-driven wake, feedback, stopping. |
-| Tools | [Tools](tools.md) | Writing tools: definitions, handler kinds, registration paths (incl. Tool IDE), JSON export/import (v1.0.4), full example. |
-| Tools | [Tool Development](tool-development.md) | v1.0.2 Tool IDE: schema editor, IntelliSense, `js-function` sandbox contract, testing, editor↔code sync (v1.0.4), worked example. |
-| Tools | [Tool Runtime](tool-runtime.md) | Async execution, parallel groups, timeouts, failure/cancel states. |
+| Tools | [Tools](tools.md) | Writing tools: definitions (incl. `nodejs` environment + metadata), handler kinds, registration paths (incl. Tool IDE), JSON export/import (v1.0.4, nodejs round trip v1.0.5), full example. |
+| Tools | [Tool Development](tool-development.md) | The Tool IDE: environments (`js-function` sandbox + `nodejs` restricted Node.js, v1.0.5), metadata editor, schema form, Monaco toggle, testing, editor source-sync, worked example. |
+| Tools | [Tool Runtime](tool-runtime.md) | Async execution, parallel groups, timeouts, failure/cancel states; v1.0.5 `nodejs` runner + `/api/tools/environments` capability source. |
 | Data | [Memory](memory.md) | Persistent Memory vs Live State — storage, retrieval, lifecycle. |
 | Data | [Live State](live-state.md) | Virtual server fleet, runtimeStatus, counters. |
 | Data | [Context](context.md) | Previous context + delta + observation + memory + history composition. |
 | Data | [History](history.md) | HistoryEntry records, retention, querying. |
 | Realtime | [Realtime](realtime.md) | SSE protocol, connection states, backoff policy, frontend wiring. |
 | API | [API Reference](api.md) | Every endpoint: method, path, request/response, errors, curl. |
-| Frontend | [Frontend](frontend.md) | SPA shell, 16 views, real brand logo, dynamic terminal/checklist, JSON tree, zustand + providers. |
+| Frontend | [Frontend](frontend.md) | SPA shell, 16 views, real brand logo, docs-viewer link resolution (v1.0.5), dynamic terminal/checklist, JSON tree, zustand + providers. |
 | Frontend | [UI Design System](ui.md) | Blue-gradient glassmorphism layers, typography, JSON-tree theme, do-not rules. |
 | Frontend | [Mobile & Responsive](mobile.md) | Bottom nav, safe areas, breakpoints, touch targets, priority layouts. |
 | Operations | [Deployment](deployment.md) | Env vars, standalone build/start, proxies, CLI availability, model/icon artifacts. |
 | Operations | [CLI](cli.md) | v1.0.2 `nextool` reference: train, benchmark, model, dataset (JSON + Parquet), tool, runtime, version. |
-| Operations | [Testing](testing.md) | `bun test` unit suite (56 tests / 200 assertions) + lint + manual verification workflows. |
+| Operations | [Testing](testing.md) | `bun test` unit suite (103 tests / 317 assertions) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
 
-## What's new in v1.0.4
+## What's new in v1.0.5
 
-- **The real NexTool logo in-app** — a new `BrandLogo` component
-  (`src/components/console/brand-logo.tsx`) renders the product identity from the
-  **active icon package** (fetched once from `GET /api/icons`; prefers
-  `apple-touch-icon.png` → `icon-192.png` → `icon-512.png` → `icon-32.png` →
-  `icon-16.png`). Used by the header brand button, the mobile menu sheet header, the
-  More-sheet header and the Tool IDE loading card. Without an active package it falls
-  back to a plain **N** monogram tile on the brand gradient — deliberately not a
-  recreated logo. Functional nav icons are unchanged; the browser-tab favicon keeps
-  coming from `layout.tsx` `generateMetadata`. See [Frontend](frontend.md) and [UI](ui.md).
-- **JSON tree readability fix** — the installed `@uiw/react-json-view` (2.0.0-alpha.43)
-  reads `--w-rjv-*` CSS custom properties **only**; the previous theme set
-  `--json-tree-*` variables the library ignores, so every syntax color silently fell
-  back to the library default `#002b36` (near-black — almost invisible on the dark
-  glass background). The theme now uses the real `--w-rjv-*` tokens with a bright
-  dark-console palette: keys bright sky, strings bright green, numbers amber,
-  booleans orange, null rose, braces cyan, transparent background. See
-  [Frontend](frontend.md) and [Troubleshooting](troubleshooting.md).
-- **Tool code ↔ Monaco sync + non-destructive Duplicate** — at save **and** test time
-  the function code is read directly from the Monaco model through a live editor ref,
-  so the exact on-screen code is saved (never a stale React state value). The
-  in-editor **Duplicate** button no longer renames the original (the old behavior was
-  destructive); it switches the session into register-a-copy mode — the copy keeps the
-  exact function code + schema and Save POSTs a **new** tool. Switching tools remounts
-  the editor so state always re-initializes from the freshly loaded definition. See
+- **`nodejs` tool environment** — a second authorable function environment: a
+  **restricted Node.js JavaScript environment** (not unrestricted Node.js) with the SAME
+  `execute(params, context)` contract as `js-function`, plus `require()` /
+  `await import()` for an explicit module allowlist only (`buffer`, `crypto`,
+  `events`, `path`, `querystring`, `string_decoder`, `url`, `util`, `assert`, `zlib`).
+  Still sandboxed: no `process`, no timers, no `fetch`, no filesystem/network —
+  blocked categories (`child_process`, `cluster`, `vm`, `worker_threads`, `fs`, `os`,
+  `net`, `dgram`, `http`, `https`, `process`) fail with
+  `Module "x" is not available in the NexTool Node.js environment.` Dynamic
+  `import()` call sites are rewritten at compile time to an allowlist shim so it works
+  without host vm flags. Limits: 10 s async watchdog, 4 s sync cap (now enforced at
+  function invocation), 256 MiB heap-growth sentinel (an honest in-process guard),
+  source ≤ 64 000 chars, result ≤ 64 KiB. See [Tool Development](tool-development.md)
+  and [Tool Runtime](tool-runtime.md).
+- **Tool IDE rework** — explicit sections: General, **Execution environment**
+  (selector `js-function | nodejs | dynamic`; dynamic tools are locked to dynamic —
+  duplicate into a function tool to change), structured **Metadata** key/value rows
+  (strings, ≤ 50 pairs — not raw JSON), structured **Tool Schema** form with a JSON
+  view, and a **Monaco ⇄ textarea toggle** (default ON; both editors share one source;
+  code is preserved when switching). Dynamic tools get a real handler-kind selector
+  (`echo`/`delay`/`http_get`/`uuid`) with structured config — `http_get` now exposes
+  `url` (required) + `timeout` (ms, 1000–15000, default 8000). See
   [Tool Development](tool-development.md).
-- **Tool export / import (JSON)** — every tool can be exported as a portable JSON file
-  (function source preserved **as text**), and Tools gains **Import tool (JSON)** +
-  **Export all tools (JSON)**. Import validates client-side (name, description,
-  environment, source ≤ 64 000 chars, schema), shows a preview, and resolves name
-  conflicts explicitly (Replace / Import as copy / Cancel — never silent overwrite).
-  Built on the existing registry endpoints — no new API routes. See
-  [Tools](tools.md).
-- **Tasks require at least one tool** — the Task Console blocks submission without a
-  tool selection ("Select at least one tool before running the task."), and
-  `POST /api/tasks` enforces it server-side: a missing or empty `config.enabledTools`
-  fails with 400 `TOOLS_REQUIRED` (the zod schema also rejects an explicit empty
-  array). Defense in depth: frontend + zod + route. See [API](api.md) and
-  [Configuration](configuration.md).
-- **UI refinements** — Models header stacks its full-width *Export Current Model* /
-  *Import model* buttons on mobile (unchanged on desktop); Task Console examples get
-  their own title row with compact wrapping quick-fill buttons; the plan checklist
-  drops the vertical timeline rail (clean card rows — all checklist states and
-  animations unchanged); the Settings **Branding & icons** card was removed (the icon
-  system itself — `/api/icons`, staging/activation, favicon serving, the in-app logo —
-  remains fully functional; manage packages via the API). See [Frontend](frontend.md),
-  [Mobile](mobile.md) and [Deployment](deployment.md).
+- **Editor source-sync guarantees** — the "Test blanked the editor" failure class is
+  closed by construction: a test always reads the CURRENT editor code, unsaved code
+  survives testing (success or failure never clears the editor), a non-edit
+  `onChange` (model swap) can never wipe the source, and switching tools loads the
+  stored source. Unit-tested invariants; see [Tool Development](tool-development.md).
+- **`GET /api/tools/environments` + restored `POST /api/tools/test`** — the runtime's
+  real capability payload (environments, handler kinds with config fields, module
+  allowlist, globals, limits) is served by a new endpoint that the IDE consumes
+  everywhere; the dedicated test route — missing since v1.0.2, so "Test Tool" requests
+  fell through to `/api/tools/[name]` and 405'd — is back, and it is now
+  environment-aware (test unsaved source as `nodejs` or `js-function`). See [API](api.md).
+- **Responsive Import model modal** — the Models **Import model** dialog is rebuilt:
+  viewport-safe at 320 px+, stacked full-width layout on mobile, a scrollable body
+  between a stable header and footer, a chosen-file chip (long names break + tooltip),
+  and validation errors rendered **inside the modal** (rose alert card) instead of only
+  as toasts. See [Models](models.md) and [Mobile](mobile.md).
+- **Documentation routing** — the built-in docs viewer resolves internal markdown
+  links (`../ai-core/core-module.md`, `x.md#anchor`) and navigates **within** the
+  viewer — no more 404s from category-style paths; genuinely missing pages render an
+  in-viewer "Documentation page not found" state; heading anchors scroll to the target.
+  See [Frontend](frontend.md).
+
+### What v1.0.4 delivered (condensed)
+
+- **Real in-app logo** — `BrandLogo` renders the product identity from the active icon
+  package (`GET /api/icons`, preference `apple-touch-icon.png` → `icon-192` →
+  `icon-512` → `icon-32` → `icon-16`); plain **N** monogram fallback. Functional nav
+  icons and the favicon pipeline unchanged (see [Frontend](frontend.md)).
+- **JSON tree readability fix** — the viewer reads `--w-rjv-*` tokens only; the theme
+  was rewritten with the real namespace (the old `--json-tree-*` names collapsed every
+  color to the library's near-black default).
+- **Tool code ↔ Monaco sync + non-destructive Duplicate** — save/test read the exact
+  on-screen code; Duplicate switches into register-a-copy mode instead of renaming the
+  original.
+- **Tool export / import (JSON)** — per-tool export, **Import tool (JSON)** and
+  **Export all tools (JSON)** with client-side validation, preview and explicit
+  conflict handling (Replace / Import as copy / Cancel).
+- **Tasks require at least one tool** — Task Console blocks submission and
+  `POST /api/tasks` enforces `config.enabledTools` (400 `TOOLS_REQUIRED`; explicit
+  `[]` fails zod with `INVALID_REQUEST`).
+- **UI refinements** — Models header stacks on mobile, compact wrapping Task Console
+  examples, plan checklist without the vertical rail, Settings *Branding & icons* card
+  removed (the icon API infrastructure remains).
 
 ### What v1.0.3 delivered (condensed)
 

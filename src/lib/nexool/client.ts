@@ -151,8 +151,12 @@ export interface JsToolPayload {
   purpose?: string;
   category?: string;
   toolVersion?: string;
+  /** v1.0.5: js-function (default) or nodejs — the restricted sandboxes. */
+  environment?: 'js-function' | 'nodejs';
   schema: ToolDefinition['schema'];
   functionSource: string;
+  /** v1.0.5: structured metadata key/value pairs. */
+  metadata?: Record<string, string>;
   enabled?: boolean;
 }
 
@@ -162,7 +166,16 @@ export const registerJsTool = (payload: JsToolPayload) =>
 export const getTool = (name: string) =>
   apiFetch<ToolEntry>(`/api/tools/${encodeURIComponent(name)}`);
 
-export const updateTool = (name: string, payload: Partial<JsToolPayload> & { enabled?: boolean; renameTo?: string }) => {
+export const updateTool = (
+  name: string,
+  payload: Partial<JsToolPayload> & {
+    enabled?: boolean;
+    renameTo?: string;
+    /** v1.0.5: dynamic tools only. */
+    handlerKind?: string;
+    handlerConfig?: Record<string, unknown>;
+  },
+) => {
   const { renameTo, ...rest } = payload;
   return apiFetch<ToolEntry>(`/api/tools/${encodeURIComponent(name)}`, {
     method: 'PUT',
@@ -183,8 +196,65 @@ export interface ToolTestResult {
   logs: string[];
 }
 
-export const testTool = (payload: { name?: string; functionSource?: string; params?: Record<string, unknown> }) =>
+export const testTool = (payload: {
+  name?: string;
+  functionSource?: string;
+  /** v1.0.5: sandbox for an unsaved source — js-function (default) | nodejs. */
+  environment?: 'js-function' | 'nodejs';
+  params?: Record<string, unknown>;
+}) =>
   apiFetch<ToolTestResult>('/api/tools/test', body(payload));
+
+// ---------- Tool environments (v1.0.5) ----------
+
+export interface HandlerKindConfigField {
+  key: string;
+  label: string;
+  type: 'string' | 'number';
+  required: boolean;
+  description: string;
+  min?: number;
+  max?: number;
+  placeholder?: string;
+}
+
+export interface HandlerKindDescriptor {
+  kind: string;
+  label: string;
+  description: string;
+  configFields: HandlerKindConfigField[];
+}
+
+export interface NodeEnvironmentInfo {
+  modules: Record<string, { description: string; methods: string[] }>;
+  blocked: Record<string, string>;
+  globals: { name: string; type: string; description: string }[];
+  limits: {
+    timeoutMs: number;
+    syncTimeoutMs: number;
+    memoryLimitMb: number;
+    maxSourceChars: number;
+    maxResultBytes: number;
+    maxLogLines: number;
+    moduleAllowlist: string[];
+  };
+}
+
+export interface ToolEnvironmentInfo {
+  environments: { id: string; label: string; description: string; authorable: boolean; execution: string }[];
+  handlerKinds: HandlerKindDescriptor[];
+  functionSandbox: {
+    timeoutMs: number;
+    syncTimeoutMs: number;
+    maxSourceChars: number;
+    maxResultBytes: number;
+    maxLogLines: number;
+  };
+  node: NodeEnvironmentInfo;
+}
+
+/** The REAL runtime environment configuration (§2.5/§3.6) — never hardcoded in the UI. */
+export const getToolEnvironmentInfo = () => apiFetch<ToolEnvironmentInfo>('/api/tools/environments');
 
 // ---------- Training (v1.0.2) ----------
 

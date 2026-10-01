@@ -1,0 +1,701 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * NexTool v1.0.2 — Tool IDE (spec §13-31).
+     5→ *
+     6→ * Developer-grade editor for js-function tools:
+     7→ *  - Monaco Editor (JS) with schema-driven IntelliSense (params.<name>),
+     8→ *    runtime reference IntelliSense, error markers, minimap, find/replace.
+     9→ *  - Structured layout: header (name · save · test · actions) + left column
+    10→ *    (Settings / Schema / References / Metadata) + right column (Monaco).
+    11→ *    Mobile: tabbed Details / Schema / Function / References / Test (§80).
+    12→ *  - Save validates schema + syntax server-side and updates the REAL registry.
+    13→ *  - Test executes the actual function in the controlled sandbox and shows
+    14→ *    status, duration, result (JSON tree), error and logs.
+    15→ *
+    16→ * v1.0.4 §3-8 — function-code synchronization rework:
+    17→ *  - `source` state is the SINGLE source of truth for the function code.
+    18→ *    Monaco is controlled by it (value=) and writes back through onChange.
+    19→ *  - At SAVE time the code is read DIRECTLY from the Monaco model via the
+    20→ *    editor ref (§8) — never a stale React closure — then written back into
+    21→ *    `source` so state and editor agree.
+    22→ *  - The in-editor "Duplicate" action now switches the session into
+    23→ *    register-a-copy mode (§5): the new tool receives the EXACT function code
+    24→ *    from the original and saves via POST (register), not by renaming the
+    25→ *    original (the old behavior was destructive: it renamed the source tool).
+    26→ *  - Switching tools remounts this view (parent key) so state always
+    27→ *    re-initializes from the freshly loaded tool definition (§7).
+    28→ */
+    29→
+    30→import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    31→import dynamic from 'next/dynamic';
+    32→import { toast } from 'sonner';
+    33→import { Badge } from '@/components/ui/badge';
+    34→import { Button } from '@/components/ui/button';
+    35→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+    36→import { Input } from '@/components/ui/input';
+    37→import { Label } from '@/components/ui/label';
+    38→import { Skeleton } from '@/components/ui/skeleton';
+    39→import { Switch } from '@/components/ui/switch';
+    40→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+    41→import { Textarea } from '@/components/ui/textarea';
+    42→import { cn } from '@/lib/utils';
+    43→import { JsonTree } from '../json-tree';
+    44→import {
+    45→  ApiClientError, deleteTool, registerJsTool, testTool, updateTool,
+    46→} from '@/lib/nexool/client';
+    47→import type { ToolEntry } from '@/lib/nexool/api-contract';
+    48→import type { ToolParamDef, ToolSchema } from '@/lib/nexool/types';
+    49→import { buildToolExtraLib, getReferenceEntries } from '@/lib/nexool/tool-runtime-declarations';
+    50→import { ErrorCard, SectionTitle, TechLabel, fmtMs, statusTone } from '../ui-bits';
+    51→import {
+    52→  AlertTriangle, Braces, Copy, FileCode2, Loader2, Play, Save, Trash2, Wrench,
+    53→} from 'lucide-react';
+    54→
+    55→// Monaco is client-only + heavy — load it lazily with a glass skeleton.
+    56→const MonacoEditor = dynamic(() => import('@monaco-editor/react').then((m) => m.default), {
+    57→  ssr: false,
+    58→  loading: () => <Skeleton className="h-full min-h-[260px] w-full rounded-md" />,
+    59→});
+    60→import type { Monaco, BeforeMount, OnMount } from '@monaco-editor/react';
+    61→import type { editor } from 'monaco-editor';
+    62→
+    63→const DEFAULT_SOURCE = `async function execute(params, context) {
+    64→  context.log('tool invoked', params);
+    65→
+    66→  // Tool implementation — sandbox exposes only documented runtime references.
+    67→  // ES builtins (JSON, Math, Date, Array...) are available.
+    68→
+    69→  return {
+    70→    success: true,
+    71→    result: { echoed: params },
+    72→  };
+    73→}
+    74→`;
+    75→
+    76→interface ToolTestState {
+    77→  running: boolean;
+    78→  status?: string;
+    79→  durationMs?: number;
+    80→  result?: unknown;
+    81→  error?: { code: string; message: string } | null;
+    82→  logs?: string[];
+    83→  paramsEcho?: Record<string, unknown>;
+    84→}
+    85→
+    86→interface ToolEditorProps {
+    87→  /** Existing tool name when editing; null for a new tool. */
+    88→  toolName: string | null;
+    89→  /** Full registry entry (loaded by the parent before opening the editor). */
+    90→  initial: ToolEntry | null;
+    91→  onSaved: (tool: ToolEntry) => void;
+    92→  onDeleted: (name: string) => void;
+    93→  onClose: () => void;
+    94→}
+    95→
+    96→export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, onClose }: ToolEditorProps) {
+    97→  // v1.0.4 §5: the session's target tool name. `null` ⇒ register-a-new-tool
+    98→  // session. Starts as the tool being edited; the in-editor Duplicate action
+    99→  // flips it to null so Save REGISTERS A COPY instead of renaming the original.
+   100→  const [sessionToolName, setSessionToolName] = useState<string | null>(toolName);
+   101→  const isNew = sessionToolName === null;
+   102→
+   103→  const [name, setName] = useState(initial?.name ?? '');
+   104→  const [description, setDescription] = useState(initial?.description ?? '');
+   105→  const [purpose, setPurpose] = useState(initial?.purpose ?? '');
+   106→  const [category, setCategory] = useState(initial?.category ?? 'utility');
+   107→  const [toolVersion, setToolVersion] = useState(initial?.toolVersion ?? '1.0.0');
+   108→  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+   109→  // v1.0.4 §4/§6 — single source of truth for the function code. Initialized
+   110→  // from the STORED tool definition (the parent loaded it via GET /api/tools/:name
+   111→  // before mounting); for a duplicate session the parent passes the original
+   112→  // entry, so the copy starts with the EXACT function code of the original.
+   113→  const [source, setSource] = useState(initial?.functionSource ?? DEFAULT_SOURCE);
+   114→  const [schemaText, setSchemaText] = useState(() => JSON.stringify(schemaToEditable(initial?.schema) ?? emptySchema(), null, 2));
+   115→  const [schemaError, setSchemaError] = useState<string | null>(null);
+   116→
+   117→  const [saving, setSaving] = useState(false);
+   118→  const [dirty, setDirty] = useState(false);
+   119→  const [test, setTest] = useState<ToolTestState | null>(null);
+   120→  const [testParams, setTestParams] = useState('{}');
+   121→  const [deleteOpen, setDeleteOpen] = useState(false);
+   122→  const monacoInstanceRef = useRef<Monaco | null>(null);
+   123→  // v1.0.4 §8 — live Monaco editor instance: at save time the CURRENT model
+   124→  // content is read from here (the truth of what is visible on screen).
+   125→  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+   126→
+   127→  const parsedSchema = useMemo<ToolSchema | null>(() => parseSchemaText(schemaText).schema, [schemaText]);
+   128→
+   129→  const markDirty = () => setDirty(true);
+   130→
+   131→  // ---- schema parsing / validation (v1.0.2 §23/§24) ----
+   132→
+   133→  useEffect(() => {
+   134→    const parsed = parseSchemaText(schemaText);
+   135→    setSchemaError(parsed.error);
+   136→  }, [schemaText]);
+   137→
+   138→  /**
+   139→   * v1.0.4 §8 — read the function code EXACTLY as visible in Monaco. The
+   140→   * editor model is the screen truth; `source` is kept in sync so both agree.
+   141→   * Never saves a stale React/state value.
+   142→   */
+   143→  const currentCode = (): string => {
+   144→    const modelValue = editorRef.current?.getValue();
+   145→    const code = typeof modelValue === 'string' ? modelValue : source;
+   146→    if (code !== source) setSource(code);
+   147→    return code;
+   148→  };
+   149→
+   150→  const save = async () => {
+   151→    if (!/^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*$/.test(name.trim())) {
+   152→      toast.error('Invalid tool name', { description: 'Use namespace.action, e.g. utility.summarize' });
+   153→      return;
+   154→    }
+   155→    const parsed = parseSchemaText(schemaText);
+   156→    if (parsed.error || !parsed.schema) {
+   157→      toast.error('Schema is invalid', { description: parsed.error ?? 'Fix the schema before saving.' });
+   158→      return;
+   159→    }
+   160→    const code = currentCode();
+   161→    setSaving(true);
+   162→    try {
+   163→      if (isNew) {
+   164→        const entry = await registerJsTool({
+   165→          name: name.trim(),
+   166→          description: description.trim() || undefined,
+   167→          purpose: purpose.trim() || undefined,
+   168→          category: category.trim() || 'utility',
+   169→          toolVersion: toolVersion.trim() || undefined,
+   170→          schema: parsed.schema,
+   171→          functionSource: code,
+   172→          enabled,
+   173→        });
+   174→        toast.success('Tool registered', { description: `${entry.name} is now available to the CoreModule.` });
+   175→        setDirty(false);
+   176→        onSaved(entry);
+   177→      } else if (sessionToolName) {
+   178→        const entry = await updateTool(sessionToolName, {
+   179→          renameTo: name.trim() !== sessionToolName ? name.trim() : undefined,
+   180→          description: description.trim() || undefined,
+   181→          purpose: purpose.trim() || undefined,
+   182→          category: category.trim() || 'utility',
+   183→          toolVersion: toolVersion.trim() || undefined,
+   184→          schema: parsed.schema,
+   185→          functionSource: code,
+   186→          enabled,
+   187→        });
+   188→        toast.success('Tool updated', { description: `${entry.name} saved to the registry.` });
+   189→        setDirty(false);
+   190→        onSaved(entry);
+   191→      }
+   192→    } catch (e) {
+   193→      toast.error(isNew ? 'Registration rejected' : 'Save failed', {
+   194→        description: e instanceof ApiClientError ? e.message : 'Unknown error',
+   195→      });
+   196→    } finally {
+   197→      setSaving(false);
+   198→    }
+   199→  };
+   200→
+   201→  const runTest = async () => {
+   202→    let params: Record<string, unknown>;
+   203→    try {
+   204→      params = JSON.parse(testParams || '{}');
+   205→    } catch {
+   206→      toast.error('Test params must be valid JSON');
+   207→      return;
+   208→    }
+   209→    setTest({ running: true });
+   210→    try {
+   211→      // Unsaved changes are tested against the CURRENT editor source (§27/§29:
+   212→      // a real sandboxed execution — never a mock result). The code is read
+   213→      // straight from the Monaco model so the test always runs what is on screen.
+   214→      const result = await testTool({ functionSource: currentCode(), params });
+   215→      setTest({
+   216→        running: false,
+   217→        status: result.status,
+   218→        durationMs: result.durationMs,
+   219→        result: result.result,
+   220→        error: result.error,
+   221→        logs: result.logs,
+   222→        paramsEcho: params,
+   223→      });
+   224→    } catch (e) {
+   225→      setTest({ running: false, status: 'failed', error: { code: 'REQUEST_FAILED', message: e instanceof ApiClientError ? e.message : 'Test request failed' } });
+   226→    }
+   227→  };
+   228→
+   229→  const doDelete = async () => {
+   230→    if (!sessionToolName) return;
+   231→    try {
+   232→      await deleteTool(sessionToolName);
+   233→      toast.success('Tool deleted', { description: `${sessionToolName} removed from the registry.` });
+   234→      onDeleted(sessionToolName);
+   235→    } catch (e) {
+   236→      toast.error('Delete failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   237→    } finally {
+   238→      setDeleteOpen(false);
+   239→    }
+   240→  };
+   241→
+   242→  /**
+   243→   * v1.0.4 §5 — Duplicate switches this session into "register a copy" mode.
+   244→   * The copy keeps the EXACT function code (and schema/description) currently
+   245→   * loaded from the original; only the name changes. Saving then calls the
+   246→   * REGISTER endpoint — the original tool is never renamed or overwritten.
+   247→   */
+   248→  const duplicateTool = () => {
+   249→    if (isNew) return;
+   250→    const base = name.trim().replace(/^([a-z0-9-]+)\..*$/, '$1') || 'custom';
+   251→    setSessionToolName(null);
+   252→    setName(`${base}.copy`);
+   253→    setDirty(true);
+   254→    // Keep schema + function code exactly as loaded; refresh the schema parse
+   255→    // surface so the valid badge reflects the carried-over schema.
+   256→    const parsed = parseSchemaText(schemaText);
+   257→    setSchemaError(parsed.error);
+   258→    toast.info('Duplicated — adjust the name', { description: 'The copy carries the original function code. Save to register it as a new tool.' });
+   259→  };
+   260→
+   261→  // ---- Monaco setup (schema-driven IntelliSense, §18-21) ----
+   262→
+   263→  const extraLib = useMemo(() => buildToolExtraLib(parsedSchema), [parsedSchema]);
+   264→
+   265→  const onEditorMount = useCallback<BeforeMount>((monaco: Monaco) => {
+   266→    monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+   267→      noSemanticValidation: false,
+   268→      noSyntaxValidation: false,
+   269→    });
+   270→    monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
+   271→      target: monaco.languages.typescript.ScriptTarget.ES2020,
+   272→      allowNonTsExtensions: true,
+   273→      checkJs: false,
+   274→      lib: ['es2020'],
+   275→    });
+   276→    monaco.languages.typescript.javascriptDefaults.addExtraLib(extraLib, 'nextool-runtime.d.ts');
+   277→
+   278→    // NexTool dark-glass editor theme (consistent with the visual system §18).
+   279→    monaco.editor.defineTheme('nextool-dark', {
+   280→      base: 'vs-dark',
+   281→      inherit: true,
+   282→      rules: [
+   283→        { token: 'comment', foreground: '64748b', fontStyle: 'italic' },
+   284→        { token: 'keyword', foreground: '7dd3fc' },
+   285→        { token: 'string', foreground: '86efac' },
+   286→        { token: 'number', foreground: 'fbbf24' },
+   287→        { token: 'type', foreground: '67e8f9' },
+   288→        { token: 'delimiter', foreground: '94a3b8' },
+   289→      ],
+   290→      colors: {
+   291→        'editor.background': '#0a1120',
+   292→        'editorGutter.background': '#0a1120',
+   293→        'editor.lineHighlightBackground': '#13203655',
+   294→        'editorLineNumber.foreground': '#3b4a63',
+   295→        'editorLineNumber.activeForeground': '#7dd3fc',
+   296→        'editorCursor.foreground': '#38bdf8',
+   297→        'editorIndentGuide.background1': '#1c2942',
+   298→        'editorWidget.background': '#0d1526',
+   299→        'editorSuggestWidget.background': '#0d1526',
+   300→        'editorSuggestWidget.selectedBackground': '#16233d',
+   301→        'scrollbarSlider.background': '#24355266',
+   302→      },
+   303→    });
+   304→    monaco.editor.setTheme('nextool-dark');
+   305→  }, [extraLib]);
+   306→
+   307→  const onRuntimeMount = useCallback<OnMount>((ed, monaco: Monaco) => {
+   308→    monacoInstanceRef.current = monaco;
+   309→    // v1.0.4 §8 — keep the live editor instance so save/test read the CURRENT
+   310→    // model content (screen truth) instead of a possibly stale state value.
+   311→    editorRef.current = ed;
+   312→    monaco.languages.typescript.javascriptDefaults.addExtraLib(extraLib, 'nextool-runtime.d.ts');
+   313→  }, [extraLib]);
+   314→
+   315→  // Re-apply extraLib when the schema changes (schema-driven IntelliSense §20).
+   316→  useEffect(() => {
+   317→    const monaco = monacoInstanceRef.current;
+   318→    if (!monaco?.languages?.typescript?.javascriptDefaults) return;
+   319→    monaco.languages.typescript.javascriptDefaults.addExtraLib(extraLib, 'nextool-runtime.d.ts');
+   320→  }, [extraLib]);
+   321→
+   322→  const references = useMemo(() => getReferenceEntries(parsedSchema), [parsedSchema]);
+   323→
+   324→  const inputCls = 'min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm';
+   325→
+   326→  // ---- layout: header + (desktop split | mobile tabs) ----
+   327→
+   328→  const settingsPanel = (
+   329→    <div className="space-y-3">
+   330→      <div className="space-y-1.5">
+   331→        <Label htmlFor="tool-name">Tool name <span className="text-muted-foreground">(namespace.action)</span> <span className="text-rose-400">*</span></Label>
+   332→        <Input id="tool-name" value={name} onChange={(e) => { setName(e.target.value); markDirty(); }} placeholder="utility.summarize" className={inputCls} />
+   333→      </div>
+   334→      <div className="space-y-1.5">
+   335→        <Label htmlFor="tool-desc">Description</Label>
+   336→        <Input id="tool-desc" value={description} onChange={(e) => { setDescription(e.target.value); markDirty(); }} className={inputCls} />
+   337→      </div>
+   338→      <div className="space-y-1.5">
+   339→        <Label htmlFor="tool-purpose">Purpose <span className="text-muted-foreground">(guides CoreModule matching)</span></Label>
+   340→        <Input id="tool-purpose" value={purpose} onChange={(e) => { setPurpose(e.target.value); markDirty(); }} className={inputCls} />
+   341→      </div>
+   342→      <div className="grid grid-cols-2 gap-3">
+   343→        <div className="space-y-1.5">
+   344→          <Label htmlFor="tool-cat">Category</Label>
+   345→          <Input id="tool-cat" value={category} onChange={(e) => { setCategory(e.target.value); markDirty(); }} className={inputCls} />
+   346→        </div>
+   347→        <div className="space-y-1.5">
+   348→          <Label htmlFor="tool-ver">Version</Label>
+   349→          <Input id="tool-ver" value={toolVersion} onChange={(e) => { setToolVersion(e.target.value); markDirty(); }} className={inputCls} />
+   350→        </div>
+   351→      </div>
+   352→      <div className="flex items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+   353→        <div className="min-w-0">
+   354→          <Label htmlFor="tool-enabled" className="text-sm">Enabled</Label>
+   355→          <p className="text-[11px] text-muted-foreground">Disabled tools are hidden from the CoreModule</p>
+   356→        </div>
+   357→        <Switch id="tool-enabled" checked={enabled} onCheckedChange={(v) => { setEnabled(v); markDirty(); }} aria-label="Tool enabled" />
+   358→      </div>
+   359→      {!isNew && sessionToolName ? (
+   360→        <p className="font-mono text-[10px] text-muted-foreground">
+   361→          registered as <span className="text-sky-300">{sessionToolName}</span> · {initial?.stats.callCount ?? 0} calls
+   362→        </p>
+   363→      ) : null}
+   364→    </div>
+   365→  );
+   366→
+   367→  const schemaPanel = (
+   368→    <div className="space-y-2">
+   369→      <div className="flex items-center justify-between gap-2">
+   370→        <Label htmlFor="tool-schema">Input schema (ToolParamDef[] JSON)</Label>
+   371→        {schemaError === null ? (
+   372→          <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 font-mono text-[10px] text-emerald-300">valid</Badge>
+   373→        ) : (
+   374→          <Badge variant="outline" className="border-rose-400/40 bg-rose-400/10 font-mono text-[10px] text-rose-300">invalid</Badge>
+   375→        )}
+   376→      </div>
+   377→      <Textarea
+   378→        id="tool-schema"
+   379→        value={schemaText}
+   380→        onChange={(e) => { setSchemaText(e.target.value); markDirty(); }}
+   381→        rows={10}
+   382→        className={cn('border-white/[0.09] bg-white/[0.04] font-mono text-xs', schemaError && 'border-rose-400/40')}
+   383→        aria-invalid={!!schemaError}
+   384→      />
+   385→      {schemaError ? (
+   386→        <p role="alert" className="rounded-md border border-rose-400/30 bg-rose-400/5 px-2.5 py-1.5 font-mono text-[11px] text-rose-300">
+   387→          {schemaError}
+   388→        </p>
+   389→      ) : (
+   390→        <SchemaTable schema={parsedSchema} />
+   391→      )}
+   392→      <p className="text-[11px] text-muted-foreground">
+   393→        Schema drives CoreModule parameter generation AND the editor&apos;s IntelliSense.
+   394→      </p>
+   395→    </div>
+   396→  );
+   397→
+   398→  const referencesPanel = (
+   399→    <div className="space-y-2">
+   400→      <TechLabel>runtime references — the real sandbox API</TechLabel>
+   401→      <div className="space-y-1.5">
+   402→        {references.map((r) => (
+   403→          <div key={r.name} className="glass-card rounded-md px-3 py-2">
+   404→            <p className="break-words font-mono text-xs text-sky-200">{r.name} <span className="text-cyan-300/70">: {r.type}</span></p>
+   405→            <p className="mt-0.5 break-words text-[11px] text-muted-foreground">{r.description}</p>
+   406→          </div>
+   407→        ))}
+   408→      </div>
+   409→      <p className="text-[11px] text-muted-foreground">
+   410→        The sandbox exposes ONLY these references — no require/process/fetch/timers.
+   411→        See docs/tool-development.md for the full guide.
+   412→      </p>
+   413→    </div>
+   414→  );
+   415→
+   416→  const metadataPanel = (
+   417→    <div className="space-y-2 text-[11px] text-muted-foreground">
+   418→      <TechLabel>metadata</TechLabel>
+   419→      <p>environment: <span className="font-mono text-foreground/90">js-function</span></p>
+   420→      <p>execution: sandboxed node:vm · sync 4s cap · async 10s cap · result ≤ 64 KiB</p>
+   421→      <p>production runs record stats to the registry; test runs do not.</p>
+   422→      {!isNew && initial ? (
+   423→        <p className="break-words">stats: {initial.stats.callCount} calls · {initial.stats.successCount} ok · {initial.stats.failureCount + initial.stats.timeoutCount} fail · avg {fmtMs(initial.stats.avgMs)}</p>
+   424→      ) : null}
+   425→    </div>
+   426→  );
+   427→
+   428→  const testPanel = (
+   429→    <div className="space-y-3">
+   430→      <div className="space-y-1.5">
+   431→        <Label htmlFor="test-params">Input parameters (JSON)</Label>
+   432→        <Textarea id="test-params" value={testParams} onChange={(e) => setTestParams(e.target.value)} rows={5} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" />
+   433→      </div>
+   434→      <div className="flex flex-wrap items-center gap-2">
+   435→        <Button className="min-h-11 flex-1 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90 sm:flex-none" onClick={() => void runTest()} disabled={test?.running}>
+   436→          {test?.running ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Play className="size-4" aria-hidden />} Test Tool
+   437→        </Button>
+   438→        <p className="text-[11px] text-muted-foreground">
+   439→          Runs the current editor source in the sandbox with <span className="font-mono text-foreground/80">mode:&quot;test&quot;</span>.
+   440→        </p>
+   441→      </div>
+   442→
+   443→      {test && !test.running ? (
+   444→        <div className="space-y-2" data-testid="tool-test-result">
+   445→          <div className="flex flex-wrap items-center gap-2">
+   446→            <Badge variant="outline" className={cn('font-mono text-[11px]', statusTone(test.status) === 'ok' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' : statusTone(test.status) === 'err' ? 'border-rose-400/30 bg-rose-400/10 text-rose-300' : 'border-white/[0.09] text-muted-foreground')}>
+   447→              {test.status}
+   448→            </Badge>
+   449→            {test.durationMs !== undefined ? <span className="font-mono text-xs text-muted-foreground">{fmtMs(test.durationMs)}</span> : null}
+   450→            <span className="font-mono text-[10px] text-slate-500">mode: test (no production side effects from sandbox tools)</span>
+   451→          </div>
+   452→          {test.error ? (
+   453→            <p role="alert" className="break-words rounded-md border border-rose-400/30 bg-rose-400/5 px-3 py-2 font-mono text-xs text-rose-300">
+   454→              {test.error.code}: {test.error.message}
+   455→            </p>
+   456→          ) : null}
+   457→          {test.logs && test.logs.length > 0 ? (
+   458→            <div className="glass-inset nextool-scroll max-h-32 overflow-y-auto rounded-md p-2.5">
+   459→              {test.logs.map((line, i) => (
+   460→                <p key={i} className="break-words font-mono text-[11px] leading-relaxed text-sky-100/70">{line}</p>
+   461→              ))}
+   462→            </div>
+   463→          ) : null}
+   464→          <div>
+   465→            <p className="mb-1"><TechLabel className="text-[9px]">result</TechLabel></p>
+   466→            <JsonTree value={test.result ?? null} maxHeight={280} />
+   467→          </div>
+   468→        </div>
+   469→      ) : null}
+   470→    </div>
+   471→  );
+   472→
+   473→  // ---- v1.0.3 §5-8: Monaco layout hierarchy fix.
+   474→  // The previous wrapper (`min-h-[320px]` + `height="100%"`) collapsed the
+   475→  // editor to ≈1px: a percentage height resolves against a parent whose only
+   476→  // constraint is min-height → the inner editor computed 0px. The fix is a
+   477→  // DEFINITE height at every breakpoint (not just desktop):
+   478→  //   - mobile/tablet: fixed 420px usable editor area (spec §9 — reasonable
+   479→  //     minimum height, vh-independent so the on-screen keyboard can't break it)
+   480→  //   - lg+: fills the available viewport like a real IDE, floor 480px
+   481→  //     (spec §6/§8 — substantial editor area for code/scroll/IntelliSense)
+   482→  // Parents stay auto-height; the wrapper's own definite height is what
+   483→  // `height="100%"` resolves against, and automaticLayout tracks resizes.
+   484→  const editorPanel = (
+   485→    <div
+   486→      className="flex h-[420px] w-full flex-col overflow-hidden rounded-md border border-white/[0.09] lg:h-[max(480px,calc(100vh-430px))]"
+   487→      data-testid="monaco-editor"
+   488→    >
+   489→      <MonacoEditor
+   490→        height="100%"
+   491→        defaultLanguage="javascript"
+   492→        language="javascript"
+   493→        value={source}
+   494→        theme="nextool-dark"
+   495→        onChange={(v) => { setSource(v ?? ''); markDirty(); }}
+   496→        beforeMount={onEditorMount}
+   497→        onMount={onRuntimeMount}
+   498→        options={{
+   499→          minimap: { enabled: true, scale: 1 },
+   500→          fontSize: 13,
+   501→          lineNumbers: 'on',
+   502→          folding: true,
+   503→          formatOnPaste: true,
+   504→          automaticLayout: true,
+   505→          scrollBeyondLastLine: false,
+   506→          tabSize: 2,
+   507→          wordWrap: 'on',
+   508→          renderWhitespace: 'selection',
+   509→        }}
+   510→      />
+   511→    </div>
+   512→  );
+   513→
+   514→  return (
+   515→    <div className="space-y-4">
+   516→      {/* Header — name / save / test / actions (§15) */}
+   517→      <div className="glass-panel flex flex-col gap-3 rounded-lg p-4 md:flex-row md:items-center md:justify-between">
+   518→        <div className="flex min-w-0 items-center gap-3">
+   519→          <span className="bg-primary-gradient-soft glow-blue flex size-10 shrink-0 items-center justify-center rounded-lg ring-1 ring-sky-400/25">
+   520→            <Wrench className="size-5 text-sky-300" aria-hidden />
+   521→          </span>
+   522→          <div className="min-w-0">
+   523→            <h2 className="truncate text-sm font-semibold text-foreground">
+   524→              {isNew ? (sessionToolName === null && dirty ? 'Duplicate Tool' : 'New Tool') : `Edit ${sessionToolName}`}
+   525→            </h2>
+   526→            <p className="text-xs text-muted-foreground">Tool IDE — sandboxed JavaScript function editor</p>
+   527→          </div>
+   528→          {dirty ? (
+   529→            <Badge variant="outline" className="ml-1 shrink-0 border-amber-400/30 bg-amber-400/10 font-mono text-[10px] text-amber-300">unsaved</Badge>
+   530→          ) : null}
+   531→        </div>
+   532→        <div className="flex flex-wrap items-center gap-2">
+   533→          {!isNew && sessionToolName ? (
+   534→            <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" onClick={duplicateTool}>
+   535→              <Copy className="size-3.5" aria-hidden /> Duplicate
+   536→            </Button>
+   537→          ) : null}
+   538→          <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" onClick={() => void runTest()} disabled={test?.running}>
+   539→            {test?.running ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Play className="size-3.5" aria-hidden />} Test
+   540→          </Button>
+   541→          {!isNew && sessionToolName ? (
+   542→            <Button variant="outline" size="sm" className="min-h-9 border-rose-500/40 text-rose-300 hover:bg-rose-500/10" onClick={() => setDeleteOpen(true)}>
+   543→              <Trash2 className="size-3.5" aria-hidden /> Delete
+   544→            </Button>
+   545→          ) : null}
+   546→          <Button size="sm" className="min-h-9 gap-1.5 bg-primary-gradient text-primary-foreground hover:opacity-90" onClick={() => void save()} disabled={saving || (schemaError !== null)}>
+   547→            {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Save className="size-3.5" aria-hidden />} {isNew ? 'Register' : 'Save'}
+   548→          </Button>
+   549→          <Button variant="ghost" size="sm" className="min-h-9 text-muted-foreground" onClick={onClose}>Close</Button>
+   550→        </div>
+   551→      </div>
+   552→
+   553→      {/* Mobile: stacked tabs (§80) — the Function tab keeps a real 420px editor (§9) */}
+   554→      <div className="lg:hidden">
+   555→        <Tabs defaultValue="function" className="gap-3">
+   556→          <TabsList className="glass-card nextool-scroll h-auto w-full justify-start gap-1 overflow-x-auto rounded-lg p-1" aria-label="Tool editor sections">
+   557→            {([
+   558→              ['details', 'Details'],
+   559→              ['schema', 'Schema'],
+   560→              ['function', 'Function'],
+   561→              ['references', 'References'],
+   562→              ['test', 'Test'],
+   563→            ] as const).map(([v, label]) => (
+   564→              <TabsTrigger key={v} value={v} className="flex-none min-h-9 px-3 text-xs data-[state=active]:bg-primary-gradient-soft data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-sky-400/25 dark:data-[state=active]:text-sky-100">
+   565→                {label}
+   566→              </TabsTrigger>
+   567→            ))}
+   568→          </TabsList>
+   569→          <TabsContent value="details" className="mt-3 space-y-4 outline-none">
+   570→            <section className="glass-panel rounded-lg p-4">{settingsPanel}</section>
+   571→            <section className="glass-panel rounded-lg p-4">{metadataPanel}</section>
+   572→          </TabsContent>
+   573→          <TabsContent value="schema" className="mt-3 outline-none">
+   574→            <section className="glass-panel rounded-lg p-4">{schemaPanel}</section>
+   575→          </TabsContent>
+   576→          <TabsContent value="function" className="mt-3 outline-none">
+   577→            {editorPanel}
+   578→          </TabsContent>
+   579→          <TabsContent value="references" className="mt-3 outline-none">
+   580→            <section className="glass-panel rounded-lg p-4">{referencesPanel}</section>
+   581→          </TabsContent>
+   582→          <TabsContent value="test" className="mt-3 outline-none">
+   583→            <section className="glass-panel rounded-lg p-4">{testPanel}</section>
+   584→          </TabsContent>
+   585→        </Tabs>
+   586→      </div>
+   587→
+   588→      {/* Desktop split layout (§15) */}
+   589→      <div className="hidden gap-4 lg:grid lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+   590→        <div className="space-y-4">
+   591→          <section className="glass-panel rounded-lg p-4">{settingsPanel}</section>
+   592→          <section className="glass-panel rounded-lg p-4">{schemaPanel}</section>
+   593→          <section className="glass-panel rounded-lg p-4">{metadataPanel}</section>
+   594→          <section className="glass-panel rounded-lg p-4">{referencesPanel}</section>
+   595→        </div>
+   596→        <div className="space-y-4">
+   597→          <section className="glass-panel rounded-lg p-4">
+   598→            <SectionTitle icon={<FileCode2 className="size-4 text-sky-300" aria-hidden />} title="Function" desc="async function execute(params, context) — IntelliSense comes from your schema." />
+   599→            <div className="mt-3">{editorPanel}</div>
+   600→          </section>
+   601→          <section className="glass-panel rounded-lg p-4">
+   602→            <SectionTitle icon={<Braces className="size-4 text-sky-300" aria-hidden />} title="Test Tool" desc="Real sandboxed execution of the current source." />
+   603→            <div className="mt-3">{testPanel}</div>
+   604→          </section>
+   605→        </div>
+   606→      </div>
+   607→
+   608→      {/* Delete confirm */}
+   609→      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+   610→        <DialogContent className="glass-strong sm:max-w-md">
+   611→          <DialogHeader>
+   612→            <DialogTitle className="flex items-center gap-2 text-rose-300"><AlertTriangle className="size-4" aria-hidden /> Delete {sessionToolName}?</DialogTitle>
+   613→            <DialogDescription>
+   614→              The tool is removed from the registry and stops being available to the CoreModule. This cannot be undone.
+   615→            </DialogDescription>
+   616→          </DialogHeader>
+   617→          <DialogFooter>
+   618→            <Button variant="outline" className="min-h-11" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+   619→            <Button variant="destructive" className="min-h-11" onClick={() => void doDelete()}>Delete tool</Button>
+   620→          </DialogFooter>
+   621→        </DialogContent>
+   622→      </Dialog>
+   623→    </div>
+   624→  );
+   625→}
+   626→
+   627→// ---------- helpers ----------
+   628→
+   629→function emptySchema(): ToolSchema {
+   630→  return { type: 'object', properties: [] };
+   631→}
+   632→
+   633→function schemaToEditable(schema: ToolSchema | undefined): ToolSchema | null {
+   634→  if (!schema) return null;
+   635→  return { type: 'object', properties: schema.properties ?? [] };
+   636→}
+   637→
+   638→function parseSchemaText(text: string): { schema: ToolSchema | null; error: string | null } {
+   639→  if (!text.trim()) return { schema: emptySchema(), error: null };
+   640→  let parsed: unknown;
+   641→  try {
+   642→    parsed = JSON.parse(text);
+   643→  } catch (err) {
+   644→    return { schema: null, error: `Invalid JSON — ${err instanceof Error ? err.message : 'parse error'}` };
+   645→  }
+   646→  const body = Array.isArray(parsed) ? { type: 'object', properties: parsed } : parsed;
+   647→  const obj = body as { type?: string; properties?: unknown };
+   648→  if (obj.type !== 'object') return { schema: null, error: 'schema.type must be "object".' };
+   649→  if (!Array.isArray(obj.properties)) return { schema: null, error: 'schema.properties must be an array of param definitions.' };
+   650→  const props: ToolParamDef[] = [];
+   651→  for (const raw of obj.properties) {
+   652→    const p = raw as Partial<ToolParamDef> & Record<string, unknown>;
+   653→    if (!p || typeof p.name !== 'string' || !p.name.trim()) return { schema: null, error: 'Every param needs a "name".' };
+   654→    if (!['string', 'number', 'boolean', 'object', 'array'].includes(String(p.type))) {
+   655→      return { schema: null, error: `Param ${p.name}: unsupported type "${String(p.type)}" (string|number|boolean|object|array).` };
+   656→    }
+   657→    if (p.enumValues && !Array.isArray(p.enumValues)) return { schema: null, error: `Param ${p.name}: enumValues must be an array.` };
+   658→    props.push({
+   659→      name: p.name.trim(),
+   660→      type: p.type as ToolParamDef['type'],
+   661→      required: !!p.required,
+   662→      description: typeof p.description === 'string' ? p.description : '',
+   663→      generation: p.generation as ToolParamDef['generation'],
+   664→      enumValues: p.enumValues as string[] | undefined,
+   665→      min: typeof p.min === 'number' ? p.min : undefined,
+   666→      max: typeof p.max === 'number' ? p.max : undefined,
+   667→      default: p.default,
+   668→    });
+   669→  }
+   670→  return { schema: { type: 'object', properties: props }, error: null };
+   671→}
+   672→
+   673→function SchemaTable({ schema }: { schema: ToolSchema | null }) {
+   674→  const props = schema?.properties ?? [];
+   675→  if (props.length === 0) return <p className="text-[11px] text-muted-foreground">No parameters defined.</p>;
+   676→  return (
+   677→    <div className="nextool-scroll overflow-x-auto rounded-md border border-white/[0.07]">
+   678→      <table className="w-full min-w-[280px] text-left text-[11px]">
+   679→        <thead>
+   680→          <tr className="text-muted-foreground">
+   681→            <th className="px-2 py-1.5 font-medium">name</th>
+   682→            <th className="px-2 py-1.5 font-medium">type</th>
+   683→            <th className="px-2 py-1.5 font-medium">req</th>
+   684→            <th className="px-2 py-1.5 font-medium">notes</th>
+   685→          </tr>
+   686→        </thead>
+   687→        <tbody className="font-mono">
+   688→          {props.map((p) => (
+   689→            <tr key={p.name} className="border-t border-white/[0.06] align-top">
+   690→              <td className="px-2 py-1.5 text-foreground/90">{p.name}</td>
+   691→              <td className="px-2 py-1.5 text-cyan-300/90">{p.type}</td>
+   692→              <td className="px-2 py-1.5">{p.required ? <span className="text-rose-400">*</span> : '—'}</td>
+   693→              <td className="px-2 py-1.5 text-muted-foreground">{p.enumValues?.length ? `enum: ${p.enumValues.join(' | ')}` : p.description || '—'}</td>
+   694→            </tr>
+   695→          ))}
+   696→        </tbody>
+   697→      </table>
+   698→    </div>
+   699→  );
+   700→}
+   701→

@@ -139,10 +139,10 @@ Client behavior through proxies is handled by the frontend reconnect policy
 
 | Check | Expectation |
 | --- | --- |
-| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.4"`. |
+| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.5"`. |
 | `GET /api/stream` (curl, 3 s) | `event: hello` frame immediately, then `:keepalive` within 15 s. |
 | `POST /api/tasks` smoke | With `config.enabledTools` set (required since v1.0.4) the queued task reaches `completed` (goal) or `waiting` (live); omitting it → 400 `TOOLS_REQUIRED`. |
-| `nextool runtime status` | `[ok] runtime online — app v1.0.4 · engine llm-core v1.0.0`. |
+| `nextool runtime status` | `[ok] runtime online — app v1.0.5 · engine llm-core v1.0.0`. |
 | `nextool model list` | Lists registered packages without error (empty list is valid). |
 
 ## Rollback

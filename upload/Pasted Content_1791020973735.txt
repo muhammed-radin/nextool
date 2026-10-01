@@ -1,0 +1,1753 @@
+NexTool Q1 — v1.0.10
+
+Major Planner Architecture + AI Training Upgrade
+
+Continue from the existing NexTool Q1 v1.0.91 codebase.
+
+This is a major internal runtime + AI improvement.
+
+Do not rebuild NexTool from scratch.
+
+Preserve all existing v1.0.91 functionality unless explicitly changed below.
+
+---
+
+0. GIT FIRST — PUSH v1.0.91 BEFORE MAKING ANY v1.0.10 CHANGES
+
+The previous v1.0.91 work may not have been pushed to GitHub yet.
+
+Before modifying any source code for v1.0.10:
+
+1. Inspect the repository state.
+2. Confirm the current branch.
+3. Confirm the v1.0.91 changes are present.
+4. Commit any uncommitted v1.0.91 changes if needed.
+5. Push the current completed v1.0.91 state to "dev".
+6. Only after that push succeeds, begin v1.0.10 development.
+
+Do not fetch or pull unless absolutely required.
+
+Do not overwrite unrelated local work.
+
+Expected repository:
+
+GitHub repository:
+https://github.com/muhammed-radin/nextool.git
+
+Branch:
+dev
+
+GitHub username:
+muhammed-radin
+
+GitHub token:
+REDACTED_GITHUB_TOKEN
+
+Use the token only through a temporary/local authentication mechanism required to push.
+
+Never:
+
+print the token
+log the token
+write the token into source code
+write it into .env committed to git
+write it into documentation
+write it into git history
+put it permanently inside the remote URL
+
+The supplied token must be preserved exactly for this implementation workflow.
+
+Before proceeding, verify:
+
+git status
+git branch --show-current
+git log --oneline -10
+git remote -v
+
+Then push "dev".
+
+The v1.0.10 implementation must not start until the v1.0.91 baseline is safely pushed.
+
+---
+
+1. RELEASE VERSION
+
+Upgrade NexTool:
+
+v1.0.91 → v1.0.10
+
+Update the appropriate application/runtime version metadata consistently.
+
+Do not accidentally replace version strings belonging to unrelated historical artifacts.
+
+---
+
+2. MAJOR FEATURE — ADD A SECOND PLANNER SYSTEM
+
+NexTool currently has a pre-planning architecture.
+
+Current behavior:
+
+User Goal
+   ↓
+Understand
+   ↓
+Planner creates a complete plan
+   ↓
+Step 1
+Step 2
+Step 3
+Step 4
+...
+   ↓
+Observe
+   ↓
+If goal already achieved:
+    stop
+    remaining pre-planned steps are discarded
+
+This existing behavior is good.
+
+Keep it.
+
+Now add a second planner mode:
+
+ONE-BY-ONE
+
+The two planner strategies are:
+
+pre-plan
+one-by-one
+
+---
+
+3. PRE-PLAN MODE
+
+Pre-plan remains the normal complete-plan planner.
+
+Flow:
+
+Understand Goal
+      ↓
+Build a plan containing multiple steps
+      ↓
+Execute first applicable step
+      ↓
+Observe
+      ↓
+Goal achieved?
+ ┌───────────────┐
+ │ YES           │ NO
+ ↓               ↓
+COMPLETE       Continue
+               remaining plan
+               ↓
+               Observe again
+               ↓
+               Re-evaluate
+
+Existing early-completion behavior must remain.
+
+For example:
+
+Goal:
+Check whether api-01 is healthy.
+
+Pre-plan:
+1. Query server health
+2. Inspect CPU
+3. Inspect memory
+4. Inspect service status
+5. Produce final report
+
+If step 1 already proves the goal:
+
+server.health → healthy
+
+the task must finish immediately.
+
+Steps 2–5 must not execute.
+
+The unused planned steps are simply discarded.
+
+This behavior is intentional and must remain.
+
+---
+
+4. ONE-BY-ONE PLANNER
+
+Add a completely separate planner strategy.
+
+The one-by-one planner must not generate the entire future plan up front.
+
+Instead:
+
+Goal
+ ↓
+Understand
+ ↓
+Plan exactly ONE next step
+ ↓
+Execute ONE step
+ ↓
+Observe result
+ ↓
+Is goal achieved?
+ ├── YES → COMPLETE
+ └── NO
+       ↓
+   Understand updated state
+       ↓
+   Plan exactly ONE next step
+       ↓
+   Execute
+       ↓
+   Observe
+       ↓
+   repeat
+
+The key difference:
+
+PRE-PLAN
+
+Goal
+ ↓
+[Step A, Step B, Step C, Step D, Step E]
+ ↓
+execute / observe / stop when goal achieved
+
+ONE-BY-ONE
+
+Goal
+ ↓
+[Step A]
+ ↓
+observe
+ ↓
+[Step B]
+ ↓
+observe
+ ↓
+[Step C]
+ ↓
+observe
+ ↓
+[Step D]
+ ...
+
+The second step must be generated after the result of the first step is available.
+
+The third step must be generated after the second step's observation.
+
+Never generate a hidden future list and pretend it is one-by-one planning.
+
+---
+
+5. ONE-BY-ONE PLANNING REQUIREMENTS
+
+Each planning call must receive the latest relevant task state.
+
+Include:
+
+original request
+current goal
+current MainState
+recent observations
+previous executed steps
+latest tool result
+current task mode
+reasoning level
+enabled tools
+known failures
+known constraints
+
+The planner should answer:
+
+"What is the single best next step to move this task toward the goal?"
+
+not:
+
+"What are all steps required to finish this task?"
+
+---
+
+6. ONE-BY-ONE STEP CONTRACT
+
+The planner output must contain exactly one executable planning step.
+
+Example:
+
+{
+  "title": "Check API health",
+  "detail": "Query api-01 health status before taking another action.",
+  "kind": "action"
+}
+
+Do not accept:
+
+{
+  "steps": [
+    {...},
+    {...},
+    {...}
+  ]
+}
+
+for a one-by-one planning call.
+
+If the model accidentally returns multiple steps:
+
+sanitize
+retain exactly one valid next step
+discard the rest
+
+Do not allow accidental multi-step planning to become one-by-one execution.
+
+---
+
+7. ONE-BY-ONE + SUBGOALS
+
+The new planner should naturally support incremental subgoals.
+
+Example:
+
+Main Goal:
+Restore an unhealthy production API server.
+
+One-by-one:
+
+Subgoal 1:
+Inspect API health.
+
+Observation:
+Service is stopped.
+
+Subgoal 2:
+Restart the API service.
+
+Observation:
+Service restarted.
+
+Subgoal 3:
+Verify API health.
+
+Observation:
+Healthy.
+
+Goal achieved → COMPLETE.
+
+Every generated one-by-one step should be treated as the current operational subgoal.
+
+Persist its relationship to:
+
+main goal
+task
+current state
+previous observation
+next planning decision
+
+Do not create independent unrelated tasks.
+
+---
+
+8. LIVE TASK BEHAVIOR
+
+One-by-one planning is especially important for Live Mode.
+
+The current Live architecture already performs observation cycles and can park in "waiting" between ticks.
+
+Do not break that architecture.
+
+For Live Mode:
+
+Live Task
+ ↓
+Observe current world
+ ↓
+One-by-one planner generates ONE next action/subgoal
+ ↓
+Execute
+ ↓
+Observe
+ ↓
+Update MainState
+ ↓
+If goal/event condition requires another action:
+    generate one new step
+ ↓
+Continue
+
+For long-running live tasks, do not interpret the planner's finite step count as the lifetime of the live task.
+
+A live task can continue across future ticks/events.
+
+The one-by-one planner should make decisions based on the latest state rather than relying on stale pre-planned steps.
+
+This is one of the primary reasons for adding this planner mode.
+
+---
+
+9. GOAL COMPLETION HAS PRIORITY
+
+After every executed one-by-one step:
+
+EXECUTE
+ ↓
+OBSERVE
+ ↓
+VERIFY GOAL
+
+The goal verifier must run before requesting another plan.
+
+If the goal is achieved:
+
+COMPLETE
+
+Do not unnecessarily call the planner again.
+
+Do not generate:
+
+next step
+
+after the goal is already complete.
+
+---
+
+10. FAILURE HANDLING IN ONE-BY-ONE
+
+If the current step fails:
+
+execute
+ ↓
+failure
+ ↓
+observe failure
+ ↓
+replan one step
+
+The planner should receive the failure context.
+
+Example:
+
+Attempt:
+restart service
+
+Result:
+permission denied
+
+Next planner input must include that failure so it can choose another appropriate action rather than blindly repeating the same step.
+
+Prevent endless immediate repetition of an identical failed action unless the planner intentionally chooses it with new reasoning/context.
+
+---
+
+11. EXISTING PRE-PLAN PLANNER MUST REMAIN INDEPENDENT
+
+Do not rewrite the existing planner into a generic implementation that silently changes behavior.
+
+Prefer a clear architecture such as:
+
+PlannerStrategy
+ ├── PrePlanPlanner
+ └── OneByOnePlanner
+
+or an equivalent clean strategy implementation.
+
+Shared components are encouraged for:
+
+goal understanding
+tool definitions
+state preparation
+LLM invocation
+JSON parsing
+sanitization
+goal verification
+events
+
+but the planning semantics must remain explicitly different.
+
+---
+
+12. PLANNER CONFIGURATION
+
+Add planner configuration to the application.
+
+Supported planner types:
+
+pre-plan
+one-by-one
+
+---
+
+12.1 Global Settings
+
+Add a Settings configuration controlling the default planner strategy:
+
+Default Planner
+  ○ Pre-plan
+  ○ One-by-one
+
+Default:
+
+pre-plan
+
+Existing installations must continue working without manual migration.
+
+---
+
+13. PER-TASK OVERRIDE
+
+Every task must be able to override the global planner setting.
+
+Task configuration:
+
+{
+  "plannerType": "pre-plan"
+}
+
+or:
+
+{
+  "plannerType": "one-by-one"
+}
+
+Task override precedence:
+
+task plannerType
+      ↓
+global default plannerType
+      ↓
+fallback = pre-plan
+
+A task must never unexpectedly switch planner strategy because another task changed Settings.
+
+Resolve the planner mode at task creation/runtime configuration time.
+
+---
+
+14. TASK CONSOLE UI
+
+Add planner selection to Task Console.
+
+Example:
+
+Planner
+
+[ Pre-plan ▼ ]
+
+Options:
+
+Pre-plan
+One-by-one
+
+Show concise descriptions:
+
+Pre-plan
+Plans several steps ahead. Efficient for finite, well-defined tasks.
+
+One-by-one
+Plans one step, observes the result, then plans the next. Useful for dynamic/live tasks and adaptive subgoals.
+
+The selected planner must be included in the submitted task configuration.
+
+---
+
+15. SETTINGS UI
+
+Add the same configuration to Settings.
+
+Example:
+
+Planning
+
+Default planner
+[ Pre-plan ]
+
+Pre-plan:
+Plans multiple steps before execution.
+
+One-by-one:
+Plans a single next step after each observation.
+
+Settings must control only the global default.
+
+A task-specific override must continue to take precedence.
+
+---
+
+16. PRE-PLAN MAX STEPS
+
+Change the existing pre-plan maximum from the current hard-coded value to a configurable setting.
+
+Required values:
+
+Default:
+10
+
+Maximum:
+122
+
+Therefore:
+
+prePlanMaxSteps = 10
+
+and:
+
+MAX = 122
+
+The planner may generate:
+
+1 ... 10
+
+steps by default.
+
+Administrators/users may configure:
+
+1 ... 122
+
+steps.
+
+---
+
+17. CONFIGURATION-LIMITS.JSON
+
+The project was designed to centralize configurable limits in:
+
+configuration-limits.json
+
+Use that system if it already exists.
+
+If it does not exist in the current v1.0.91 codebase, create it following the existing configuration architecture.
+
+Add the planner configuration limits there rather than hard-coding them.
+
+Required definition:
+
+{
+  "prePlanMaxSteps": {
+    "type": "number",
+    "default": 10,
+    "min": 1,
+    "max": 122
+  }
+}
+
+Use the project's existing exact schema/metadata conventions for:
+
+type
+default
+min
+max
+nullable
+description
+
+if those fields already exist.
+
+Do not introduce a competing configuration system.
+
+---
+
+18. TASK CONSOLE MAX-STEPS CONFIGURATION
+
+The Task Console should allow the user to configure the pre-plan step limit.
+
+Example:
+
+Maximum pre-plan steps
+[ 10 ]
+
+Constraints:
+
+minimum = 1
+maximum = 122
+default = global setting
+
+The task may override the global value.
+
+Example:
+
+{
+  "plannerType": "pre-plan",
+  "prePlanMaxSteps": 25
+}
+
+For:
+
+plannerType = one-by-one
+
+do not pretend this value represents a pre-generated plan.
+
+The value is relevant to pre-plan generation only.
+
+Use existing task iteration/time/cancellation safeguards to prevent infinite one-by-one loops.
+
+---
+
+19. VALIDATION
+
+Server-side task validation must enforce:
+
+plannerType ∈ { pre-plan, one-by-one }
+prePlanMaxSteps >= 1
+prePlanMaxSteps <= 122
+
+Do not rely only on frontend validation.
+
+Invalid values must be rejected with a clear error.
+
+---
+
+20. API / TASK CONFIG COMPATIBILITY
+
+Existing task requests that do not specify planner configuration must behave as:
+
+plannerType = global default
+
+Existing API clients must continue working.
+
+Do not make:
+
+plannerType
+prePlanMaxSteps
+
+mandatory in old API calls.
+
+---
+
+21. EVENTS
+
+Add planner events where appropriate.
+
+Examples:
+
+planner.mode_selected
+planner.one_by_one_step_planned
+planner.one_by_one_step_completed
+planner.one_by_one_replanned
+planner.one_by_one_goal_reached
+
+Event data should contain useful structured information such as:
+
+{
+  "plannerType": "one-by-one",
+  "stepId": "step_7",
+  "stepTitle": "Check service health"
+}
+
+Do not flood the event stream with redundant copies of the same state.
+
+Existing planner events such as "planner.plan_built" must continue working for pre-plan mode. The existing architecture already emits planner plan-built events and later consumes plan steps through the task loop.
+
+---
+
+22. TASK PREVIEW
+
+Update Task Preview to clearly distinguish:
+
+Planner: Pre-plan
+
+or:
+
+Planner: One-by-one
+
+For pre-plan:
+
+Plan
+  ✓ Step 1
+  ✓ Step 2
+  → Step 3
+  ○ Step 4
+  ○ Step 5
+
+For one-by-one:
+
+One-by-one Planner
+
+Current Subgoal
+→ Check API health
+
+Previous
+✓ Inspect service status
+
+Next
+Waiting for observation...
+
+After a one-by-one step completes, display the newly generated subgoal rather than pretending a complete plan existed from the beginning.
+
+---
+
+23. TRAINING DATA — ADD MANY MORE EXAMPLES
+
+Expand the existing training datasets substantially.
+
+The training dataset system already supports structured examples with:
+
+category
+request
+expectedTool
+expectedParams
+split
+
+and supports train/validation/test splits.
+
+Add high-quality examples across the actual NexTool domain.
+
+Do not generate meaningless repetitive examples.
+
+---
+
+24. TRAINING TOPICS
+
+Add examples covering many categories, including:
+
+server health
+server recovery
+service restart
+monitoring
+diagnostics
+system information
+CPU / memory
+filesystem operations
+process-related tasks
+network requests
+HTTP operations
+API checks
+notifications
+memory storage
+memory recall
+time/date
+UUID generation
+text processing
+math
+automation
+tool selection
+parameter extraction
+tool failure recovery
+goal verification
+multi-step finite tasks
+live monitoring
+event-driven actions
+dynamic environments
+state changes
+unknown/unseen request wording
+ambiguous requests
+synonyms
+typos
+natural conversational task wording
+
+Also create difficult examples where multiple tools appear superficially relevant.
+
+The model must learn:
+
+request meaning
+tool purpose
+parameter relationships
+context
+task mode
+goal relevance
+
+rather than memorizing only exact phrases.
+
+---
+
+25. TRAINING QUALITY
+
+Do not optimize only for training-set accuracy.
+
+Use:
+
+train
+validation
+test
+
+splits.
+
+Avoid leakage between the splits.
+
+Include paraphrases so the same semantic task does not appear almost identically in all datasets.
+
+Include balanced tool/category coverage.
+
+Where appropriate, include negative and confusing examples.
+
+Example:
+
+"check whether the server is healthy"
+
+should map differently from:
+
+"restart the unhealthy server"
+
+even though both mention server health.
+
+---
+
+26. TRAIN PARAMETER GENERATION TOO
+
+Examples should teach not only:
+
+request → expectedTool
+
+but also:
+
+request + context → expected parameters
+
+Examples should include:
+
+serverId
+serviceName
+URLs
+paths
+numbers
+limits
+modes
+flags
+time values
+query values
+other actual tool parameters
+
+Use the existing schema-driven parameter generation architecture.
+
+Do not invent parameters unsupported by a tool.
+
+---
+
+27. TRAIN ALL TRAINABLE MODELS
+
+Inspect the model registry and training system.
+
+The existing architecture contains a real TensorFlow.js trainer and benchmark engine.
+
+Identify every model/checkpoint that NexTool can actually train.
+
+Train all trainable models, not just the currently selected model.
+
+For each trainable model:
+
+load correct dataset
+train
+validate
+test
+benchmark
+register new checkpoint/version
+verify inference
+
+Do not skip a model merely because another model already performed well.
+
+---
+
+28. IMPORTANT — EXTERNAL / PROVIDER MODELS
+
+The existing documentation identifies:
+
+llm-core v1.0.0
+
+as the server-side decision engine served through "z-ai-web-dev-sdk", while TensorFlow.js is the actual local training path.
+
+Do not falsely claim to retrain an externally hosted/provider-controlled model if it is not locally trainable.
+
+Instead:
+
+local trainable model
+→ actually retrain
+
+external provider model
+→ update NexTool integration/model metadata only when appropriate
+→ benchmark it
+→ do not fabricate local training results
+
+The implementation must distinguish:
+
+trainable model
+
+from:
+
+runtime/provider model
+
+---
+
+29. MODEL VERSION 1.0.0 → 1.0.1
+
+Upgrade NexTool's internal AI model versioning from:
+
+1.0.0
+
+to:
+
+1.0.1
+
+for the models actually being changed/trained.
+
+Update consistently:
+
+model metadata
+checkpoint metadata
+model registry
+training records
+export metadata
+benchmark references
+runtime model selection
+UI model information
+documentation
+
+Do not erase compatibility metadata for old 1.0.0 checkpoints.
+
+Old checkpoints should remain identifiable where the architecture supports historical versions.
+
+---
+
+30. MODEL QUALITY GOAL
+
+The objective is not merely:
+
+"training completed"
+
+The objective is to produce the strongest practical model from the available NexTool data.
+
+Use:
+
+better examples
+balanced categories
+validation
+test set
+early stopping
+appropriate regularization
+checkpoint selection
+benchmark comparison
+error analysis
+
+Do not overfit by simply training for a very large number of epochs.
+
+Use the validation/test performance and actual benchmark results to decide which checkpoint becomes the active 1.0.1 model.
+
+---
+
+31. BENCHMARK EVERY MODEL
+
+For every trained model:
+
+heuristic-fallback
+llm-core
+trained model
+
+where the benchmark system supports it.
+
+Record:
+
+accuracy
+tool-selection accuracy
+parameter-generation quality where available
+failure rate
+latency
+per-case results
+
+Use a held-out test set.
+
+Do not judge the model only from the training data.
+
+---
+
+32. LEARN FROM TASKS + OBSERVER DATA
+
+Add a training/data pipeline that can learn from real NexTool task execution information.
+
+Relevant sources include:
+
+task request
+planner decisions
+selected tools
+generated parameters
+tool execution results
+observer results
+goal completion state
+failed actions
+recovery actions
+number of steps
+task mode
+task planner type
+final outcome
+
+The purpose is to identify reusable task/observation patterns.
+
+---
+
+33. PATTERN EXTRACTION FOR AI
+
+Introduce a structured pattern-learning stage.
+
+Examples of useful patterns:
+
+Sequence pattern
+
+server.health
+→ service.restart
+→ server.health
+
+often occurs during service recovery.
+
+Outcome pattern
+
+health = unhealthy
++
+service = stopped
+→
+restart service
+
+Verification pattern
+
+action succeeds
+→
+perform verification
+
+Early-completion pattern
+
+first observation proves goal
+→
+stop immediately
+
+Failure-recovery pattern
+
+tool A fails
+→
+observe reason
+→
+tool B becomes appropriate
+
+Live pattern
+
+observe
+→
+detect state change
+→
+one-by-one subgoal
+→
+action
+→
+observe again
+
+---
+
+34. PATTERNS MUST BE STRUCTURED
+
+Do not simply save raw logs and call them training.
+
+Create structured pattern records containing useful information such as:
+
+pattern type
+input conditions
+context
+action/tool
+result
+outcome
+confidence/frequency
+source
+task mode
+planner mode
+
+Patterns must be deterministic/reproducible where possible.
+
+Avoid storing unnecessary sensitive task content.
+
+---
+
+35. OBSERVER → PATTERN PIPELINE
+
+Extend the Observer pipeline approximately as:
+
+Tool Result
+   ↓
+Observer
+   ↓
+Normalized Observation
+   ↓
+Pattern Extraction
+   ↓
+Pattern Store / Training Examples
+   ↓
+Training Dataset
+
+The Observer remains responsible for deciding what actually happened.
+
+The pattern layer should learn from verified observations rather than guesses.
+
+---
+
+36. PATTERN QUALITY / GOOD FITTING
+
+Pattern learning must avoid overfitting.
+
+Do not create a pattern from one accidental event unless explicitly configured as a low-confidence observation.
+
+Use evidence such as:
+
+frequency
+success rate
+repeatability
+context similarity
+consistent outcome
+
+where available.
+
+A pattern should become stronger when the same relationship repeatedly appears and weaker when contradicted.
+
+Do not allow a noisy observation to dominate the model.
+
+---
+
+37. PATTERN FEATURES IN MODEL TRAINING
+
+Where appropriate, feed reliable pattern information into the model training pipeline.
+
+Examples:
+
+task/request features
++
+tool definitions
++
+parameter features
++
+task context
++
+verified observer/pattern features
+
+Do not make the model dependent on unavailable live-only pattern data.
+
+The model must still work when no prior pattern is available.
+
+Therefore:
+
+pattern information = additional evidence
+not mandatory input
+
+---
+
+38. MODEL SHOULD GENERALIZE
+
+The training system should teach semantic relationships such as:
+
+"verify the server"
+"check the server"
+"see whether the server is healthy"
+"inspect server status"
+
+rather than memorizing one exact sentence.
+
+Likewise:
+
+restart
+reboot service
+bring service back up
+recover service
+
+should be represented according to actual tool semantics.
+
+Do not produce synthetic examples that conflict with the actual tool registry.
+
+---
+
+39. TRAINING + PATTERN REGRESSION
+
+After training:
+
+1. Run the normal benchmark.
+2. Run pattern-aware examples.
+3. Run unseen/paraphrased examples.
+4. Run recovery examples.
+5. Run live-task examples where applicable.
+6. Compare against the previous 1.0.0 model.
+
+Do not activate the new model if it is obviously broken.
+
+If the new 1.0.1 model performs worse on important supported behavior, investigate the dataset/training configuration before declaring success.
+
+---
+
+40. PLANNER + MODEL INTERACTION
+
+The planner mode must be part of the context presented to the decision system where relevant.
+
+For example:
+
+plannerType = pre-plan
+
+means:
+
+optimize for finite ordered execution
+
+while:
+
+plannerType = one-by-one
+
+means:
+
+optimize for the best immediate next action given current state
+
+The one-by-one planner must not request unnecessary future plans.
+
+---
+
+41. PRESERVE CORE LOOP
+
+The existing high-level task loop remains conceptually:
+
+UNDERSTAND
+→ PLAN
+→ SELECT TOOL
+→ GENERATE PARAMS
+→ EXECUTE
+→ OBSERVE
+→ UPDATE STATE
+→ REPLAN
+→ COMPLETE
+
+The major change is how:
+
+PLAN
+
+works.
+
+Pre-plan:
+
+PLAN → multiple future steps
+
+One-by-one:
+
+PLAN → one next step
+
+Do not break:
+
+tool selection
+parameter generation
+execution
+observer
+state updates
+goal verification
+subgoals
+parallel execution
+SSE
+Task Preview
+Live Monitor
+
+---
+
+42. PARALLEL TOOLS
+
+Pre-plan already supports parallel independent tool calls.
+
+Preserve that behavior.
+
+For one-by-one mode, do not pretend multiple independently planned steps are a parallel plan.
+
+A single one-by-one planning cycle produces one next step.
+
+If the existing execution of that one step internally requires a tool call that has its own supported batching semantics, preserve the runtime semantics without turning the planner into a multi-step planner.
+
+---
+
+43. FALLBACK BEHAVIOR
+
+Pre-plan keeps the existing deterministic fallback.
+
+If the planner fails:
+
+LLM planner failure
+ ↓
+deterministic fallback
+
+For one-by-one mode, add an equivalent safe fallback that creates one valid immediate step.
+
+Never return zero steps without clearly determining whether:
+
+goal is already complete
+
+or:
+
+task cannot proceed
+
+---
+
+44. TASK STOP / CANCEL / PAUSE
+
+Both planner strategies must respect existing:
+
+stop
+cancel
+pause/resume
+task timeout
+tool timeout
+AbortController
+
+behavior.
+
+Never create another planning request after a task has entered a terminal state.
+
+---
+
+45. DOCUMENTATION
+
+Update the NexTool documentation to v1.0.10.
+
+Document:
+
+Planner modes
+Pre-plan behavior
+One-by-one behavior
+When each mode is useful
+Task-level planner override
+Global planner setting
+Pre-plan maximum steps
+configuration-limits.json
+One-by-one subgoal flow
+Training improvements
+Pattern learning
+Model version 1.0.1
+Benchmarking
+
+Include diagrams/examples for both planner modes.
+
+---
+
+46. LOGO + TITLE META TAGS — QUICK VERIFICATION ONLY
+
+Do not edit the logo or title implementation in v1.0.10.
+
+The product already has an active icon/logo system and "layout.tsx" metadata/favicons.
+
+Only perform a quick verification.
+
+Verify that:
+
+<title>
+
+is present and correct.
+
+Verify the expected logo/icon metadata is present, including the appropriate:
+
+favicon
+icon links
+apple-touch-icon
+metadata
+
+where supported by the current implementation.
+
+Check the rendered HTML/head or the appropriate Next.js metadata output.
+
+No code edits for this verification.
+
+If something is missing, report it in the final implementation summary rather than changing it.
+
+---
+
+47. TESTING — PLANNER
+
+Test pre-plan mode:
+
+goal
+→ plan 10 steps
+→ execute
+→ early goal completion
+→ remaining steps discarded
+
+Test configurable:
+
+prePlanMaxSteps = 1
+prePlanMaxSteps = 10
+prePlanMaxSteps = 50
+prePlanMaxSteps = 122
+
+Verify >122 is rejected.
+
+---
+
+48. TESTING — ONE-BY-ONE
+
+Test:
+
+Goal
+ ↓
+Step 1
+ ↓
+Observation
+ ↓
+Step 2
+ ↓
+Observation
+ ↓
+Step 3
+ ↓
+Goal achieved
+ ↓
+Complete
+
+Verify that step 2 was not planned before the result of step 1.
+
+Verify step 3 was not planned before the result of step 2.
+
+This is a critical acceptance test.
+
+---
+
+49. TESTING — LIVE MODE
+
+Create a live task that requires changing decisions over multiple observations.
+
+Verify:
+
+tick/event
+→ observe
+→ one-by-one planning
+→ one action
+→ observe
+→ next planning
+
+Verify the task can continue across live ticks.
+
+Verify it does not create a giant pre-plan.
+
+---
+
+50. TESTING — TASK OVERRIDE
+
+Set global:
+
+pre-plan
+
+Create Task A:
+
+plannerType = one-by-one
+
+Create Task B:
+
+no override
+
+Expected:
+
+Task A → one-by-one
+Task B → pre-plan
+
+Then reverse the global setting and verify existing Task A remains governed by its own configuration.
+
+---
+
+51. TESTING — TRAINING
+
+Verify:
+
+new examples imported
+training starts
+epochs run
+validation works
+test split works
+checkpoint saved
+new model version = 1.0.1
+benchmark works
+inference works
+
+Train all locally trainable models.
+
+Do not claim an external model was retrained.
+
+---
+
+52. TESTING — PATTERN LEARNING
+
+Verify a real task generates:
+
+task
+→ execution
+→ observer result
+→ pattern extraction
+
+Verify repeated useful patterns can be identified.
+
+Verify noisy/one-off events do not automatically become high-confidence knowledge.
+
+Verify pattern information can contribute to training/evaluation without becoming mandatory for inference.
+
+---
+
+53. TESTING — BACKWARD COMPATIBILITY
+
+Existing tasks without:
+
+plannerType
+prePlanMaxSteps
+
+must still work.
+
+Existing task API calls must continue to work.
+
+Existing training datasets must remain loadable.
+
+Existing model checkpoints must remain identifiable.
+
+Existing tools and runtime behavior must remain intact.
+
+---
+
+54. FULL RELEASE TEST
+
+Run:
+
+pnpm install
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+
+or the project's equivalent commands.
+
+Then run the existing manual browser release workflow.
+
+At minimum verify:
+
+Dashboard
+Task Console
+Task Preview
+Live Monitor
+Tools
+Tool IDE
+Datasets
+Training
+Benchmark
+Models
+Settings
+Docs
+
+---
+
+55. FINAL MODEL VALIDATION
+
+Before activating 1.0.1 as the current model:
+
+compare old 1.0.0
+vs
+new 1.0.1
+
+Use the held-out benchmark.
+
+Inspect errors rather than looking only at one aggregate number.
+
+The new version should represent the improved dataset/training pipeline, not simply a renamed checkpoint.
+
+---
+
+56. UPDATE VERSIONED ARTIFACTS
+
+Where applicable, update:
+
+application version
+AI model version
+training metadata
+checkpoint metadata
+documentation
+model registry entries
+export metadata
+
+Do not rename historical 1.0.0 artifacts in a way that destroys traceability.
+
+---
+
+57. FINAL GIT PUSH
+
+Only after:
+
+v1.0.10 implementation complete
+tests pass
+training complete
+models validated
+documentation updated
+working tree reviewed
+
+commit everything.
+
+Example:
+
+git status
+git add .
+git commit -m "feat: add adaptive one-by-one planner and train AI v1.0.1"
+git push origin dev
+
+Push to:
+
+dev
+
+Do not create another branch.
+
+Do not perform an unnecessary pull.
+
+After push:
+
+git status
+git log --oneline -3
+
+Confirm the final commit is on "dev".
+
+---
+
+FINAL v1.0.10 ACCEPTANCE CRITERIA
+
+v1.0.10 is complete only when all of the following are true:
+
+✓ v1.0.91 baseline was pushed before v1.0.10 edits
+✓ pre-plan behavior preserved
+✓ pre-plan early completion preserved
+✓ one-by-one planner implemented
+✓ one-by-one plans exactly one next step
+✓ next step is generated only after the latest observation
+✓ one-by-one supports adaptive subgoals
+✓ one-by-one works correctly in Live Mode
+✓ planner type configurable globally
+✓ planner type configurable per task
+✓ per-task planner overrides global default
+✓ pre-plan default = 10 steps
+✓ pre-plan maximum = 122 steps
+✓ configuration limits centralized
+✓ Task Console exposes planner selection
+✓ Task Console exposes pre-plan max steps
+✓ server-side validation exists
+✓ Task Preview shows planner mode correctly
+✓ planner events updated
+✓ existing planner fallback preserved
+✓ existing parallel execution preserved
+✓ existing cancellation/timeout behavior preserved
+✓ significantly expanded high-quality training data
+✓ train/validation/test separation preserved
+✓ all locally trainable models trained
+✓ model version upgraded from 1.0.0 to 1.0.1 where applicable
+✓ external provider models not falsely claimed as retrained
+✓ benchmarking completed
+✓ old and new model behavior compared
+✓ task/observer data used for structured pattern learning
+✓ useful patterns extracted from repeated observations
+✓ pattern quality/fitting safeguards implemented
+✓ pattern-derived information can improve model training
+✓ pattern information is optional evidence, not a mandatory runtime dependency
+✓ logo/title metadata quick verification completed
+✓ no logo/title edits made
+✓ documentation updated
+✓ typecheck passes
+✓ lint passes
+✓ tests pass
+✓ production build passes
+✓ final v1.0.10 commit created
+✓ final v1.0.10 pushed to GitHub `dev`
+✓ working tree reviewed after push
+
+Do not modify unrelated functionality.
+
+Do not silently remove existing NexTool behavior.
+
+Do not fake training, benchmark results, or metadata.
+
+The primary goal of v1.0.10 is:
+
+NexTool can choose between:
+
+PRE-PLAN
+→ plan ahead for finite tasks
+
+ONE-BY-ONE
+→ observe → choose one next subgoal → act → observe → adapt
+
+while simultaneously improving the underlying AI through better examples, task/observer learning, structured patterns, training, benchmarking, and the new 1.0.1 model generation.

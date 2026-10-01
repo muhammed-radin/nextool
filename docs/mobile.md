@@ -105,6 +105,28 @@ output* section (summary, metric tiles, artifacts, final-result JSON).
   banner + toast) until at least one tool is chosen, so a phone user can no longer
   create a task the runtime would reject.
 
+## v1.0.5 mobile refinements
+
+- **Import model dialog fits the viewport** — the Models **Import model** dialog is a
+  flex column capped at `85dvh` with a stable header/footer and a single scrollable
+  body, so it no longer overflows on phones (verified at 320/390 px: dialog width =
+  viewport − 2 rem, zero page horizontal overflow). The mobile flow is stacked:
+  full-width choose button (≥ 44 px) → chosen-file chip (long names wrap with
+  `break-all` + native tooltip) → error card → hairline divider → manifest textarea →
+  full-width **Cancel** / **Validate & load** buttons. Validation errors render inside
+  the dialog as rose `role="alert"` cards instead of only toasts (see
+  [Models](../ai-core/models.md#the-import-model-dialog-v105-rework)).
+- **Tool IDE mobile tabs** — the editor is a horizontally scrollable tab strip:
+  **Details / Schema / Function (or Handler) / References / Test**. Details stacks the
+  General, Execution environment and Metadata sections; the Function tab keeps a real
+  420 px Monaco editor (or the textarea twin behind the toggle) plus the Test panel
+  gets its own tab. Switching tabs unmounts Monaco safely — the shared source state is
+  the fallback, so code is never lost (see
+  [Tool Development](../tools/tool-development.md#editor-source-sync-guarantees-v105)).
+- **Desktop unchanged** — from `lg` up the IDE keeps its two-pane split layout and the
+  import dialog keeps its row footer; the changes only replace squeezing with stacking
+  below the breakpoints.
+
 ## Live Monitor priority layout
 
 Live Mode gets the priority treatment on small screens:

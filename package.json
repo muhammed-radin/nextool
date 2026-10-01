@@ -1,7 +1,7 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.4",
-  "description": "NexTool Q1 v1.0.3 \u2014 specialized AI task-processing, planning, observation, automation and tool-execution runtime with operations console, Tool IDE, training, benchmarking, Parquet datasets, parallel tool execution and CLI",
+  "version": "1.0.5",
+  "description": "NexTool Q1 v1.0.5 \u2014 specialized AI task-processing, planning, observation, automation and tool-execution runtime with operations console, Tool IDE (structured metadata + Monaco/textarea toggle), restricted Node.js tool environment, training, benchmarking, Parquet datasets, parallel tool execution and CLI",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",

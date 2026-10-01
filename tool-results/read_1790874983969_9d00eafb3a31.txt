@@ -1,0 +1,775 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * Tools (spec §13/§31/§56) — tool registry grid with per-tool enable switch,
+     5→ * stats, schema accordion, dynamic tool registration dialog AND the full
+     6→ * v1.0.2 tool lifecycle: New Tool (Tool IDE) · Edit · Duplicate · Test ·
+     7→ * Enable/Disable · Delete (destructive ops confirmed).
+     8→ *
+     9→ * v1.0.4 §11-17 — tool portability:
+    10→ *  - Export a single tool (or all tools) as JSON with the EXACT function
+    11→ *    source code preserved as text (real registry data, no placeholders).
+    12→ *  - Import a tool JSON: parse → validate (structure/name/schema/function) →
+    13→ *    preview → conflict handling (replace / import as copy / cancel) →
+    14→ *    register through the REAL registry endpoints → editable in the Tool IDE.
+    15→ */
+    16→
+    17→import { useCallback, useEffect, useRef, useState } from 'react';
+    18→import { toast } from 'sonner';
+    19→import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
+    20→import { Badge } from '@/components/ui/badge';
+    21→import { Button } from '@/components/ui/button';
+    22→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+    23→import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+    24→import { Input } from '@/components/ui/input';
+    25→import { Label } from '@/components/ui/label';
+    26→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+    27→import { Skeleton } from '@/components/ui/skeleton';
+    28→import { Switch } from '@/components/ui/switch';
+    29→import { Textarea } from '@/components/ui/textarea';
+    30→import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+    31→import { cn } from '@/lib/utils';
+    32→import { JsonTree } from '../json-tree';
+    33→import {
+    34→  ApiClientError, deleteTool, listTools, registerJsTool, registerTool, testTool, toggleTool, updateTool,
+    35→} from '@/lib/nexool/client';
+    36→import type { ToolEntry } from '@/lib/nexool/api-contract';
+    37→import type { ToolTestResult } from '@/lib/nexool/client';
+    38→import {
+    39→  exportToolJson, exportToolsJson, parseToolImport, proposeCopyName, toolExportFilename, validateImportedTool,
+    40→  type PortableTool,
+    41→} from '@/lib/nexool/tool-portable';
+    42→import { APP_VERSION } from '@/lib/nexool/version';
+    43→import { EmptyState, ErrorCard, SectionTitle, TechLabel, fmtMs } from '../ui-bits';
+    44→import {
+    45→  Copy, Download, FilePlus2, FileUp, Loader2, Pencil, Play, Plus, Squircle, Trash2, Upload, Wrench,
+    46→} from 'lucide-react';
+    47→
+    48→function EnvironmentBadge({ environment }: { environment: ToolEntry['environment'] }) {
+    49→  if (environment === 'virtual-env') {
+    50→    return (
+    51→      <TooltipProvider delayDuration={150}>
+    52→        <Tooltip>
+    53→          <TooltipTrigger asChild>
+    54→            <Badge variant="outline" className="border-amber-400/30 bg-amber-400/10 font-mono text-[10px] text-amber-300">virtual environment</Badge>
+    55→          </TooltipTrigger>
+    56→          <TooltipContent>Runs against the simulated server fleet</TooltipContent>
+    57→        </Tooltip>
+    58→      </TooltipProvider>
+    59→    );
+    60→  }
+    61→  if (environment === 'js-function') {
+    62→    return <Badge variant="outline" className="border-cyan-400/30 bg-cyan-400/10 font-mono text-[10px] text-cyan-300">js-function</Badge>;
+    63→  }
+    64→  if (environment === 'dynamic') {
+    65→    return <Badge variant="outline" className="border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-300">dynamic</Badge>;
+    66→  }
+    67→  return <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">builtin</Badge>;
+    68→}
+    69→
+    70→function ToolCard({
+    71→  tool, onToggle, toggling, onEdit, onTest, onDuplicate, onDelete, deleteBusy, onExport,
+    72→}: {
+    73→  tool: ToolEntry;
+    74→  onToggle: (name: string, enabled: boolean) => void;
+    75→  toggling: boolean;
+    76→  onEdit: (tool: ToolEntry) => void;
+    77→  onTest: (tool: ToolEntry) => void;
+    78→  onDuplicate: (tool: ToolEntry) => void;
+    79→  onDelete: (tool: ToolEntry) => void;
+    80→  deleteBusy: boolean;
+    81→  onExport: (tool: ToolEntry) => void;
+    82→}) {
+    83→  const s = tool.stats;
+    84→  const readOnly = tool.environment === 'builtin' || tool.environment === 'virtual-env';
+    85→  return (
+    86→    <div className={cn('glass-card flex flex-col rounded-lg p-4', !tool.enabled && 'opacity-70')}>
+    87→      <div className="flex items-start justify-between gap-2">
+    88→        <div className="min-w-0">
+    89→          <p className="truncate font-mono text-sm font-semibold text-foreground" title={tool.name}>{tool.name}</p>
+    90→          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+    91→            <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">{tool.category}</Badge>
+    92→            <EnvironmentBadge environment={tool.environment} />
+    93→            {tool.handlerKind ? <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-slate-400">handler: {tool.handlerKind}</Badge> : null}
+    94→            {tool.toolVersion ? <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-slate-400">v{tool.toolVersion}</Badge> : null}
+    95→          </div>
+    96→        </div>
+    97→        <Switch checked={tool.enabled} onCheckedChange={(v) => onToggle(tool.name, v)} disabled={toggling} aria-label={`Toggle tool ${tool.name}`} />
+    98→      </div>
+    99→
+   100→      <p className="mt-2 break-words text-xs text-foreground/90">{tool.description}</p>
+   101→      {tool.purpose ? <p className="mt-1 break-words text-[11px] italic text-muted-foreground">purpose: {tool.purpose}</p> : null}
+   102→
+   103→      <div className="mt-3 grid grid-cols-4 gap-2 border-t border-white/[0.07] pt-2 font-mono text-[11px] tabular-nums text-slate-300">
+   104→        <span><span className="text-muted-foreground">calls</span> {s.callCount}</span>
+   105→        <span className="text-emerald-300"><span className="text-muted-foreground">ok</span> {s.successCount}</span>
+   106→        <span className="text-rose-300"><span className="text-muted-foreground">fail</span> {s.failureCount + s.timeoutCount}</span>
+   107→        <span><span className="text-muted-foreground">avg</span> {fmtMs(s.avgMs)}</span>
+   108→      </div>
+   109→
+   110→      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+   111→        {!readOnly ? (
+   112→          <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onEdit(tool)}>
+   113→            <Pencil className="size-3.5" aria-hidden /> Edit
+   114→          </Button>
+   115→        ) : (
+   116→          <TooltipProvider delayDuration={150}>
+   117→            <Tooltip>
+   118→              <TooltipTrigger asChild>
+   119→                <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onDuplicate(tool)}>
+   120→                  <Copy className="size-3.5" aria-hidden /> Duplicate to customize
+   121→                </Button>
+   122→              </TooltipTrigger>
+   123→              <TooltipContent>Built-ins are read-only — duplicate creates a js-function copy you can edit</TooltipContent>
+   124→            </Tooltip>
+   125→          </TooltipProvider>
+   126→        )}
+   127→        <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onTest(tool)}>
+   128→          <Play className="size-3.5" aria-hidden /> Test
+   129→        </Button>
+   130→        <Button
+   131→          variant="outline"
+   132→          size="sm"
+   133→          className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200"
+   134→          onClick={() => onExport(tool)}
+   135→          aria-label={`Export tool ${tool.name} as JSON`}
+   136→        >
+   137→          <Download className="size-3.5" aria-hidden /> Export
+   138→        </Button>
+   139→        {!readOnly ? (
+   140→          <Button
+   141→            variant="outline"
+   142→            size="sm"
+   143→            className="ml-auto min-h-9 border-rose-500/40 text-rose-300 hover:bg-rose-500/10"
+   144→            onClick={() => onDelete(tool)}
+   145→            disabled={deleteBusy}
+   146→            aria-label={`Delete tool ${tool.name}`}
+   147→          >
+   148→            <Trash2 className="size-3.5" aria-hidden />
+   149→          </Button>
+   150→        ) : null}
+   151→      </div>
+   152→
+   153→      <Accordion type="single" collapsible className="mt-2">
+   154→        <AccordionItem value="schema" className="border-none">
+   155→          <AccordionTrigger className="py-1.5 text-[11px] text-muted-foreground hover:no-underline">Schema ({tool.schema?.properties?.length ?? 0} params)</AccordionTrigger>
+   156→          <AccordionContent>
+   157→            {(tool.schema?.properties ?? []).length === 0 ? (
+   158→              <p className="text-[11px] text-muted-foreground">No parameters.</p>
+   159→            ) : (
+   160→              <div className="nextool-scroll overflow-x-auto">
+   161→                <table className="w-full text-left text-[11px]">
+   162→                  <thead>
+   163→                    <tr className="text-muted-foreground">
+   164→                      <th className="pb-1 pr-2 font-medium">name</th>
+   165→                      <th className="pb-1 pr-2 font-medium">type</th>
+   166→                      <th className="pb-1 font-medium">notes</th>
+   167→                    </tr>
+   168→                  </thead>
+   169→                  <tbody className="font-mono">
+   170→                    {(tool.schema?.properties ?? []).map((p) => (
+   171→                      <tr key={p.name} className="border-t border-white/[0.06] align-top">
+   172→                        <td className="py-1 pr-2 text-foreground/90">
+   173→                          {p.name}
+   174→                          {p.required ? <span className="text-rose-400">*</span> : null}
+   175→                        </td>
+   176→                        <td className="py-1 pr-2 text-cyan-300/90">{p.type}</td>
+   177→                        <td className="py-1 text-muted-foreground">
+   178→                          {p.generation ? <span className="mr-1 rounded border border-white/[0.09] px-1 text-[9px] uppercase">{p.generation}</span> : null}
+   179→                          {p.description}
+   180→                          {p.enumValues?.length ? (
+   181→                            <span className="ml-1 inline-flex flex-wrap gap-1">
+   182→                              {p.enumValues.map((v) => (
+   183→                                <span key={v} className="rounded bg-white/[0.06] px-1 text-[9px] text-foreground/80">{v}</span>
+   184→                              ))}
+   185→                            </span>
+   186→                          ) : null}
+   187→                        </td>
+   188→                      </tr>
+   189→                    ))}
+   190→                  </tbody>
+   191→                </table>
+   192→              </div>
+   193→            )}
+   194→          </AccordionContent>
+   195→        </AccordionItem>
+   196→      </Accordion>
+   197→    </div>
+   198→  );
+   199→}
+   200→
+   201→const EXAMPLE_PARAMS = JSON.stringify(
+   202→  {
+   203→    properties: [
+   204→      { name: 'input', type: 'string', required: true, description: 'Primary input value' },
+   205→      { name: 'delayMs', type: 'number', required: false, description: 'Optional delay hint' },
+   206→    ],
+   207→  },
+   208→  null,
+   209→  2,
+   210→);
+   211→
+   212→export default function ToolsView({
+   213→  onOpenEditor,
+   214→}: {
+   215→  onOpenEditor: (req: { mode: 'new' | 'edit' | 'duplicate'; name: string | null; source?: ToolEntry }) => void;
+   216→}) {
+   217→  const [tools, setTools] = useState<ToolEntry[] | null>(null);
+   218→  const [error, setError] = useState<string | null>(null);
+   219→  const [toggling, setToggling] = useState<string | null>(null);
+   220→  const [regOpen, setRegOpen] = useState(false);
+   221→  const [registering, setRegistering] = useState(false);
+   222→  const [form, setForm] = useState({ name: '', description: '', category: 'utility', purpose: '', handlerKind: 'echo', handlerConfig: '{}', schema: EXAMPLE_PARAMS });
+   223→
+   224→  const [testTarget, setTestTarget] = useState<ToolEntry | null>(null);
+   225→  const [testParams, setTestParams] = useState('{}');
+   226→  const [testRunning, setTestRunning] = useState(false);
+   227→  const [testResult, setTestResult] = useState<ToolTestResult | null>(null);
+   228→
+   229→  const [deleteCandidate, setDeleteCandidate] = useState<ToolEntry | null>(null);
+   230→  const [deleteBusy, setDeleteBusy] = useState(false);
+   231→
+   232→  // ---- v1.0.4 §11-17: tool export / import state ----
+   233→  const importFileRef = useRef<HTMLInputElement>(null);
+   234→  const [importBusy, setImportBusy] = useState(false);
+   235→  /** Validated tool awaiting confirmation (preview dialog). */
+   236→  const [importPreview, setImportPreview] = useState<{ tool: PortableTool; warnings: string[] } | null>(null);
+   237→  /** Validated tool whose name already exists (conflict dialog). */
+   238→  const [importConflict, setImportConflict] = useState<{ tool: PortableTool; existing: ToolEntry } | null>(null);
+   239→  /** Import rejected — readable validation errors. */
+   240→  const [importErrors, setImportErrors] = useState<{ errors: string[]; warnings: string[] } | null>(null);
+   241→
+   242→  const load = useCallback(async () => {
+   243→    try {
+   244→      const data = await listTools();
+   245→      setTools(data);
+   246→      setError(null);
+   247→    } catch (e) {
+   248→      setError(e instanceof ApiClientError ? e.message : 'Tool registry unavailable');
+   249→    }
+   250→  }, []);
+   251→
+   252→  useEffect(() => {
+   253→    void load();
+   254→  }, [load]);
+   255→
+   256→  const onToggle = async (name: string, enabled: boolean) => {
+   257→    setToggling(name);
+   258→    try {
+   259→      const updated = await toggleTool(name, enabled);
+   260→      setTools((prev) => (prev ?? []).map((t) => (t.name === name ? { ...t, enabled: updated.enabled } : t)));
+   261→      toast.success(`${name} ${updated.enabled ? 'enabled' : 'disabled'}`);
+   262→    } catch (e) {
+   263→      toast.error('Toggle failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   264→    } finally {
+   265→      setToggling(null);
+   266→    }
+   267→  };
+   268→
+   269→  const submitRegister = async () => {
+   270→    if (!/^[a-z0-9_-]+\.[a-z0-9_-]+$/i.test(form.name.trim())) {
+   271→      toast.error('Invalid tool name', { description: 'Use namespace.action, e.g. utility.summarize' });
+   272→      return;
+   273→    }
+   274→    let properties: unknown;
+   275→    try {
+   276→      properties = JSON.parse(form.schema);
+   277→    } catch {
+   278→      toast.error('Schema is not valid JSON');
+   279→      return;
+   280→    }
+   281→    let handlerConfig: Record<string, unknown> | undefined;
+   282→    if (form.handlerConfig.trim()) {
+   283→      try {
+   284→        handlerConfig = JSON.parse(form.handlerConfig);
+   285→      } catch {
+   286→        toast.error('handlerConfig is not valid JSON');
+   287→        return;
+   288→      }
+   289→    }
+   290→    setRegistering(true);
+   291→    try {
+   292→      await registerTool({
+   293→        definition: {
+   294→          name: form.name.trim(),
+   295→          description: form.description.trim() || 'Dynamically registered tool',
+   296→          category: form.category.trim() || 'utility',
+   297→          ...(form.purpose.trim() ? { purpose: form.purpose.trim() } : {}),
+   298→          environment: 'dynamic',
+   299→          schema: { type: 'object', properties: Array.isArray(properties) ? properties : [] },
+   300→        },
+   301→        handlerKind: form.handlerKind as 'echo' | 'delay' | 'http_get' | 'uuid',
+   302→        ...(handlerConfig ? { handlerConfig } : {}),
+   303→      });
+   304→      toast.success('Tool registered', { description: `${form.name} is now available to the CoreModule.` });
+   305→      setRegOpen(false);
+   306→      void load();
+   307→    } catch (e) {
+   308→      toast.error('Registration rejected', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   309→    } finally {
+   310→      setRegistering(false);
+   311→    }
+   312→  };
+   313→
+   314→  const openTest = (tool: ToolEntry) => {
+   315→    setTestTarget(tool);
+   316→    setTestResult(null);
+   317→    setTestParams('{}');
+   318→  };
+   319→
+   320→  const runTest = async () => {
+   321→    if (!testTarget) return;
+   322→    let params: Record<string, unknown>;
+   323→    try {
+   324→      params = JSON.parse(testParams || '{}');
+   325→    } catch {
+   326→      toast.error('Test params must be valid JSON');
+   327→      return;
+   328→    }
+   329→    setTestRunning(true);
+   330→    try {
+   331→      const result = await testTool({ name: testTarget.name, params });
+   332→      setTestResult(result);
+   333→    } catch (e) {
+   334→      toast.error('Test failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   335→    } finally {
+   336→      setTestRunning(false);
+   337→    }
+   338→  };
+   339→
+   340→  const doDelete = async () => {
+   341→    if (!deleteCandidate) return;
+   342→    setDeleteBusy(true);
+   343→    try {
+   344→      await deleteTool(deleteCandidate.name);
+   345→      toast.success('Tool deleted', { description: `${deleteCandidate.name} removed from the registry.` });
+   346→      setDeleteCandidate(null);
+   347→      void load();
+   348→    } catch (e) {
+   349→      toast.error('Delete failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   350→    } finally {
+   351→      setDeleteBusy(false);
+   352→    }
+   353→  };
+   354→
+   355→  // ---------- v1.0.4 §11-12: export ----------
+   356→
+   357→  const downloadJson = (filename: string, data: unknown) => {
+   358→    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+   359→    const url = URL.createObjectURL(blob);
+   360→    const a = document.createElement('a');
+   361→    a.href = url;
+   362→    a.download = filename;
+   363→    document.body.appendChild(a);
+   364→    a.click();
+   365→    a.remove();
+   366→    setTimeout(() => URL.revokeObjectURL(url), 1000);
+   367→  };
+   368→
+   369→  const exportOne = (tool: ToolEntry) => {
+   370→    downloadJson(toolExportFilename(tool.name), exportToolJson(tool, APP_VERSION));
+   371→    toast.success('Tool exported', { description: `${tool.name} — function code preserved as text.` });
+   372→  };
+   373→
+   374→  const exportAll = () => {
+   375→    if (!tools || tools.length === 0) return;
+   376→    downloadJson(`nextool-tools-${new Date().toISOString().slice(0, 10)}.json`, exportToolsJson(tools, APP_VERSION));
+   377→    toast.success('Tools exported', { description: `${tools.length} tool definition(s) exported.` });
+   378→  };
+   379→
+   380→  // ---------- v1.0.4 §13-16: import ----------
+   381→
+   382→  const onImportFile = async (file: File | undefined) => {
+   383→    if (!file) return;
+   384→    let text: string;
+   385→    try {
+   386→      text = await file.text();
+   387→    } catch {
+   388→      toast.error('Import failed', { description: 'The file could not be read.' });
+   389→      return;
+   390→    }
+   391→    const parsed = parseToolImport(text);
+   392→    if (!parsed.ok) {
+   393→      setImportErrors({ errors: [parsed.error], warnings: [] });
+   394→      return;
+   395→    }
+   396→    const result = validateImportedTool(parsed.value);
+   397→    if (!result.ok || !result.tool) {
+   398→      setImportErrors({ errors: result.errors, warnings: result.warnings });
+   399→      return;
+   400→    }
+   401→    const existing = (tools ?? []).find((t) => t.name === result.tool!.name);
+   402→    if (existing) {
+   403→      setImportConflict({ tool: result.tool, existing });
+   404→    } else {
+   405→      setImportPreview({ tool: result.tool, warnings: result.warnings });
+   406→    }
+   407→  };
+   408→
+   409→  /** §15 — register a validated import through the REAL registry endpoints. */
+   410→  const registerImported = async (tool: PortableTool, successDesc: string) => {
+   411→    setImportBusy(true);
+   412→    try {
+   413→      if (tool.environment === 'js-function') {
+   414→        await registerJsTool({
+   415→          name: tool.name,
+   416→          description: tool.description,
+   417→          purpose: tool.purpose,
+   418→          category: tool.category,
+   419→          toolVersion: tool.toolVersion,
+   420→          schema: tool.schema,
+   421→          functionSource: tool.functionSource ?? '',
+   422→          enabled: tool.enabled ?? true,
+   423→        });
+   424→      } else {
+   425→        await registerTool({
+   426→          definition: {
+   427→            name: tool.name,
+   428→            description: tool.description,
+   429→            category: tool.category,
+   430→            ...(tool.purpose ? { purpose: tool.purpose } : {}),
+   431→            environment: 'dynamic',
+   432→            schema: tool.schema,
+   433→          },
+   434→          handlerKind: tool.handlerKind as 'echo' | 'delay' | 'http_get' | 'uuid',
+   435→          ...(tool.handlerConfig ? { handlerConfig: tool.handlerConfig } : {}),
+   436→        });
+   437→      }
+   438→      toast.success('Tool imported', { description: successDesc });
+   439→      setImportPreview(null);
+   440→      setImportConflict(null);
+   441→      void load();
+   442→    } catch (e) {
+   443→      // Registry-side re-validation (syntax/schema/exists) — surface honestly.
+   444→      toast.error('Import rejected', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   445→    } finally {
+   446→      setImportBusy(false);
+   447→    }
+   448→  };
+   449→
+   450→  /** §16 — replace the existing tool with the imported definition. */
+   451→  const replaceImported = async (conflict: { tool: PortableTool; existing: ToolEntry }) => {
+   452→    setImportBusy(true);
+   453→    try {
+   454→      await updateTool(conflict.existing.name, {
+   455→        description: conflict.tool.description,
+   456→        purpose: conflict.tool.purpose,
+   457→        category: conflict.tool.category,
+   458→        toolVersion: conflict.tool.toolVersion,
+   459→        schema: conflict.tool.schema,
+   460→        functionSource: conflict.tool.environment === 'js-function' ? conflict.tool.functionSource : undefined,
+   461→        enabled: conflict.tool.enabled ?? true,
+   462→      });
+   463→      toast.success('Tool replaced', { description: `${conflict.existing.name} now uses the imported definition.` });
+   464→      setImportConflict(null);
+   465→      void load();
+   466→    } catch (e) {
+   467→      toast.error('Replace failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+   468→    } finally {
+   469→      setImportBusy(false);
+   470→    }
+   471→  };
+   472→
+   473→  /** §16 — import under a fresh, non-conflicting copy name. */
+   474→  const importAsCopy = async (conflict: { tool: PortableTool; existing: ToolEntry }) => {
+   475→    const copyName = proposeCopyName(new Set((tools ?? []).map((t) => t.name)), conflict.tool.name);
+   476→    await registerImported({ ...conflict.tool, name: copyName }, `${copyName} registered as a copy of ${conflict.existing.name}.`);
+   477→  };
+   478→
+   479→  const inputCls = 'min-h-11 border-white/[0.09] bg-white/[0.04] text-sm';
+   480→
+   481→  return (
+   482→    <div className="space-y-6">
+   483→      <SectionTitle
+   484→        icon={<Wrench className="size-4 text-sky-300" aria-hidden />}
+   485→        title="Tools"
+   486→        desc="Registry visible to the CoreModule — dynamic matching, no hardcoded ids."
+   487→        right={
+   488→          <div className="flex items-center gap-2">
+   489→            <Button size="sm" className="bg-primary-gradient min-h-9 gap-1.5 text-primary-foreground hover:opacity-90" onClick={() => onOpenEditor({ mode: 'new', name: null })}>
+   490→              <Plus className="size-3.5" aria-hidden /> New Tool
+   491→            </Button>
+   492→            <DropdownMenu>
+   493→              <DropdownMenuTrigger asChild>
+   494→                <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" aria-label="More tool actions">
+   495→                  <Squircle className="size-3.5" aria-hidden />
+   496→                </Button>
+   497→              </DropdownMenuTrigger>
+   498→              <DropdownMenuContent align="end" className="glass-strong">
+   499→                <DropdownMenuItem onClick={() => setRegOpen(true)}>
+   500→                  <FilePlus2 className="size-3.5" aria-hidden /> Register handler tool…
+   501→                </DropdownMenuItem>
+   502→                {/* v1.0.4 §13 — import a tool JSON file */}
+   503→                <DropdownMenuItem onClick={() => importFileRef.current?.click()}>
+   504→                  <FileUp className="size-3.5" aria-hidden /> Import tool (JSON)…
+   505→                </DropdownMenuItem>
+   506→                {/* v1.0.4 §11 — export all tools */}
+   507→                <DropdownMenuItem onClick={exportAll} disabled={!tools || tools.length === 0}>
+   508→                  <Download className="size-3.5" aria-hidden /> Export all tools (JSON)
+   509→                </DropdownMenuItem>
+   510→              </DropdownMenuContent>
+   511→            </DropdownMenu>
+   512→          </div>
+   513→        }
+   514→      />
+   515→
+   516→      {error && tools === null ? (
+   517→        <ErrorCard title="Tool registry unavailable" message={error} onRetry={load} />
+   518→      ) : tools === null ? (
+   519→        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   520→          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-44 w-full" />)}
+   521→        </div>
+   522→      ) : tools.length === 0 ? (
+   523→        <EmptyState icon={<Wrench className="size-6" aria-hidden />} title="No tools registered" hint="Create one with the Tool IDE or register a handler tool." />
+   524→      ) : (
+   525→        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+   526→          {tools.map((tool) => (
+   527→            <ToolCard
+   528→              key={tool.name}
+   529→              tool={tool}
+   530→              onToggle={(n, v) => void onToggle(n, v)}
+   531→              toggling={toggling === tool.name}
+   532→              onEdit={(t) => onOpenEditor({ mode: 'edit', name: t.name })}
+   533→              onTest={openTest}
+   534→              onDuplicate={(t) => onOpenEditor({ mode: 'duplicate', name: null, source: t })}
+   535→              onDelete={setDeleteCandidate}
+   536→              deleteBusy={deleteBusy}
+   537→              onExport={exportOne}
+   538→            />
+   539→          ))}
+   540→        </div>
+   541→      )}
+   542→
+   543→      {/* v1.0.4 §11/§13 — import file picker (hidden; triggered from the actions menu) */}
+   544→      <input
+   545→        ref={importFileRef}
+   546→        type="file"
+   547→        accept="application/json,.json"
+   548→        className="hidden"
+   549→        onChange={(e) => {
+   550→          void onImportFile(e.target.files?.[0]);
+   551→          e.target.value = '';
+   552→        }}
+   553→        aria-label="Import tool JSON file"
+   554→      />
+   555→
+   556→      {/* Handler-tool registration dialog (dynamic handler kinds) */}
+   557→      <Dialog open={regOpen} onOpenChange={setRegOpen}>
+   558→        <DialogContent className="glass-strong sm:max-w-lg">
+   559→          <DialogHeader>
+   560→            <DialogTitle>Register handler tool</DialogTitle>
+   561→            <DialogDescription>Registers a built-in-handler-backed tool the CoreModule can match and execute. For full JavaScript tools use the Tool IDE.</DialogDescription>
+   562→          </DialogHeader>
+   563→          <div className="nextool-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+   564→            <div className="grid gap-3 sm:grid-cols-2">
+   565→              <div className="space-y-1.5">
+   566→                <Label htmlFor="tool-name">Name <span className="text-muted-foreground">(namespace.action)</span></Label>
+   567→                <Input id="tool-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="utility.summarize" className={cn('font-mono', inputCls)} />
+   568→              </div>
+   569→              <div className="space-y-1.5">
+   570→                <Label htmlFor="tool-category">Category</Label>
+   571→                <Input id="tool-category" value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} className={inputCls} />
+   572→              </div>
+   573→            </div>
+   574→            <div className="space-y-1.5">
+   575→              <Label htmlFor="tool-desc">Description</Label>
+   576→              <Input id="tool-desc" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className={inputCls} />
+   577→            </div>
+   578→            <div className="space-y-1.5">
+   579→              <Label htmlFor="tool-purpose">Purpose <span className="text-muted-foreground">(optional)</span></Label>
+   580→              <Input id="tool-purpose" value={form.purpose} onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value }))} className={inputCls} />
+   581→            </div>
+   582→            <div className="space-y-1.5">
+   583→              <Label htmlFor="tool-handler">Handler kind</Label>
+   584→              <Select value={form.handlerKind} onValueChange={(v) => setForm((f) => ({ ...f, handlerKind: v }))}>
+   585→                <SelectTrigger id="tool-handler" className="min-h-11 w-full font-mono text-sm"><SelectValue /></SelectTrigger>
+   586→                <SelectContent>
+   587→                  <SelectItem value="echo">echo — returns its input</SelectItem>
+   588→                  <SelectItem value="delay">delay — sleeps then acks</SelectItem>
+   589→                  <SelectItem value="http_get">http_get — fetches a URL</SelectItem>
+   590→                  <SelectItem value="uuid">uuid — generates an id</SelectItem>
+   591→                </SelectContent>
+   592→              </Select>
+   593→            </div>
+   594→            <div className="space-y-1.5">
+   595→              <Label htmlFor="tool-handlercfg">handlerConfig (JSON)</Label>
+   596→              <Textarea id="tool-handlercfg" value={form.handlerConfig} onChange={(e) => setForm((f) => ({ ...f, handlerConfig: e.target.value }))} rows={2} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" placeholder="{}" />
+   597→            </div>
+   598→            <div className="space-y-1.5">
+   599→              <Label htmlFor="tool-schema">Schema params (JSON — array of param defs)</Label>
+   600→              <Textarea id="tool-schema" value={form.schema} onChange={(e) => setForm((f) => ({ ...f, schema: e.target.value }))} rows={6} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" />
+   601→            </div>
+   602→          </div>
+   603→          <DialogFooter>
+   604→            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04]" onClick={() => setRegOpen(false)}>Cancel</Button>
+   605→            <Button className="bg-primary-gradient min-h-11 text-primary-foreground hover:opacity-90" disabled={registering} onClick={() => void submitRegister()}>
+   606→              {registering ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <FilePlus2 className="size-4" aria-hidden />} Register
+   607→            </Button>
+   608→          </DialogFooter>
+   609→        </DialogContent>
+   610→      </Dialog>
+   611→
+   612→      {/* Tool test dialog — real execution of the registered tool (§27-30) */}
+   613→      <Dialog open={testTarget !== null} onOpenChange={(open) => !open && setTestTarget(null)}>
+   614→        <DialogContent className="glass-strong sm:max-w-lg">
+   615→          <DialogHeader>
+   616→            <DialogTitle>Test {testTarget?.name}</DialogTitle>
+   617→            <DialogDescription>
+   618→              Executes the ACTUAL registered handler in a controlled test context with a 20s cap.
+   619→            </DialogDescription>
+   620→          </DialogHeader>
+   621→          <div className="nextool-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+   622→            <div className="space-y-1.5">
+   623→              <Label htmlFor="test-params">Input parameters (JSON)</Label>
+   624→              <Textarea id="test-params" value={testParams} onChange={(e) => setTestParams(e.target.value)} rows={5} className="border-white/[0.09] bg-white/[0.04] font-mono text-xs" placeholder="{}" />
+   625→            </div>
+   626→            <Button className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90" disabled={testRunning} onClick={() => void runTest()}>
+   627→              {testRunning ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Play className="size-4" aria-hidden />} Run test
+   628→            </Button>
+   629→            {testResult ? (
+   630→              <div className="space-y-2" data-testid="tools-view-test-result">
+   631→                <div className="flex flex-wrap items-center gap-2">
+   632→                  <Badge variant="outline" className={cn('font-mono text-[11px]', testResult.status === 'completed' ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300' : 'border-rose-400/30 bg-rose-400/10 text-rose-300')}>
+   633→                    {testResult.status}
+   634→                  </Badge>
+   635→                  <span className="font-mono text-xs text-muted-foreground">{fmtMs(testResult.durationMs)}</span>
+   636→                  <span className="font-mono text-[10px] text-slate-500">{testResult.mode}</span>
+   637→                </div>
+   638→                {testResult.error ? (
+   639→                  <p role="alert" className="break-words rounded-md border border-rose-400/30 bg-rose-400/5 px-3 py-2 font-mono text-xs text-rose-300">
+   640→                    {testResult.error.code}: {testResult.error.message}
+   641→                  </p>
+   642→                ) : null}
+   643→                {testResult.logs.length > 0 ? (
+   644→                  <div className="glass-inset nextool-scroll max-h-32 overflow-y-auto rounded-md p-2.5">
+   645→                    {testResult.logs.map((line, i) => (
+   646→                      <p key={i} className="break-words font-mono text-[11px] leading-relaxed text-sky-100/70">{line}</p>
+   647→                    ))}
+   648→                  </div>
+   649→                ) : null}
+   650→                <div>
+   651→                  <p className="mb-1"><Label className="text-[10px] uppercase tracking-wider text-sky-300/80">result</Label></p>
+   652→                  <JsonTree value={testResult.result ?? null} maxHeight={260} />
+   653→                </div>
+   654→              </div>
+   655→            ) : null}
+   656→          </div>
+   657→          <DialogFooter>
+   658→            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04]" onClick={() => setTestTarget(null)}>Close</Button>
+   659→          </DialogFooter>
+   660→        </DialogContent>
+   661→      </Dialog>
+   662→
+   663→      {/* Delete confirm (destructive op, §31) */}
+   664→      <Dialog open={deleteCandidate !== null} onOpenChange={(open) => !open && setDeleteCandidate(null)}>
+   665→        <DialogContent className="glass-strong sm:max-w-md">
+   666→          <DialogHeader>
+   667→            <DialogTitle className="flex items-center gap-2 text-rose-300">Delete {deleteCandidate?.name}?</DialogTitle>
+   668→            <DialogDescription>The tool is removed from the registry and stops being available to the CoreModule. This cannot be undone.</DialogDescription>
+   669→          </DialogHeader>
+   670→          <DialogFooter>
+   671→            <Button variant="outline" className="min-h-11" onClick={() => setDeleteCandidate(null)}>Cancel</Button>
+   672→            <Button variant="destructive" className="min-h-11" disabled={deleteBusy} onClick={() => void doDelete()}>
+   673→              {deleteBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Trash2 className="size-4" aria-hidden />} Delete tool
+   674→            </Button>
+   675→          </DialogFooter>
+   676→        </DialogContent>
+   677→      </Dialog>
+   678→
+   679→      {/* v1.0.4 §15 — import preview / confirmation before registering */}
+   680→      <Dialog open={importPreview !== null} onOpenChange={(open) => !open && setImportPreview(null)}>
+   681→        <DialogContent className="glass-strong sm:max-w-lg">
+   682→          <DialogHeader>
+   683→            <DialogTitle>Import tool</DialogTitle>
+   684→            <DialogDescription>Validated against the tool schema. Review before registering.</DialogDescription>
+   685→          </DialogHeader>
+   686→          {importPreview ? (
+   687→            <div className="nextool-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+   688→              <div className="grid gap-2 text-xs sm:grid-cols-2">
+   689→                <p><TechLabel className="text-[9px]">name</TechLabel><span className="mt-0.5 block break-words font-mono text-sky-200">{importPreview.tool.name}</span></p>
+   690→                <p><TechLabel className="text-[9px]">environment</TechLabel><span className="mt-0.5 block font-mono text-foreground/90">{importPreview.tool.environment}</span></p>
+   691→                <p><TechLabel className="text-[9px]">category</TechLabel><span className="mt-0.5 block font-mono text-foreground/90">{importPreview.tool.category}</span></p>
+   692→                <p><TechLabel className="text-[9px]">schema params</TechLabel><span className="mt-0.5 block font-mono text-foreground/90">{importPreview.tool.schema.properties?.length ?? 0}</span></p>
+   693→              </div>
+   694→              <p className="break-words text-xs text-muted-foreground">{importPreview.tool.description}</p>
+   695→              {importPreview.tool.functionSource ? (
+   696→                <div>
+   697→                  <TechLabel className="text-[9px]">function code (exact source from the file)</TechLabel>
+   698→                  <pre className="glass-inset nextool-scroll mt-1 max-h-40 overflow-auto rounded-md p-2.5 font-mono text-[11px] leading-relaxed text-sky-100/90">
+   699→                    {importPreview.tool.functionSource}
+   700→                  </pre>
+   701→                </div>
+   702→              ) : null}
+   703→              {importPreview.warnings.length > 0 ? (
+   704→                <div className="rounded-md border border-amber-400/30 bg-amber-400/[0.06] p-2">
+   705→                  <ul className="space-y-0.5">
+   706→                    {importPreview.warnings.map((w) => (
+   707→                      <li key={w} className="break-words text-[11px] text-amber-200/90">⚠ {w}</li>
+   708→                    ))}
+   709→                  </ul>
+   710→                </div>
+   711→              ) : null}
+   712→            </div>
+   713→          ) : null}
+   714→          <DialogFooter>
+   715→            <Button variant="outline" className="min-h-11" onClick={() => setImportPreview(null)}>Cancel</Button>
+   716→            <Button className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90" disabled={importBusy} onClick={() => importPreview && void registerImported(importPreview.tool, `${importPreview.tool.name} is now available to the CoreModule.`)}>
+   717→              {importBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />} Register tool
+   718→            </Button>
+   719→          </DialogFooter>
+   720→        </DialogContent>
+   721→      </Dialog>
+   722→
+   723→      {/* v1.0.4 §16 — name conflict: replace / import as copy / cancel */}
+   724→      <Dialog open={importConflict !== null} onOpenChange={(open) => !open && setImportConflict(null)}>
+   725→        <DialogContent className="glass-strong sm:max-w-md">
+   726→          <DialogHeader>
+   727→            <DialogTitle className="flex items-center gap-2 text-amber-300">Tool already exists</DialogTitle>
+   728→            <DialogDescription>
+   729→              A tool named <span className="font-mono text-foreground/90">{importConflict?.existing.name}</span> is already registered ({importConflict?.existing.environment}). Choose how to proceed — nothing is overwritten without confirmation.
+   730→            </DialogDescription>
+   731→          </DialogHeader>
+   732→          <DialogFooter className="flex-col gap-2 sm:flex-col sm:items-stretch">
+   733→            <Button className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90" disabled={importBusy} onClick={() => importConflict && void replaceImported(importConflict)}>
+   734→              {importBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />} Replace existing tool
+   735→            </Button>
+   736→            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04] text-slate-200" disabled={importBusy} onClick={() => importConflict && void importAsCopy(importConflict)}>
+   737→              <Copy className="size-4" aria-hidden /> Import as copy
+   738→            </Button>
+   739→            <Button variant="ghost" className="min-h-11 text-muted-foreground" onClick={() => setImportConflict(null)}>Cancel</Button>
+   740→          </DialogFooter>
+   741→        </DialogContent>
+   742→      </Dialog>
+   743→
+   744→      {/* v1.0.4 §14 — import rejected: readable validation errors */}
+   745→      <Dialog open={importErrors !== null} onOpenChange={(open) => !open && setImportErrors(null)}>
+   746→        <DialogContent className="glass-strong sm:max-w-md">
+   747→          <DialogHeader>
+   748→            <DialogTitle className="flex items-center gap-2 text-rose-300">Import rejected</DialogTitle>
+   749→            <DialogDescription>The file was not registered. Fix the issues below and try again.</DialogDescription>
+   750→          </DialogHeader>
+   751→          {importErrors ? (
+   752→            <div className="nextool-scroll max-h-[50vh] space-y-3 overflow-y-auto pr-1">
+   753→              <ul className="space-y-1.5">
+   754→                {importErrors.errors.map((err) => (
+   755→                  <li key={err} role="alert" className="break-words rounded-md border border-rose-400/30 bg-rose-400/5 px-2.5 py-1.5 font-mono text-[11px] text-rose-300">{err}</li>
+   756→                ))}
+   757→              </ul>
+   758→              {importErrors.warnings.length > 0 ? (
+   759→                <ul className="space-y-1">
+   760→                  {importErrors.warnings.map((w) => (
+   761→                    <li key={w} className="break-words text-[11px] text-amber-200/90">⚠ {w}</li>
+   762→                  ))}
+   763→                </ul>
+   764→              ) : null}
+   765→            </div>
+   766→          ) : null}
+   767→          <DialogFooter>
+   768→            <Button variant="outline" className="min-h-11" onClick={() => setImportErrors(null)}>Close</Button>
+   769→          </DialogFooter>
+   770→        </DialogContent>
+   771→      </Dialog>
+   772→    </div>
+   773→  );
+   774→}
+   775→

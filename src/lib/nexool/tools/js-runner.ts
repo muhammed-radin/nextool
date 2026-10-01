@@ -157,7 +157,15 @@ export function runJsTool(
         finish({ ok: false, error: { code: 'INVALID_FUNCTION', message: 'Source did not compile to an execute function.' }, logs: [] });
         return;
       }
-      Promise.resolve(fn(sandbox.params, sandbox.context))
+      // v1.0.5 — INVOKE inside the vm under the sync timeout: the synchronous
+      // portion of execute() (bodies without an await) is bounded even though
+      // the async completion is only covered by the watchdog above. This keeps
+      // the event loop responsive — a runaway loop can never freeze the server.
+      const host = sandbox as unknown as Record<string, unknown>;
+      host.__nexoolRun = fn;
+      new vm.Script('__nexoolResult = __nexoolRun(params, context)', { filename: 'tool-function.js' })
+        .runInContext(sandbox, { timeout: SYNC_TIMEOUT_MS });
+      Promise.resolve(host.__nexoolResult)
         .then((value) => {
           const check = ensureSerializable(value);
           if (!check.ok) {
@@ -174,9 +182,13 @@ export function runJsTool(
           });
         });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       finish({
         ok: false,
-        error: { code: err instanceof SyntaxError ? 'SYNTAX_ERROR' : 'TOOL_FAILURE', message: err instanceof Error ? err.message : String(err) },
+        error: {
+          code: err instanceof SyntaxError && !message.includes('timed out') ? 'SYNTAX_ERROR' : message.includes('timed out') ? 'TIMEOUT' : 'TOOL_FAILURE',
+          message,
+        },
         logs: [],
       });
     }
@@ -191,7 +203,8 @@ function structuredCloneSafe(value: Record<string, unknown>): Record<string, unk
   }
 }
 
-function ensureSerializable(value: unknown, depth = 0, seen = new Set<unknown>()): { ok: true; value: unknown } | { ok: false; message: string } {
+/** v1.0.5: shared with node-runner — enforces the serialized-result contract. */
+export function ensureSerializable(value: unknown, depth = 0, seen = new Set<unknown>()): { ok: true; value: unknown } | { ok: false; message: string } {
   if (depth > 12) return { ok: false, message: 'Result is nested too deeply (max depth 12).' };
   if (value === undefined || value === null || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') {
     return { ok: true, value: value === undefined ? null : value };

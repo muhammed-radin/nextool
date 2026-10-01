@@ -5,9 +5,18 @@
  * Renders the markdown documentation system from <project>/docs with the
  * NexTool design system. Two-pane on ≥lg, index → content flow on mobile.
  * Long-form text stays on solid readable surfaces (no heavy glass over text).
+ *
+ * v1.0.5 §6 — documentation navigation: every markdown link inside a page is
+ * classified by the CENTRALIZED resolver (src/lib/nexool/docs-link-resolver.ts):
+ *   external (http/mailto) → normal target=_blank anchor (§6.6)
+ *   in-page anchor (#foo)  → native scroll — headings carry headingSlug ids
+ *   internal doc link      → navigates WITHIN this view (setSlug of the resolved
+ *                            target; never a browser route → never a 404, §6.1/6.4);
+ *                            unresolvable targets show an in-viewer not-found
+ *                            state instead (§6.5).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
@@ -16,9 +25,33 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { ApiClientError, getDocPage, getDocsIndex, type DocMetaDTO, type DocPage } from '@/lib/nexool/client';
+import {
+  docLinkAnchor,
+  headingSlug,
+  isExternalHref,
+  isInPageAnchor,
+  isInternalDocLink,
+  normalizeDocHref,
+  resolveDocSlug,
+} from '@/lib/nexool/docs-link-resolver';
 import { APP_VERSION } from '@/lib/nexool/version';
 import { EmptyState, ErrorCard, SectionTitle, TechLabel } from '../ui-bits';
-import { ArrowLeft, BookOpen, FileText, Search } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, BookOpen, FileText, Search } from 'lucide-react';
+
+/** Plain text of arbitrary React children — powers headingSlug ids for headings. */
+function childrenToText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(childrenToText).join('');
+  if (typeof node === 'object' && 'props' in node) {
+    const props = (node as { props?: { children?: ReactNode } }).props;
+    return childrenToText(props?.children);
+  }
+  return '';
+}
+
+const DOC_LINK_CLASS =
+  'cursor-pointer text-sky-300 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200';
 
 function groupByCategory(docs: DocMetaDTO[]): [string, DocMetaDTO[]][] {
   const map = new Map<string, DocMetaDTO[]>();
@@ -30,17 +63,58 @@ function groupByCategory(docs: DocMetaDTO[]): [string, DocMetaDTO[]][] {
   return Array.from(map.entries());
 }
 
-function MarkdownProse({ content }: { content: string }) {
+function MarkdownProse({
+  content,
+  availableSlugs,
+  onOpenDoc,
+  onMissingDoc,
+}: {
+  content: string;
+  availableSlugs: string[];
+  /** Navigate to a resolved doc page inside this view, optionally to an anchor. */
+  onOpenDoc: (slug: string, anchor: string) => void;
+  /** Link target that does not exist in the documentation index (§6.5). */
+  onMissingDoc: (requested: string) => void;
+}) {
   return (
     <div className="nextool-docs">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          h1: (p) => <h1 className="mb-4 mt-8 border-b border-white/[0.08] pb-2 text-2xl font-semibold text-foreground first:mt-0" {...p} />,
-          h2: (p) => <h2 className="mb-3 mt-8 text-lg font-semibold text-sky-200" {...p} />,
-          h3: (p) => <h3 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-sky-300/90" {...p} />,
-          p: (p) => <p className="my-3 text-sm leading-relaxed text-foreground/85" {...p} />,
-          a: (p) => <a className="text-sky-300 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200" target="_blank" rel="noreferrer" {...p} />,
+          h1: (p) => <h1 id={headingSlug(childrenToText(p.children))} className="mb-4 mt-8 border-b border-white/[0.08] pb-2 text-2xl font-semibold text-foreground first:mt-0" {...p} />,
+          h2: (p) => <h2 id={headingSlug(childrenToText(p.children))} className="mb-3 mt-8 text-lg font-semibold text-sky-200" {...p} />,
+          h3: (p) => <h3 id={headingSlug(childrenToText(p.children))} className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-sky-300/90" {...p} />,
+          h4: (p) => <h4 id={headingSlug(childrenToText(p.children))} className="mb-2 mt-6 text-sm font-semibold text-foreground/90" {...p} />,
+          p: (p) => <p className="my-3 text-sm leading-relaxed text-foreground/85 [overflow-wrap:anywhere]" {...p} />,
+          a: ({ href, node: _node, children, ...rest }) => {
+            const target = href ?? '';
+            // §6.6 — http(s)/mailto/tel keep normal external behavior.
+            if (isExternalHref(target)) {
+              return <a className={DOC_LINK_CLASS} target="_blank" rel="noreferrer" {...rest}>{children}</a>;
+            }
+            // §6.6 — in-page anchors scroll within the current page (headings have ids).
+            if (isInPageAnchor(target)) {
+              return <a className={DOC_LINK_CLASS} href={target} {...rest}>{children}</a>;
+            }
+            // §6.1/6.2/6.4 — internal doc links resolve via the centralized resolver
+            // and navigate INSIDE the Docs view; they never hit an app route (404).
+            if (isInternalDocLink(target)) {
+              return (
+                <button
+                  type="button"
+                  className={cn('text-left', DOC_LINK_CLASS)}
+                  onClick={() => {
+                    const resolved = resolveDocSlug(target, availableSlugs);
+                    if (resolved) onOpenDoc(resolved, docLinkAnchor(target));
+                    else onMissingDoc(normalizeDocHref(target));
+                  }}
+                >
+                  {children}
+                </button>
+              );
+            }
+            return <a className={DOC_LINK_CLASS} {...rest}>{children}</a>;
+          },
           ul: (p) => <ul className="my-3 list-disc space-y-1.5 pl-5 text-sm text-foreground/85" {...p} />,
           ol: (p) => <ol className="my-3 list-decimal space-y-1.5 pl-5 text-sm text-foreground/85" {...p} />,
           li: (p) => <li className="leading-relaxed" {...p} />,
@@ -57,7 +131,7 @@ function MarkdownProse({ content }: { content: string }) {
               );
             }
             return (
-              <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[0.8em] text-sky-200" {...props}>
+              <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[0.8em] text-sky-200 [overflow-wrap:anywhere] whitespace-normal" {...props}>
                 {children}
               </code>
             );
@@ -84,6 +158,10 @@ export default function DocsView() {
   const [query, setQuery] = useState('');
   const [slug, setSlug] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<{ slug: string; page: DocPage | null; error: string | null } | null>(null);
+  // §6.5 — in-viewer not-found state for internal links that resolve to nothing.
+  const [notFound, setNotFound] = useState<{ requested: string } | null>(null);
+  // Anchor part of a cross-page doc link, scrolled to once the target page rendered.
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -111,6 +189,22 @@ export default function DocsView() {
   const page = loaded?.slug === slug ? loaded.page : null;
   const pageError = loaded?.slug === slug ? loaded.error : null;
 
+  /**
+   * §6.4 — single navigation entry point for the whole view (index clicks and
+   * resolved internal doc links). Clears transient states, then loads the page
+   * INSIDE this view — the browser never navigates to an app route. Plain
+   * navigation scrolls the content pane back to the top; anchor navigations let
+   * the heading scroll below take over positioning instead.
+   */
+  const openDoc = (nextSlug: string, anchor = '') => {
+    setNotFound(null);
+    setPendingAnchor(anchor || null);
+    setSlug(nextSlug);
+    if (!anchor) window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const availableSlugs = useMemo(() => (index ?? []).map((d) => d.slug), [index]);
+
   const groups = useMemo(() => {
     const docs = (index ?? []).filter(
       (d) => !query || d.title.toLowerCase().includes(query.toLowerCase()) || d.excerpt.toLowerCase().includes(query.toLowerCase()),
@@ -119,6 +213,27 @@ export default function DocsView() {
   }, [index, query]);
 
   const selected = index?.find((d) => d.slug === slug);
+
+  // §6.4 — after a link navigated to `<slug>#<anchor>`, scroll to the heading
+  // once the target page has rendered. headingSlug is used on BOTH sides
+  // (heading ids + lookup), with a dashed-candidate fallback for GitHub-style
+  // double-dash anchors that cannot be matched 1:1.
+  useEffect(() => {
+    if (!pendingAnchor || pageLoading || !page) return;
+    const anchor = pendingAnchor.trim();
+    const candidates = [headingSlug(anchor), anchor.replace(/-+/g, '-'), anchor];
+    const timer = window.setTimeout(() => {
+      for (const id of candidates) {
+        const el = document.getElementById(id);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          break;
+        }
+      }
+      setPendingAnchor(null);
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [pendingAnchor, pageLoading, page]);
 
   return (
     <div className="space-y-4">
@@ -171,7 +286,7 @@ export default function DocsView() {
                       <button
                         key={d.slug}
                         type="button"
-                        onClick={() => setSlug(d.slug)}
+                        onClick={() => openDoc(d.slug)}
                         aria-current={slug === d.slug ? 'page' : undefined}
                         className={cn(
                           'flex min-h-9 w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors outline-ring/50 focus-visible:ring-2',
@@ -193,7 +308,27 @@ export default function DocsView() {
 
           {/* Content pane */}
           <div className="min-w-0">
-            {slug === null ? (
+            {notFound ? (
+              // §6.5 — in-viewer error state (never a generic Next.js 404).
+              <div className="flex flex-col items-start gap-3 rounded-lg border border-rose-400/30 bg-rose-400/5 p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-rose-300">
+                  <AlertTriangle className="size-4 shrink-0" aria-hidden /> Documentation page not found.
+                </div>
+                <p className="font-mono text-xs break-all text-rose-200/80">Requested: {notFound.requested}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setNotFound(null);
+                    setPendingAnchor(null);
+                    setSlug(null);
+                  }}
+                  className="min-h-9 border-rose-400/30 text-rose-200 hover:bg-rose-400/10"
+                >
+                  <ArrowLeft className="size-3.5" aria-hidden /> Return to Documentation
+                </Button>
+              </div>
+            ) : slug === null ? (
               <div className="glass-panel hidden rounded-lg p-8 lg:block">
                 <EmptyState
                   icon={<BookOpen className="size-6" aria-hidden />}
@@ -222,7 +357,12 @@ export default function DocsView() {
                     updated {new Date(page.updatedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
                   </span>
                 </div>
-                <MarkdownProse content={page.content} />
+                <MarkdownProse
+                  content={page.content}
+                  availableSlugs={availableSlugs}
+                  onOpenDoc={openDoc}
+                  onMissingDoc={(requested) => setNotFound({ requested })}
+                />
               </div>
             ) : null}
           </div>

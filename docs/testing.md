@@ -10,7 +10,7 @@ NexTool Q1 ships a focused **bun test** unit suite alongside `bun run lint`
 and the manual verification workflows below.
 
 ```bash
-bun test                     # runs tests/*.test.ts (56 tests / 200 assertions across 3 files)
+bun test                     # runs tests/*.test.ts (103 tests / 317 assertions across 4 files)
 bun run lint                 # eslint over the repo
 bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ```
@@ -18,8 +18,8 @@ bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ## Unit suite
 
 Pure-function coverage (no database required): `tests/nextool-v102.test.ts` (v1.0.2
-core), `tests/nextool-v103.test.ts` (v1.0.3 additions) and `tests/nextool-v104.test.ts`
-(v1.0.4 additions).
+core), `tests/nextool-v103.test.ts` (v1.0.3 additions), `tests/nextool-v104.test.ts`
+(v1.0.4 additions) and `tests/nextool-v105.test.ts` (v1.0.5 additions).
 
 | Area | What is verified |
 | --- | --- |
@@ -37,6 +37,13 @@ core), `tests/nextool-v103.test.ts` (v1.0.3 additions) and `tests/nextool-v104.t
 | **v1.0.4 import parsing + conflicts** | `parseToolImport` readable errors for invalid JSON and multi-tool bundles; `proposeCopyName` yields `base.copy` then `base.copy-2`, `base.copy-3` … |
 | **v1.0.4 task tool requirement** | `taskConfigSchema.enabledTools` accepts a non-empty list and rejects an explicit empty array / non-array values (zod `min(1)`) |
 | **v1.0.4 JSON theme tokens** | every `NextoolDarkTheme` entry uses the `--w-rjv-*` namespace the library actually reads, and the core syntax tokens exist with bright values (contrast on the dark background) |
+| **v1.0.5 editor source-sync invariants** | `coerceEditorChange` never lets a non-string onChange clear the source (a genuine user clearing is honored); `readMonacoValue` reads the live model and falls back to the shared state when the editor is disposed (tab switch); an unsaved-edit → test → no-write-back round trip preserves the code |
+| **v1.0.5 metadata round trip** | `exportToolJson`/`validateImportedTool` preserve the structured string key/value pairs (≤ 50); non-string values and non-object metadata are rejected; tools without metadata export/import cleanly |
+| **v1.0.5 nodejs sandbox** | allowed `require()`/`await import()` work (incl. `node:`-prefixed specifiers); blocked/unknown modules fail with the `Module "x" is not available…` wording; `process` is not a global; a no-`await` infinite loop is stopped by the vm sync timeout (`TIMEOUT`); oversized/non-serializable results rejected (`NOT_SERIALIZABLE`); source validation caps |
+| **v1.0.5 dynamic-import transform** | `import()` call sites rewrite to the allowlist shim; property access, identifiers, string literals, comments, regex literals and template text are preserved while interpolated code transforms; the transformed source compiles standalone (no vm-module flag) and executes end-to-end |
+| **v1.0.5 nodejs portability** | a `nodejs` tool exports with environment + exact source + metadata and round-trips losslessly; import requires `functionSource` for nodejs; unknown environments still rejected |
+| **v1.0.5 schemas** | `registerJsToolSchema` accepts `environment: "nodejs"` + string-only metadata (rejects unknown environments / non-string values); `updateToolSchema` accepts the environment switch + `handlerKind`/`handlerConfig` (rejects unknown kinds); `testToolSchema` accepts the `nodejs` environment hint (rejects e.g. `"builtin"`) |
+| **v1.0.5 docs link resolver** | external / in-page-anchor / internal classification; `./x.md`, `../dir/x.md`, `x.md` and bare-slug normalization; resolution against a real slug list; genuinely missing pages resolve to null (in-viewer not-found state); anchor extraction; GitHub-style `headingSlug` parity; case-insensitive fallback |
 
 The `tests/` directory also contains shell scripts that verify the **sandbox
 infrastructure** (fake-`bun` harness around `db:push`, python-runtime
@@ -44,8 +51,9 @@ build/container checks). They test the hosting environment, not the application.
 
 What is intentionally **not** unit-tested: Prisma/SQLite persistence paths and
 the Next.js route handlers — those are covered by the scripted API smoke and
-browser verification below (the sandbox runs the app in dev mode; no
-production-build gate exists in this environment).
+browser verification below. **Production build remains a documented sandbox
+constraint** (the environment runs the app in dev mode, which compiles all routes on
+demand; no production-build gate exists here — the same constraint as v1.0.2–v1.0.4).
 
 ## Smoke workflow (API level)
 
@@ -149,7 +157,7 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 12. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
     connection pill reflects real SSE state when you kill the dev server mid-session.
 
-## Regression checklist (v1.0.2 focus areas, still valid in v1.0.4)
+## Regression checklist (v1.0.2 focus areas, still valid in v1.0.5)
 
 - Dynamic runtime status: no hardcoded `nextool@runtime:~$` prompt or static "Running";
   `[running]: Tool called <tool>` cursor behavior matches actual executions.
@@ -161,7 +169,7 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Benchmark honesty: `paramAccuracy` `-`/null without `expectedParams` or for
   classifiers; suite fixed to `tool-selection`.
 - Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
-  version` all read 1.0.4; engine stays llm-core 1.0.0.
+  version` all read 1.0.5; engine stays llm-core 1.0.0.
 - Parallel batching (v1.0.3): a multi-step plan with independent steps emits
   `planner.parallel_batch`, executions share a `batchId` (grouped card in Task Preview),
   a failing sibling does not cancel the others (`planner.partial_failure`), and
@@ -183,6 +191,20 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
   palette), not the near-black library default.
 - Plan checklist (v1.0.4): no vertical rail line alongside the steps; checklist states
   and animations unchanged.
+- nodejs sandbox (v1.0.5): `require('crypto')` works inside a nodejs tool;
+  `require('fs')` fails with the blocked-module wording; a nodejs tool registers,
+  exports, imports and runs through `/api/tools/test` with `"environment": "nodejs"`.
+- Editor sync (v1.0.5): edit code → Test Tool → the editor still shows the unsaved
+  code (before == after); Save persists it; switching tools loads the stored source.
+- IDE sections (v1.0.5): environment selector offers js-function/nodejs/dynamic (a
+  dynamic tool is locked); metadata rows save ≤ 50 string pairs; schema form and JSON
+  view agree; the Monaco ⇄ textarea toggle preserves the code in both directions.
+- Docs routing (v1.0.5): an in-content link like [CoreModule](../ai-core/core-module.md)
+  navigates within the Docs view (no browser 404); an anchored link lands on the
+  heading; a genuinely missing slug shows the in-viewer not-found card.
+- Import model modal (v1.0.5): at 320/390 px the dialog stays inside the viewport with
+  a scrollable body, full-width stacked buttons, a wrapped chosen-file chip, and
+  validation errors rendered as an in-modal alert card.
 
 ## Known gaps (by design)
 

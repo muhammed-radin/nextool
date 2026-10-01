@@ -24,13 +24,17 @@ export interface ToolEntry {
   description: string;
   purpose?: string;
   category: string;
-  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function';
+  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs';
   schema: ToolDefinition['schema'];
   handlerKind?: string;
+  /** v1.0.5: dynamic handler configuration object (http_get url/timeout, …). */
+  handlerConfig?: Record<string, unknown>;
   /** v1.0.2: JavaScript function source for js-function tools. */
   functionSource?: string;
   /** v1.0.2: user-facing tool version string. */
   toolVersion?: string;
+  /** v1.0.5: user metadata key/value pairs (from the stored definition). */
+  metadata?: Record<string, string>;
   enabled: boolean;
   stats: ToolStats;
 }

@@ -28,7 +28,8 @@ export interface PortableTool {
   description: string;
   purpose?: string;
   category: string;
-  environment: 'js-function' | 'dynamic' | string;
+  /** v1.0.5: "nodejs" joins the portable set (§3.10) — validated on import. */
+  environment: 'js-function' | 'nodejs' | 'dynamic' | string;
   toolVersion?: string;
   enabled?: boolean;
   /** The project's actual tool input schema (ToolParamDef[] wrapped). */
@@ -38,6 +39,8 @@ export interface PortableTool {
   /** dynamic handler tools only. */
   handlerKind?: string;
   handlerConfig?: Record<string, unknown>;
+  /** v1.0.5 §2.8: structured user metadata round-trips through export/import. */
+  metadata?: Record<string, string>;
 }
 
 // ---------- export ----------
@@ -56,6 +59,8 @@ export function exportToolJson(entry: ToolEntry, appVersion?: string): PortableT
     schema: entry.schema ?? { type: 'object', properties: [] },
     ...(typeof entry.functionSource === 'string' ? { functionSource: entry.functionSource } : {}),
     ...(entry.handlerKind ? { handlerKind: entry.handlerKind } : {}),
+    ...(entry.handlerConfig && Object.keys(entry.handlerConfig).length > 0 ? { handlerConfig: entry.handlerConfig } : {}),
+    ...(entry.metadata && Object.keys(entry.metadata).length > 0 ? { metadata: entry.metadata } : {}),
   };
 }
 
@@ -80,6 +85,8 @@ export interface ImportValidationResult {
 
 const TOOL_NAME_RE = /^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*$/;
 const PARAM_TYPES = ['string', 'number', 'boolean', 'object', 'array'];
+/** v1.0.5 §3.10 — environments a portable tool file may declare. */
+const IMPORTABLE_ENVIRONMENTS = ['js-function', 'dynamic', 'nodejs'] as const;
 
 /**
  * Parse + validate an imported tool JSON (§14/§15).
@@ -106,20 +113,38 @@ export function validateImportedTool(raw: unknown): ImportValidationResult {
 
   // environment (default js-function)
   const environment = typeof obj.environment === 'string' && obj.environment ? obj.environment : 'js-function';
-  if (!['js-function', 'dynamic'].includes(environment)) {
-    errors.push(`"environment" must be "js-function" or "dynamic" — got "${environment}". Read-only registry tools (builtin/virtual-env) cannot be imported; duplicate them into a js-function tool instead.`);
+  if (!(IMPORTABLE_ENVIRONMENTS as readonly string[]).includes(environment)) {
+    errors.push(`"environment" must be one of ${IMPORTABLE_ENVIRONMENTS.join(', ')} — got "${environment}". Read-only registry tools (builtin/virtual-env) cannot be imported; duplicate them into a function tool instead.`);
   }
 
-  // function code — REQUIRED for js-function (§12: source preserved as text)
+  // function code — REQUIRED for both function environments (§12: source as text)
   const fnRaw = obj.functionSource ?? (obj as { function?: unknown }).function;
   const functionSource = typeof fnRaw === 'string' ? fnRaw : undefined;
-  if (environment === 'js-function') {
+  if (environment === 'js-function' || environment === 'nodejs') {
     if (!functionSource || !functionSource.trim()) {
-      errors.push('"functionSource" is required for js-function tools (the JavaScript source code as text).');
+      errors.push(`"functionSource" is required for ${environment} tools (the JavaScript source code as text).`);
     } else if (functionSource.length > 64_000) {
       errors.push(`"functionSource" exceeds the 64,000 character sandbox limit (${functionSource.length}).`);
     } else if (!/function\s+execute|execute\s*[:=]\s*(async\s*)?(function|\()|async\s+function\s+execute/.test(functionSource)) {
       warnings.push('The function source does not visibly define execute(params, context) — the sandbox calls execute().');
+    }
+  }
+
+  // v1.0.5 §2.8 — structured metadata: flat string key/value pairs only.
+  let metadata: Record<string, string> | undefined;
+  if (obj.metadata !== undefined && obj.metadata !== null) {
+    if (typeof obj.metadata === 'object' && !Array.isArray(obj.metadata)) {
+      const entries = Object.entries(obj.metadata as Record<string, unknown>);
+      const bad = entries.find(([, v]) => typeof v !== 'string');
+      if (bad) {
+        errors.push(`"metadata["${bad[0]}"]" must be a string value — metadata is a flat string key/value record.`);
+      } else if (entries.length > 50) {
+        errors.push('"metadata" supports at most 50 key/value pairs.');
+      } else {
+        metadata = Object.fromEntries(entries) as Record<string, string>;
+      }
+    } else {
+      errors.push('"metadata" must be a JSON object of string → string pairs.');
     }
   }
 
@@ -161,9 +186,10 @@ export function validateImportedTool(raw: unknown): ImportValidationResult {
         ...(typeof obj.toolVersion === 'string' && obj.toolVersion.trim() ? { toolVersion: obj.toolVersion.trim() } : {}),
         enabled: obj.enabled === undefined ? true : obj.enabled === true,
         schema: schema ?? { type: 'object', properties: [] },
-        ...(environment === 'js-function' ? { functionSource } : {}),
+        ...(environment !== 'dynamic' ? { functionSource } : {}),
         ...(handlerKind ? { handlerKind } : {}),
         ...(handlerConfig ? { handlerConfig } : {}),
+        ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
       }
     : null;
 

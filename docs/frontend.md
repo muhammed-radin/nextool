@@ -15,7 +15,7 @@ a zustand store. No routing library, no other pages.
 `src/components/console/console-app.tsx` composes:
 
 - **Header** (glass shell): brand button (the real NexTool logo via `BrandLogo` +
-  `Q1 v1.0.4` tech badge), `RuntimeConnectionStatus` pill, notification bell with unread
+  `Q1 v1.0.5` tech badge), `RuntimeConnectionStatus` pill, notification bell with unread
   badge and dropdown.
 - **Navigation**: desktop glass sidebar (12 items + a conditional *Task Preview* entry
   showing the short id once a task is selected); mobile bottom nav (see
@@ -54,16 +54,16 @@ package — the same package that feeds the favicon:
 | Task Preview | `task-preview.tsx` | Dedicated per-task screen: badges, stop/send-event/feedback dialogs, live checklist/timeline **while the task is active** (removed + replaced by *Final task output* on terminal states — v1.0.3), plan-as-checklist, parallel-batch grouping, executions, MainState JSON, 5 context panels, events timeline, runtime terminal (+ *Preview as Terminal* toggle). |
 | Live Monitor | `live-monitor.tsx` | Live tasks (3 s polls), fleet with injections, filtered event terminal, terminal preview toggle. |
 | Tools | `tools.tsx` | Registry grid, enable switches, stats, schema accordions, register dialog; grid actions (New Tool / Edit / Duplicate / Test / Enable/Disable / Delete); v1.0.4 per-tool **Export** + dropdown **Import tool (JSON)…** / **Export all tools (JSON)** with preview + conflict dialogs — see [Tools](../tools/tools.md). |
-| Tool IDE | `tool-editor.tsx` | v1.0.2: Monaco JS editor (`nextool-dark` theme), schema editor, IntelliSense, References pane, test panel — see [Tool Development](../tools/tool-development.md). v1.0.3: definite editor heights at every breakpoint. v1.0.4: `source` state is the single source of truth (Monaco controlled + writes back); save/test read the code directly from the Monaco model via a live editor ref; in-editor **Duplicate** registers a copy instead of renaming the original; per-session remount on tool switch. |
+| Tool IDE | `tool-editor.tsx` | v1.0.2: Monaco JS editor (`nextool-dark` theme), schema editor, IntelliSense, References pane, test panel — see [Tool Development](../tools/tool-development.md). v1.0.3: definite editor heights at every breakpoint. v1.0.4: `source` state is the single source of truth (Monaco controlled + writes back); save/test read the code directly from the Monaco model via a live editor ref; in-editor **Duplicate** registers a copy instead of renaming the original; per-session remount on tool switch. v1.0.5: sectioned form (General · Execution environment · Metadata · Schema), `js-function \| nodejs \| dynamic` environment selector fed by `GET /api/tools/environments`, structured metadata rows, schema form + JSON view, Monaco ⇄ textarea toggle (default ON), handler-kind selector with structured config for dynamic tools, and source-sync guards (`coerceEditorChange`/`readMonacoValue`) so a test can never clear the editor. |
 | Training | `training.tsx` | v1.0.2: dataset + config picker, per-epoch metrics table, streamed log lines, job history, cancel/delete. |
 | Benchmark | `benchmark.tsx` | v1.0.2: dataset + model-key picker, metrics cards, per-case results table, run history. |
 | Memory | `memory.tsx` | Persistent Memory CRUD vs Live State explainer. |
 | Live State | `live-state.tsx` | Fleet banner + cards + injections (3 s refresh). |
 | Events | `events.tsx` | Filterable event stream: source, type search, priority ≥ slider, expandable rows. |
 | History | `history.tsx` | 100-entry table, filters, expandable params/result. |
-| Models | `models.tsx` | Active engine card, adapters panel, packages + manifests, load dialog, export dropdown + import model dialog (v1.0.2); v1.0.4 responsive header — title/description then full-width stacked *Export Current Model* + *Import model* buttons on mobile (`min-h-11 w-full` → `sm:min-h-9 sm:w-auto`), unchanged multi-column layout on desktop. |
+| Models | `models.tsx` | Active engine card, adapters panel, packages + manifests, load dialog, export dropdown + import model dialog (v1.0.2); v1.0.4 responsive header — title/description then full-width stacked *Export Current Model* + *Import model* buttons on mobile (`min-h-11 w-full` → `sm:min-h-9 sm:w-auto`), unchanged multi-column layout on desktop. v1.0.5: the import dialog itself is rebuilt — scrollable body between stable header/footer, stacked touch targets on mobile, chosen-file chip, in-modal error card (see [Models](../ai-core/models.md#the-import-model-dialog-v105-rework)). |
 | Datasets | `datasets.tsx` | Split bars, example-schema panel, import dialog (JSON paste/file **or binary `.parquet` upload** — cyan selected-file panel, multipart), separate **JSON** and **Parquet** export buttons per card, cyan parquet format badge, delete. |
-| Docs | `docs.tsx` | Built-in documentation reader (search, category index, two-pane). |
+| Docs | `docs.tsx` | Built-in documentation reader (search, category index, two-pane); v1.0.5: the centralized link resolver navigates internal markdown links WITHIN the viewer (no 404s), cross-page anchors auto-scroll, and a genuinely missing page renders an in-viewer not-found state (see below). |
 | Settings | `settings.tsx` | Bound settings form, unsaved-changes badge, SSE transport locked note; v1.0.3 "Parallel tool calls by default" + "Max parallel calls". v1.0.4: the *Branding & icons* card was **removed** from the UI — the icon infrastructure itself (uploads, `/api/icons`, staging/activation, favicon serving, the in-app `BrandLogo`) remains fully functional; manage packages via the API (see [Deployment](deployment.md)). |
 
 Shared widgets live in `ui-bits.tsx` (StatusChip, SourceDot, TypeChip, EventRow,
@@ -144,6 +144,33 @@ dark-console palette: keys bright sky (lightness ≥ 0.88), strings bright green
 floats amber, booleans orange, null rose, undefined slate, braces/brackets cyan, arrows
 sky; the background stays transparent so the `.glass-inset` well shows through. The
 component itself is unchanged (copy support, collapsed depth 2, wrapped long strings).
+
+## Documentation viewer link resolution (v1.0.5)
+
+The docs sources are flat markdown files, but pages link each other with category-style
+paths (`../ai-core/core-module.md`, `tools.md#anchor`). The viewer now classifies every
+markdown link through ONE centralized resolver (`src/lib/nexool/docs-link-resolver.ts`,
+unit-tested) instead of leaving them to the browser:
+
+- **Internal doc links** (`x.md`, `./x.md`, `../category/x.md`, bare slugs, with or
+  without `#anchor`) are normalized to their basename slug, validated against the REAL
+  `/api/docs` index, and — when they resolve — navigate **within the Docs view**
+  (`setSlug`), keeping the URL on `/`. No more 404s from in-page navigation; the
+  sidebar selection follows.
+- **Cross-page anchors** (`tools.md#tool-export--import-as-json-v104`) open the target
+  page and auto-scroll to the heading; heading ids are generated with the same
+  GitHub-style `headingSlug` used by the authored anchors, with a dash-collapse
+  fallback for older links.
+- **In-page anchors** (`#section`) scroll natively inside the current page.
+- **External links** (http/https/mailto/tel) are unchanged — `target="_blank"`
+  `rel="noreferrer"`.
+- **Missing pages** — a link whose slug is genuinely absent from the index renders an
+  in-viewer **"Documentation page not found."** card (with the requested slug and a
+  *Return to Documentation* button) instead of a browser 404. Real content has zero
+  unresolvable links, so the state is reachable only via a stale index — defensive by
+  design.
+- Index clicks, search, category grouping and the mobile back button all route through
+  the same `openDoc()` entry, so stale not-found/anchor state always clears.
 
 ## State management
 

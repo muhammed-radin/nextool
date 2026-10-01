@@ -38,14 +38,14 @@ nextool-q1/
 
 | Path | Purpose |
 | --- | --- |
-| `package.json` | `nextool-q1` v1.0.4. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (v1.0.2), `@dsnp/parquetjs` **1.8.9 pinned** (v1.0.3 Parquet adapter), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view` 2.0.0-alpha.43 (JSON tree — reads `--w-rjv-*` tokens only), `commander` (CLI), `fflate` (zip packaging). |
+| `package.json` | `nextool-q1` v1.0.5. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (v1.0.2), `@dsnp/parquetjs` **1.8.9 pinned** (v1.0.3 Parquet adapter), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view` 2.0.0-alpha.43 (JSON tree — reads `--w-rjv-*` tokens only), `commander` (CLI), `fflate` (zip packaging). |
 | `next.config.ts` | `output: "standalone"` (production server bundle), `reactStrictMode: false`, `typescript.ignoreBuildErrors: true`, `serverExternalPackages: ["@dsnp/parquetjs"]` (v1.0.3 — the Parquet adapter is required from node_modules at runtime, not bundled). |
 | `tsconfig.json` | Standard Next.js TS config with `@/*` path alias → `src/*`. |
 | `.env` | Only `DATABASE_URL`. Never committed, values never documented. |
 | `Caddyfile` | Sandbox infrastructure (local reverse proxy) — not part of the application. |
-| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions, v1.0.3 updates, v1.0.4 refinements. |
+| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions, v1.0.3 updates, v1.0.4 refinements, v1.0.5 improvements. |
 | `scripts/nextool.ts` | The CLI (`nextool train / benchmark / model / dataset / tool / runtime / version`). Directly imports the same service modules the API routes use. |
-| `tests/*.sh` | Sandbox-infrastructure verification scripts (e.g. a fake-bun harness for `db:push`); they test the hosting environment, not the application. The `*.test.ts` files (`nextool-v102/v103/v104`) ARE app tests — see [Testing](testing.md). |
+| `tests/*.sh` | Sandbox-infrastructure verification scripts (e.g. a fake-bun harness for `db:push`); they test the hosting environment, not the application. The `*.test.ts` files (`nextool-v102/v103/v104/v105`) ARE app tests — see [Testing](testing.md). |
 
 ## prisma/schema.prisma
 
@@ -55,7 +55,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | --- | --- | --- |
 | `Task` | request, goal, mode, status, config JSON, state JSON, plan JSON, finalResult, error | `nexool.ts` / `loop.ts` |
 | `TaskEvent` | every emitted event (type, source, message, data, priority 1–9) | `eventbus.emitEvent` |
-| `ToolRecord` | tool definitions (JSON), environment incl. `js-function`, `functionSource` + `toolVersion` (v1.0.2), enabled flag, call/success/failure/timeout stats | `tools/registry.ts` |
+| `ToolRecord` | tool definitions (JSON), environment incl. `js-function` and `nodejs` (v1.0.5; metadata travels inside the definition JSON), `functionSource` + `toolVersion` (v1.0.2), enabled flag, call/success/failure/timeout stats | `tools/registry.ts` |
 | `TrainingJobRecord` | v1.0.2 training jobs: dataset lineage, status, config, per-epoch metrics + logs, finalMetrics, modelRecordId | `training/engine.ts` |
 | `BenchmarkRunRecord` | v1.0.2 benchmark runs: modelKey, dataset lineage, metrics, per-case results, durationMs | `training/benchmark.ts` |
 | `MemoryEntry` | persistent memory: unique key, JSON value, tags, source | `memory.store` tool, feedback loop, `/api/memory` |
@@ -72,13 +72,15 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | --- | --- | --- |
 | `types.ts` | All domain types: ToolDefinition, CoreModuleOutput, MainState, TaskConfig, NexToolEvent, GlobalLiveState, ContextComposition, SystemStats, ApiEnvelope… | (binding contract) |
 | `api-contract.ts` | REST contract comment + DTOs (`TaskDetail`, `ToolEntry`, `MemoryEntryDTO`…) | `types.ts` |
-| `version.ts` | `APP_VERSION` 1.0.4, `RELEASE_NAME`, `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0, SSE constants | everything reads this |
+| `version.ts` | `APP_VERSION` 1.0.5, `RELEASE_NAME`, `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0, SSE constants | everything reads this |
 | `eventbus.ts` | Global event manager: `emitEvent`, `subscribe`, `recentEvents`, `queryEvents`, SSE controller registry, runtime metrics (`coreCalls`, latency series) | db, types |
 | `settings.ts` | `DEFAULT_SETTINGS`, cached `getSettings`, clamping `updateSettings` | db |
-| `schemas.ts` | zod schemas for every mutating endpoint (tasks, tools incl. `registerJsToolSchema`/`updateToolSchema`/`testToolSchema`, training, benchmark, memory, datasets, settings) | zod |
+| `schemas.ts` | zod schemas for every mutating endpoint (tasks, tools incl. `registerJsToolSchema`/`updateToolSchema`/`testToolSchema` — v1.0.5: `environment` js-function\|nodejs + `metadataRecordSchema` (≤ 50 string pairs), training, benchmark, memory, datasets, settings) | zod |
+| `editor-source.ts` | v1.0.5 tool-editor source-sync invariants (pure): `coerceEditorChange` (a non-edit onChange can never clear the code) and `readMonacoValue` (a disposed editor is never trusted — the shared source state is the fallback); unit-tested in `tests/nextool-v105.test.ts` | — |
+| `docs-link-resolver.ts` | v1.0.5 centralized docs-link classification (pure): `isExternalHref`/`isInPageAnchor`/`isInternalDocLink`, `normalizeDocHref` (basename slug), `resolveDocSlug` (validated against the real docs index), GitHub-style `headingSlug`; powers the docs viewer's in-viewer navigation and not-found state | — |
 | `branding.ts` | v1.0.2 icon packages: zip validation (PNG IHDR parsing, safe names, size caps), staging/activation under `public/icons/<packageId>/` | fflate, db |
 | `tool-runtime-declarations.ts` | v1.0.2 Monaco `extraLib` + References-pane source for the js-function sandbox (one declaration module for both) | types |
-| `tool-portable.ts` | v1.0.4 tool portability (pure, dependency-free): `exportToolJson`/`exportToolsJson` (portable envelope, function source as text), `parseToolImport`, `validateImportedTool`, `validateSchemaJson`, `proposeCopyName`; shared by the Tools view and the unit tests | types, api-contract |
+| `tool-portable.ts` | v1.0.4 tool portability (pure, dependency-free): `exportToolJson`/`exportToolsJson` (portable envelope, function source as text), `parseToolImport`, `validateImportedTool`, `validateSchemaJson`, `proposeCopyName`; v1.0.5: `nodejs` environment + `metadata` round trip (string-only pairs, ≤ 50); shared by the Tools view and the unit tests | types, api-contract |
 | `environment.ts` | Virtual server fleet state machine: drift/crash/degrade/recover/restart, `getGlobalLiveState` | eventbus |
 | `api-helpers.ts` | `ok()` / `fail()` ApiEnvelope responses, `readJson` | types |
 | `docs.ts` | Docs loader: front-matter parse, SAFE_SLUG anti-traversal, `listDocs`/`readDoc` | filesystem `docs/` |
@@ -90,8 +92,9 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `main/observer.ts` | `interpret` (domain-aware observation strings) + `checkGoalComplete` (LLM verify, heuristic at L1–2) | z-ai-web-dev-sdk |
 | `core/coremodule.ts` | `decide` — tool matching + parameter generation; validates output; allowed-tools filter; records latency metrics | z-ai-web-dev-sdk, heuristic, executor |
 | `core/heuristic.ts` | Deterministic fallback matcher: token overlap scoring (threshold 0.18), typo normalization, naive param extraction | types |
-| `tools/registry.ts` | `BUILTIN_TOOLS` (15 definitions), DB seeding, handler resolution, dynamic + js-function registration (`registerJsTool`, `updateTool`, `deleteTool`), stats | db, tools/* |
-| `tools/js-runner.ts` | v1.0.2 `node:vm` sandbox for `js-function` tools: compile/validate, 4 s sync + 10 s async caps, serializable-result enforcement (64 KiB / depth 12), capped log capture | node:vm |
+| `tools/registry.ts` | `BUILTIN_TOOLS` (15 definitions), DB seeding, handler resolution, dynamic + js-function/nodejs registration (`registerJsTool`, `updateTool`, `deleteTool`), `HANDLER_KIND_INFO` (the real handler-kind registry incl. `http_get` config fields), metadata validation, stats | db, tools/* |
+| `tools/js-runner.ts` | v1.0.2 `node:vm` sandbox for `js-function` tools: compile/validate, 4 s sync + 10 s async caps, serializable-result enforcement (64 KiB / depth 12), capped log capture; v1.0.5 — the 4 s sync cap is enforced at function INVOCATION, so no-`await` runaway loops are bounded without freezing the event loop | node:vm |
+| `tools/node-runner.ts` | v1.0.5 restricted Node.js environment for `nodejs` tools: module allowlist (`NODE_MODULE_ALLOWLIST` — buffer, crypto, events, path, querystring, string_decoder, url, util, assert, zlib) + blocked-module reasons, sandbox globals, dynamic-import transform (`import()` call sites → allowlist shim), 4 s invocation-level sync cap, 10 s async watchdog, 256 MiB heap-growth sentinel, same result/log contracts as js-runner | node:vm, tools/js-runner |
 | `tools/executor.ts` | Tool runtime: param coercion/validation, timeout + abort race, stats, history, events; `executeToolsParallel`; v1.0.3 `executeParallelBatch` (capped waves, batch provenance) | registry, handler |
 | `tools/handler.ts` | `ToolHandler` type, `HandlerContext`, `ToolFailure` error class | types |
 | `tools/builtin.ts` | Real handlers: system.info, math.evaluate (safe parser), text.analyze, time.now, uuid.generate, echo.echo, delay.wait | node:os, node:crypto |
@@ -111,7 +114,9 @@ Binding data model (SQLite). Everything in the runtime persists here:
   blue-gradient glassmorphism theme.
 - `api/**/route.ts` — endpoints grouped as `system`, `state`, `env/event`, `stream`,
   `tasks` (+ `[id]/{stop,event,events,feedback,context,executions}`), `tools`
-  (+ `register`, `js`, `test`, `[name]` (GET/PUT/DELETE), `[name]/toggle`), `memory`,
+  (+ `register`, `js`, `test` (v1.0.5 — the dedicated test route, restored),
+  `environments` (v1.0.5 — runtime capability payload), `[name]` (GET/PUT/DELETE),
+  `[name]/toggle`), `memory`,
   `history`, `notifications` (+ `read-all`), `images`, `models` (+ `load`, `export`,
   `import`), `datasets` (+ `import`, `[id]`, `[id]/export`), `training` (+ `[id]`),
   `benchmark` (+ `[id]`), `icons`, `settings`, `docs` (+ `[slug]`), plus the scaffold

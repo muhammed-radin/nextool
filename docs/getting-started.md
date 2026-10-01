@@ -82,7 +82,7 @@ on the first registry query.
 curl -s http://localhost:3000/api/system | head -c 400
 ```
 
-A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.4", ... } }`
+A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.5", ... } }`
 with runtime status `online`. The console header shows a connection pill that reads
 **Connected** once the SSE stream (`/api/stream`) is live.
 

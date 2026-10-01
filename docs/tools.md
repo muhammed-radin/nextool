@@ -8,9 +8,9 @@ order: 1
 
 Everything the runtime can *do* is a tool. This page documents the `ToolDefinition`
 schema, parameter generation rules, the registration paths (built-in code, the
-`/api/tools/register` endpoint and the v1.0.2 Tool IDE / `js-function` path), the four
-dynamic handler kinds, and a complete working example. The JavaScript tool authoring
-workflow (Monaco editor, sandbox contract, testing, debugging) has its own page:
+`/api/tools/register` endpoint and the Tool IDE function-tool path), the four dynamic
+handler kinds, and a complete working example. The tool authoring workflow (Tool IDE,
+`js-function`/`nodejs` sandbox contracts, testing, debugging) has its own page:
 [Tool Development](tool-development.md).
 
 ## ToolDefinition schema
@@ -21,15 +21,17 @@ interface ToolDefinition {
   description: string;       // what it does — feeds matching + prompts
   purpose?: string;          // why it exists (prompt context)
   category: string;          // monitoring | automation | content | utility | memory | notification | general …
-  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function';   // v1.0.2: js-function
+  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs';
+  // v1.0.2: js-function · v1.0.5: nodejs (restricted Node.js environment)
   schema: {
     type: 'object';
     properties: ToolParamDef[];
   };
   handlerKind?: 'echo' | 'delay' | 'http_get' | 'uuid';   // dynamic tools only
   handlerConfig?: Record<string, unknown>;                // dynamic tools only
-  functionSource?: string;   // js-function tools only (≤ 64 000 chars)
+  functionSource?: string;   // js-function AND nodejs tools (≤ 64 000 chars)
   toolVersion?: string;      // user-facing version string, free form
+  metadata?: Record<string, string>;   // v1.0.5: flat string key/value pairs, ≤ 50
 }
 
 interface ToolParamDef {
@@ -50,21 +52,37 @@ contract — `server.*` are `virtual-env`, the rest `builtin`. Browse them with
 `GET /api/tools` or the Tools view, which renders each param's type, required flag,
 generation and enum chips.
 
-## The Tool IDE and the `js-function` environment (v1.0.2)
+## The Tool IDE and the function-tool environments (v1.0.2 / v1.0.5)
 
 **Tools → New Tool / Edit** opens the in-console Tool IDE: a Monaco JavaScript editor
-(custom `nextool-dark` theme), a schema editor, schema-driven IntelliSense, a References
+(custom `nextool-dark` theme, with a v1.0.5 **textarea toggle**), a schema editor
+(structured form + JSON view since v1.0.5), schema-driven IntelliSense, a References
 pane showing the real sandbox API, and a **Test Tool** panel that runs the actual
-sandbox. A tool authored here has `environment: 'js-function'` and its body is a
-single `async function execute(params, context) { …; return value; }`.
+sandbox. A tool authored here has `environment: 'js-function'` — or, since v1.0.5,
+`environment: 'nodejs'` — and its body is a single
+`async function execute(params, context) { …; return value; }`.
 
-- Execution happens in a hardened `node:vm` sandbox (`src/lib/nexool/tools/js-runner.ts`)
-  exposing **only** `params`, `context {executionId, taskId, mode, now, log}`, `console`
-  (capped 100 lines) and ES builtins. No `require`, `process`, `fetch`, timers or
-  `Buffer` — a documented limitation, not a bug.
-- Limits: source ≤ 64 000 chars; sync execution capped 4 s (`vm` timeout); the whole
-  run capped 10 s; results must be JSON-serializable, ≤ 64 KiB, depth ≤ 12.
-- Full guide with a worked example, limits table and debugging checklist:
+- **js-function** execution happens in a hardened `node:vm` sandbox
+  (`src/lib/nexool/tools/js-runner.ts`) exposing **only** `params`,
+  `context {executionId, taskId, mode, now, log}`, `console` (capped 100 lines) and ES
+  builtins. No `require`, `process`, `fetch`, timers or `Buffer` — a documented
+  limitation, not a bug.
+- **nodejs** (v1.0.5) is a restricted Node.js environment with the SAME execute
+  contract plus `require()`/`await import()` for an allowlisted module set
+  (`buffer`, `crypto`, `events`, `path`, `querystring`, `string_decoder`, `url`,
+  `util`, `assert`, `zlib`). Still sandboxed — no `process`, no timers, no `fetch`,
+  no filesystem/network. Full allowlist, limits and error wording:
+  [Tool Development](tool-development.md#the-nodejs-environment--restricted-nodejs-v105).
+- The **Execution environment** selector offers `js-function | nodejs | dynamic` from
+  the real runtime registry (`GET /api/tools/environments`); dynamic tools are locked
+  to dynamic in the editor.
+- **Metadata** (v1.0.5) — structured key/value rows (strings only, ≤ 50 pairs),
+  stored on the ToolDefinition and round-tripped through export/import.
+- Limits (both function environments): source ≤ 64 000 chars; sync execution capped
+  4 s (`vm` timeout — enforced at function invocation since v1.0.5); the whole run
+  capped 10 s; results must be JSON-serializable, ≤ 64 KiB, depth ≤ 12. `nodejs` adds
+  a 256 MiB heap-growth sentinel.
+- Full guide with a worked example, limits tables and debugging checklist:
   [Tool Development](tool-development.md).
 
 Grid actions on the Tools view (v1.0.2): **New Tool**, **Edit**, **Duplicate** (built-ins
@@ -88,16 +106,17 @@ digits, dots, hyphens and underscores are replaced with `_`):
 
 ```jsonc
 {
-  "nexool": { "kind": "nextool.tool", "version": 1, "appVersion": "1.0.4", "exportedAt": "…" },
+  "nexool": { "kind": "nextool.tool", "version": 1, "appVersion": "1.0.5", "exportedAt": "…" },
   "name": "utility.wordcount",
   "description": "Counts words, characters or lines of a text.",
   "purpose": "…",                     // optional, present when the tool has one
   "category": "utility",
-  "environment": "js-function",        // js-function | dynamic
+  "environment": "js-function",        // js-function | nodejs | dynamic (v1.0.5: nodejs)
   "toolVersion": "1.0.0",              // optional
   "enabled": true,
   "schema": { "type": "object", "properties": [ /* ToolParamDef[] — the real field names */ ] },
   "functionSource": "async function execute(params, context) { … }",  // EXACT source, as text
+  "metadata": { "owner": "platform" }, // v1.0.5 — present when the tool has metadata
   "handlerKind": "…",                  // dynamic tools only
   "handlerConfig": { … }               // dynamic tools only
 }
@@ -117,11 +136,14 @@ tool at a time.
 2. **Client-side validation** (human-readable errors, shown in a rejection dialog):
    - `name` — required, `namespace.action` regex (lowercase).
    - `description` — required (the CoreModule matches on it).
-   - `environment` — must be `js-function` or `dynamic`; `builtin`/`virtual-env`
-     (read-only registry tools) are rejected with a "read-only" message — duplicate
-     them into a `js-function` tool instead.
-   - `functionSource` — required for `js-function`, ≤ 64 000 chars; a warning (not a
-     rejection) fires when no `execute(params, context)` definition is visible.
+   - `environment` — must be `js-function`, `nodejs` (both authorable) or `dynamic`;
+     `builtin`/`virtual-env` (read-only registry tools) are rejected with a
+     "read-only" message — duplicate them into a function tool instead.
+   - `functionSource` — required for `js-function` and `nodejs` (v1.0.5), ≤ 64 000
+     chars; a warning (not a rejection) fires when no `execute(params, context)`
+     definition is visible.
+   - `metadata` (v1.0.5) — optional; when present it must be a flat string → string
+     object with at most 50 pairs (non-string values are rejected).
    - `schema` — validated against the real param rules (`string|number|boolean|object|
      array` types, `enumValues` must be an array, every param needs a name); a bare
      param array (the register-dialog format) is tolerated.
@@ -134,11 +156,12 @@ tool at a time.
    **Import as copy** (auto non-conflicting name `base.copy`, then `base.copy-2`,
    `base.copy-3` …) or **Cancel** — never a silent overwrite.
 5. **Registration** via the existing endpoints: `POST /api/tools/js` for
-   `js-function`, `POST /api/tools/register` for `dynamic`. The backend re-validates
-   everything (zod + function-source syntax via the sandbox compiler) and surfaces
-   `ALREADY_EXISTS` honestly if a race slipped past the conflict check.
+   `js-function`/`nodejs`, `POST /api/tools/register` for `dynamic`. The backend
+   re-validates everything (zod + function-source syntax via the sandbox compiler) and
+   surfaces `ALREADY_EXISTS` honestly if a race slipped past the conflict check.
 6. The imported tool appears in the registry and is fully editable in the Tool IDE
-   (its function loads into Monaco like any other `js-function` tool).
+   (its function loads into the editor like any other function tool — a `nodejs` tool
+   opens with the Node.js environment, IntelliSense and References already wired).
 
 ## Parameter generation: extractive vs constructive
 
@@ -165,7 +188,7 @@ Dynamic tools cannot ship arbitrary code — they bind to a safe, pre-built hand
 | `echo` | Returns `{ echo: <message param> }` | Requires a `message` param in your schema. |
 | `delay` | Waits `ms` (100–10 000, default 1000) → `{ waitedMs }` | Good for testing async behavior and timeouts. |
 | `uuid` | Generates `count` UUIDv4s (1–10, default 1) → `{ count, uuids }` | |
-| `http_get` | `fetch(handlerConfig.url)` with an 8 s `AbortSignal.timeout` → `{ status, body (≤2000 chars) }` | Missing `handlerConfig.url` fails with `INVALID_CONFIG`. |
+| `http_get` | `fetch(handlerConfig.url)` with an `AbortSignal.timeout` → `{ status, body (≤2000 chars) }` | Missing `handlerConfig.url` fails with `INVALID_CONFIG`. Config (v1.0.5): `url` (required) + `timeout` in ms (1000–15000, default 8000) — the Tool IDE renders both as structured fields. |
 
 A dynamic tool **must** declare a valid `handlerKind`; registration without one is
 rejected (`INVALID_PARAMS`).
@@ -210,21 +233,28 @@ curl -X POST http://localhost:3000/api/tools/register \
   the loop loads, and the post-decision gate rewrites decisions targeting them into
   `cannot_execute`.
 
-### 3. Tool IDE path (js-function, v1.0.2)
+### 3. Tool IDE path (function tools, v1.0.2 / v1.0.5)
 
 ```bash
 curl -X POST http://localhost:3000/api/tools/js -H 'Content-Type: application/json' \
   -d '{ "name": "utility.wordcount", "description": "…", "category": "utility",
+        "environment": "nodejs",
+        "metadata": { "owner": "platform" },
         "schema": { "type": "object", "properties": [ … ] },
         "functionSource": "async-annotated or plain function body…" }'
 ```
 
 - The source is compiled server-side before registration — a syntax error blocks the
   save (`REGISTER_FAILED`). Duplicate names → `ALREADY_EXISTS` (409).
-- CRUD beyond creation (all v1.0.2): `GET /api/tools/{name}` (full entry incl.
-  `functionSource`), `PUT /api/tools/{name}` (partial update of user-editable tools —
-  description, category, schema, source, `toolVersion`, `enabled`, and rename via the
-  `name` field; built-ins → 403 `READ_ONLY`), `DELETE /api/tools/{name}` (user tools
+- v1.0.5 fields: `environment` (`js-function` — the default — or `nodejs`) and
+  `metadata` (flat string key/value record, ≤ 50 pairs). A `nodejs` tool's stored
+  environment drives the Node.js sandbox at run time.
+- CRUD beyond creation (v1.0.2, extended v1.0.5): `GET /api/tools/{name}` (full entry
+  incl. `functionSource` and `metadata`), `PUT /api/tools/{name}` (partial update of
+  user-editable tools — description, category, schema, source, `toolVersion`,
+  `enabled`, rename via the `name` field, plus the v1.0.5 fields `environment`
+  (js-function ⇄ nodejs switch), `metadata`, and `handlerKind`/`handlerConfig` for
+  dynamic tools; built-ins → 403 `READ_ONLY`), `DELETE /api/tools/{name}` (user tools
   only), `POST /api/tools/test` (registered tool or unsaved source — see
   [Tool Development](tool-development.md) for the response shape).
 

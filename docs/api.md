@@ -6,7 +6,7 @@ order: 1
 
 # API Reference
 
-Every HTTP endpoint in NexTool Q1 v1.0.4. All routes are Next.js route handlers
+Every HTTP endpoint in NexTool Q1 v1.0.5. All routes are Next.js route handlers
 (`runtime = 'nodejs'`, `dynamic = 'force-dynamic'`) under `src/app/api/`. JSON in/out,
 except the SSE stream, the model export download (zip), the dataset Parquet export
 (binary), the icons upload (multipart) and the multipart dataset import variant.
@@ -148,12 +148,54 @@ curl -N "http://localhost:3000/api/stream?since=0" --max-time 5
 
 ### GET /api/tools
 Registry list (seeds built-ins on first call): `ToolEntry[]` with name, description,
-category, environment, schema, handlerKind, enabled, stats (call/success/failure/
-timeout counts, avgMs). The console's tool **export/import** (v1.0.4) is a client-side
-flow built entirely on the endpoints below (`GET /api/tools` for the export list,
-`POST /api/tools/js` / `POST /api/tools/register` / `PUT /api/tools/{name}` for
-import/replace) — there are **no new endpoints**; the portable JSON format is
- documented in [Tools](../tools/tools.md#tool-export--import-as-json-v104).
+category, environment (`builtin` | `virtual-env` | `dynamic` | `js-function` |
+`nodejs`), schema, handlerKind, metadata (v1.0.5 — when set), enabled, stats
+(call/success/failure/timeout counts, avgMs). The console's tool **export/import**
+(v1.0.4) is a client-side flow built entirely on the endpoints below
+(`GET /api/tools` for the export list, `POST /api/tools/js` / `POST /api/tools/register`
+/ `PUT /api/tools/{name}` for import/replace) — there are **no new endpoints**; the
+portable JSON format is documented in
+[Tools](../tools/tools.md#tool-export--import-as-json-v104).
+
+### GET /api/tools/environments
+The REAL tool-environment configuration (v1.0.5) — the single capability source the
+Tool IDE selector, handler-kind UI, Node.js References panel and IntelliSense all read
+(no hardcoded frontend copy). Response (envelope data):
+
+```jsonc
+{
+  "environments": [
+    // authorable: js-function ("JavaScript sandbox"), nodejs ("Node.js sandbox"),
+    // dynamic ("Dynamic handler"); read-only: builtin, virtual-env.
+    { "id": "nodejs", "label": "Node.js sandbox",
+      "description": "Restricted Node.js environment — same execute contract plus require()/import() for the allowlisted modules only.",
+      "authorable": true, "execution": "node-vm" }
+  ],
+  "handlerKinds": [
+    // the real runtime registry: echo, delay, http_get, uuid — each with label,
+    // description and configFields[] (http_get: url (required) + timeout (ms,
+    // min 1000, max 15000, default 8000))
+    { "kind": "http_get", "label": "HTTP GET", "configFields": [ /* … */ ] }
+  ],
+  "functionSandbox": { "timeoutMs": 10000, "syncTimeoutMs": 4000,
+                       "maxSourceChars": 64000, "maxResultBytes": 65536, "maxLogLines": 100 },
+  "node": {
+    "modules": { "crypto": { "description": "…", "methods": [ "createHash", "…" ] } /* allowlist, 10 modules */ },
+    "blocked":  { "fs": "unrestricted filesystem access is never allowed" /* name → reason */ },
+    "globals":  [ { "name": "Buffer", "type": "Buffer", "description": "…" } ],
+    "limits":   { "timeoutMs": 10000, "syncTimeoutMs": 4000, "memoryLimitMb": 256,
+                  "maxSourceChars": 64000, "maxResultBytes": 65536, "maxLogLines": 100,
+                  "moduleAllowlist": [ "buffer", "crypto", "events", "path", "querystring",
+                                        "string_decoder", "url", "util", "assert", "zlib" ] }
+  }
+}
+```
+
+```bash
+curl http://localhost:3000/api/tools/environments
+```
+
+Errors: none (static capability payload; `force-dynamic`, never cached).
 
 ### POST /api/tools/register (alias: POST /api/tools)
 Register a dynamic tool. Request:
@@ -170,37 +212,55 @@ be URL-encoded (names contain dots, e.g. `server.health`). Errors: `INVALID_PARA
 
 ### GET /api/tools/{name}
 Full entry for one tool (definition, stats, enabled, and `functionSource` +
-`toolVersion` for `js-function` tools). The path segment is URL-decoded server-side.
-Errors: `NOT_FOUND` (404).
+`toolVersion` + `metadata` for function tools — `js-function` and `nodejs`). The path
+segment is URL-decoded server-side. Errors: `NOT_FOUND` (404).
 
 ### POST /api/tools/js
-Register a `js-function` tool authored in the Tool IDE. Request:
+Register a function tool authored in the Tool IDE (`environment` `js-function` — the
+default — or `nodejs` since v1.0.5). Request:
 `{ name (namespace.action, required), description?, purpose?, category?, toolVersion?,
+environment?: "js-function" | "nodejs", metadata?: Record<string,string> (≤ 50 pairs),
 schema: { type: "object", properties: ToolParamDef[] (≤ 40) }, functionSource (required,
 ≤ 64 000 chars), enabled? }`. The source is syntax-validated server-side before the row
-is written. Response: 201 `ToolEntry`. Errors: `INVALID_PARAMS` (zod or missing source),
-`ALREADY_EXISTS` (409), `REGISTER_FAILED` (500 wrapper).
+is written (validated with the runner of the chosen environment). Response: 201
+`ToolEntry`. Errors: `INVALID_PARAMS` (zod, missing source, bad metadata — values must
+be strings), `ALREADY_EXISTS` (409), `REGISTER_FAILED` (500 wrapper).
 
 ### PUT /api/tools/{name}
-Partial update of a user-editable tool (`dynamic` | `js-function`; built-ins and
-virtual-env are read-only). Body is any subset of `{ name (rename), description,
-purpose, category, toolVersion, schema, functionSource, enabled }` — at least one field
-required. Response: updated `ToolEntry`. Errors: `NOT_FOUND` (404), `READ_ONLY`
-(403), `INVALID_PARAMS`.
+Partial update of a user-editable tool (`dynamic` | `js-function` | `nodejs`; built-ins
+and virtual-env are read-only). Body is any subset of `{ name (rename), description,
+purpose, category, toolVersion, schema, functionSource, enabled, environment
+(v1.0.5 — js-function ⇄ nodejs switch), metadata (v1.0.5 — flat string record; omitted
+keeps the stored pairs, an object replaces them), handlerKind, handlerConfig }` — at
+least one field required. Response: updated `ToolEntry`. Errors: `NOT_FOUND` (404),
+`READ_ONLY` (403), `INVALID_PARAMS`.
 
 ### DELETE /api/tools/{name}
 Delete a user tool. Built-ins are rejected with `READ_ONLY` (403) — disable them
 instead. Response: `{ "deleted": true, "name": "…" }`. Errors: `NOT_FOUND`, `READ_ONLY`.
 
 ### POST /api/tools/test
-Controlled test execution. Request: exactly one of
-`{ name, params? }` (registered tool — runs its real handler pipeline; js tools run
-their saved source with `mode: "test"`) or `{ functionSource, params? }` (unsaved Tool
-IDE source, sandboxed). Response:
-`{ mode: "test-source" | "registered", status: "completed" | "failed" | <executor
-status>, durationMs, result, error, logs: string[] }` — logs are captured only for
-js-function runs. Tests never mutate task state. Errors: `NOT_FOUND` (404),
-`TEST_FAILED` (500). See [Tool Development](../tools/tool-development.md).
+Controlled test execution. **RESTORED in v1.0.5** — the v1.0.2 route file was missing,
+so Tool IDE "Test Tool" requests fell through to `/api/tools/[name]` and failed with
+405; the dedicated route is again the ONLY test path (and it never mutates editor or
+registry state). Request: exactly one of
+`{ name, params? }` (registered tool — runs its real handler pipeline; js/nodejs tools
+run their saved source with `mode: "test"`), `{ functionSource, params?, environment? }
+(unsaved Tool IDE source, sandboxed — v1.0.5: pass `"environment": "nodejs"` to run it
+in the Node.js sandbox; default `js-function`). Response:
+`{ mode: "test-source" | "registered", environment, status: "completed" | "failed" |
+"timeout", durationMs, result, error, params, logs: string[] }` — logs are captured
+for sandbox runs. A `require("fs")` inside nodejs source fails with
+`Module "fs" is not available in the NexTool Node.js environment (…)` — the blocked-
+module wording is part of the contract (see
+[Tool Development](../tools/tool-development.md)). Tests never mutate task state.
+Errors: `NOT_FOUND` (404), `INVALID_PARAMS` (bad environment hint), `TEST_FAILED` (500).
+
+```bash
+curl -X POST http://localhost:3000/api/tools/test -H 'Content-Type: application/json' \
+  -d '{ "functionSource": "async function execute() { const c = require(\"crypto\"); return { id: c.randomUUID() }; }",
+        "params": {}, "environment": "nodejs" }'
+```
 
 ---
 
@@ -395,7 +455,7 @@ curl -X PUT http://localhost:3000/api/settings -H 'Content-Type: application/jso
 
 ## Documentation
 
-### GET /api/docs — `{ version: "1.0.4", count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: "1.0.5", count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`

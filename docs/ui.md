@@ -36,7 +36,7 @@ scrollbars.
 | Role | Font | Variable / class | Usage |
 | --- | --- | --- | --- |
 | Primary interface | **Readex Pro** 300–700 | `--font-readex-pro` (`font-sans`) | Headings, body, nav, forms. |
-| Technical labels | **Michroma** 400 | `--font-michroma` (`font-tech`) | Version badges (`Q1 v1.0.4`), small-caps section labels like `Notifications`, `Runtime`, status bar markers. Michroma renders best small and uppercase with wide tracking. |
+| Technical labels | **Michroma** 400 | `--font-michroma` (`font-tech`) | Version badges (`Q1 v1.0.5`), small-caps section labels like `Notifications`, `Runtime`, status bar markers. Michroma renders best small and uppercase with wide tracking. |
 | Code | **Geist Mono** | `--font-geist-mono` (`font-mono`) | Terminal output, JSON blocks, ids, metrics, event types. |
 
 Loaded in `layout.tsx` via `next/font/google`; variables set on `<html>`. Body uses
@@ -95,6 +95,16 @@ Loaded in `layout.tsx` via `next/font/google`; variables set on `<html>`. Body u
   these tokens for other variable names.
 - **MetricCard** pairs a `TechLabel` (Michroma) with a large mono value in a
   `.glass-card`.
+- **Dialogs & modals** sit on `.glass-strong`. The v1.0.5 **Import model** modal is the
+  reference pattern for content-heavy dialogs: a flex column capped at `85dvh` with a
+  `shrink-0` header and footer and ONE scrollable body (`nextool-scroll min-h-0
+  flex-1 overflow-y-auto`) between them — never a dialog taller than the viewport, and
+  never two competing scroll containers. Errors render inside the dialog as rose
+  `role="alert"` cards (ErrorCard tones), not only as toasts.
+- **The Tool IDE** follows the same system on mobile: a horizontally scrollable tab
+  strip (Details / Schema / Function·Handler / References / Test) of `glass-panel`
+  sections, so the 420 px Monaco editor keeps a real height instead of being squeezed
+  (see [Mobile](mobile.md)).
 - **Terminal** (`terminal.tsx`) uses `.glass-panel` chrome, `nextool-terminal`
   scanlines, a runtime-derived status line (no hardcoded prompt), source-colored lines,
   auto-scroll, blink cursor.
