@@ -67,9 +67,9 @@ bun run dev           # next dev -p 3000, logs tee'd to dev.log
 ```
 
 Open `http://localhost:3000`. The console is a single-page app — the only server route is
-`/`; all 13 screens (Dashboard, Task Console, Live Monitor, Tools, Memory, Live State,
-Events, History, Models, Datasets, Documentation, Settings, Task Preview) are client-side
-views inside that one page.
+`/`; all 16 screens (Dashboard, Task Console, Live Monitor, Tools, Tool IDE, Training,
+Benchmark, Memory, Live State, Events, History, Models, Datasets, Documentation,
+Settings, Task Preview) are client-side views inside that one page.
 
 On first use the tool registry seeds 15 built-in tools into the `ToolRecord` table
 (`server.*` virtual fleet tools, `system.info`, `math.evaluate`, `memory.*`,
@@ -82,7 +82,7 @@ on the first registry query.
 curl -s http://localhost:3000/api/system | head -c 400
 ```
 
-A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.3", ... } }`
+A healthy response is an envelope `{ "ok": true, "data": { "appVersion": "1.0.4", ... } }`
 with runtime status `online`. The console header shows a connection pill that reads
 **Connected** once the SSE stream (`/api/stream`) is live.
 
@@ -114,7 +114,7 @@ Via the API:
 ```bash
 curl -s -X POST http://localhost:3000/api/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"request":"Check the health of server api-01"}'
+  -d '{"request":"Check the health of server api-01","config":{"enabledTools":["server.health"]}}'
 ```
 
 The task runs UNDERSTAND → PLAN → SELECT TOOL → GENERATE PARAMS → EXECUTE → OBSERVE →

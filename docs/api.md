@@ -6,7 +6,7 @@ order: 1
 
 # API Reference
 
-Every HTTP endpoint in NexTool Q1 v1.0.3. All routes are Next.js route handlers
+Every HTTP endpoint in NexTool Q1 v1.0.4. All routes are Next.js route handlers
 (`runtime = 'nodejs'`, `dynamic = 'force-dynamic'`) under `src/app/api/`. JSON in/out,
 except the SSE stream, the model export download (zip), the dataset Parquet export
 (binary), the icons upload (multipart) and the multipart dataset import variant.
@@ -25,7 +25,8 @@ Every response is an `ApiEnvelope`:
 ```
 
 Error codes used by routes: `INVALID_PARAMS`, `INVALID_REQUEST`, `TASK_CREATE_FAILED`,
-`NOT_FOUND` (404), `REGISTER_FAILED`, `ALREADY_EXISTS` (409), `READ_ONLY` (403),
+`TOOLS_REQUIRED` (v1.0.4 — task without tools), `NOT_FOUND` (404), `REGISTER_FAILED`,
+`ALREADY_EXISTS` (409), `READ_ONLY` (403),
 `INVALID_MANIFEST`, `INVALID_EXAMPLES`, `PARQUET_EXPORT_FAILED`, `BENCHMARK_FAILED`,
 `EXPORT_FAILED`, `ICONS_INVALID`, `DOC_NOT_FOUND` (404), plus per-domain 500 codes
 (`TRAINING_*`, `BENCHMARK_*`, `ICONS_*`). The frontend client adds
@@ -73,14 +74,19 @@ Create + start a task (async). Request: `{ "request": string (≤4000 chars),
 "config"?: Partial<TaskConfig>, "mode"?, "reasoningLevel"? }` — top-level
 `mode`/`reasoningLevel` merge into config. `config` is zod-validated and may include
 the v1.0.3 parallel policy fields `parallelToolCalls` (boolean) and
-`maxParallelToolCalls` (int 1–8). Response: 201 `TaskDetail`
+`maxParallelToolCalls` (int 1–8). **v1.0.4: `config.enabledTools` is required and must
+be a non-empty array of tool names** — the zod schema rejects an explicit empty array
+(`INVALID_REQUEST`) and the route rejects a missing/empty list with 400
+`TOOLS_REQUIRED` ("Select at least one tool before running the task."). The console
+always sends `config.enabledTools: [...]`. Response: 201 `TaskDetail`
 (summary + config, state, plan, finalResult, error, sessionId).
-Errors: `INVALID_REQUEST` (empty request), `TASK_CREATE_FAILED` (validation, e.g. too
-long).
+Errors: `INVALID_REQUEST` (empty request, empty `enabledTools` array),
+`TOOLS_REQUIRED` (missing/empty tool selection), `TASK_CREATE_FAILED` (validation,
+e.g. too long).
 
 ```bash
 curl -X POST http://localhost:3000/api/tasks -H 'Content-Type: application/json' \
-  -d '{"request":"Check the health of server api-01","config":{"mode":"goal","parallelToolCalls":true,"maxParallelToolCalls":4}}'
+  -d '{"request":"Check the health of server api-01","config":{"mode":"goal","enabledTools":["server.health"],"parallelToolCalls":true,"maxParallelToolCalls":4}}'
 ```
 
 ### GET /api/tasks/{id}
@@ -143,7 +149,11 @@ curl -N "http://localhost:3000/api/stream?since=0" --max-time 5
 ### GET /api/tools
 Registry list (seeds built-ins on first call): `ToolEntry[]` with name, description,
 category, environment, schema, handlerKind, enabled, stats (call/success/failure/
-timeout counts, avgMs).
+timeout counts, avgMs). The console's tool **export/import** (v1.0.4) is a client-side
+flow built entirely on the endpoints below (`GET /api/tools` for the export list,
+`POST /api/tools/js` / `POST /api/tools/register` / `PUT /api/tools/{name}` for
+import/replace) — there are **no new endpoints**; the portable JSON format is
+ documented in [Tools](../tools/tools.md#tool-export--import-as-json-v104).
 
 ### POST /api/tools/register (alias: POST /api/tools)
 Register a dynamic tool. Request:
@@ -306,7 +316,10 @@ decidedTool, status, correct, confidence, latencyMs, engine). Errors: `NOT_FOUND
 
 ### GET /api/icons
 `{ manifest, active }` — the stored branding manifest (staged or active, `null` when
-none) and the active one used by `generateMetadata`.
+none) and the active one used by `generateMetadata`. Since v1.0.4 this endpoint is
+also the source of the in-app **BrandLogo** (the console fetches it once to pick the
+logo PNG — see [Frontend](../frontend/frontend.md)); note the Settings *Branding &
+icons* card was removed in v1.0.4, so packages are managed via these endpoints only.
 
 ### POST /api/icons
 Multipart upload of an icons ZIP (`file` field, ≤ 8 MiB). Validated for real: only
@@ -382,7 +395,7 @@ curl -X PUT http://localhost:3000/api/settings -H 'Content-Type: application/jso
 
 ## Documentation
 
-### GET /api/docs — `{ version: "1.0.3", count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: "1.0.4", count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`
@@ -405,7 +418,7 @@ enveloped). Not used by the console.
 | `name` | string? | display name |
 | `mode` | `goal \| live` | never auto-switched |
 | `reasoningLevel` | 1–6 | default from settings (4) |
-| `enabledTools` | string[]? | allow-list; empty = all |
+| `enabledTools` | string[] | **required, non-empty at creation since v1.0.4** (`TOOLS_REQUIRED` when missing/empty); an allow-list of tool names |
 | `useMemory` | boolean | default true |
 | `learnFrom` | `{ feedback?, results? }` | default both true |
 | `autoExecuteSubtools` | boolean | default true |

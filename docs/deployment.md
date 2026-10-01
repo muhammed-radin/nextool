@@ -66,7 +66,10 @@ Next server itself).
 - **Icon packages** (v1.0.2) live under `public/icons/<packageId>/` — created on first
   upload and referenced by the active branding manifest in the `Setting` table. Copy
   that directory along with the database when migrating hosts, or discard via
-  `DELETE /api/icons` + re-upload. Since v1.0.3 the ZIP may also use common
+  `DELETE /api/icons` + re-upload. Since v1.0.4 packages are managed through the
+  `/api/icons` endpoints only — the Settings *Branding & icons* UI card was removed
+  (the pipeline itself is unchanged and now also feeds the in-app `BrandLogo` in
+  addition to the favicon). Since v1.0.3 the ZIP may also use common
   favicon-generator filenames — `favicon-16x16.png`/`favicon-32x32.png`,
   `android-chrome-192x192.png`/`android-chrome-512x512.png` and
   `apple-touch-icon-<anything>.png` are aliased to the canonical `icon-<size>.png` /
@@ -136,10 +139,10 @@ Client behavior through proxies is handled by the frontend reconnect policy
 
 | Check | Expectation |
 | --- | --- |
-| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.3"`. |
+| `GET /api/system` | `{ ok: true, data.runtimeStatus: "online" }`, `appVersion "1.0.4"`. |
 | `GET /api/stream` (curl, 3 s) | `event: hello` frame immediately, then `:keepalive` within 15 s. |
-| `POST /api/tasks` smoke | Queued task reaches `completed` (goal) or `waiting` (live). |
-| `nextool runtime status` | `[ok] runtime online — app v1.0.3 · engine llm-core v1.0.0`. |
+| `POST /api/tasks` smoke | With `config.enabledTools` set (required since v1.0.4) the queued task reaches `completed` (goal) or `waiting` (live); omitting it → 400 `TOOLS_REQUIRED`. |
+| `nextool runtime status` | `[ok] runtime online — app v1.0.4 · engine llm-core v1.0.0`. |
 | `nextool model list` | Lists registered packages without error (empty list is valid). |
 
 ## Rollback

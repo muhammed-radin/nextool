@@ -86,6 +86,25 @@ Timeline tab's terminal disappears once the task reaches a terminal state (the e
 timeline remains), and the live checklist/terminal area is replaced by the *Final task
 output* section (summary, metric tiles, artifacts, final-result JSON).
 
+## v1.0.4 mobile refinements
+
+- **Models header stacks** — the header is a flex column on phones: title, then
+  description, then the *Export Current Model* and *Import model* buttons stacked
+  full-width (`min-h-11 w-full`, 44 px touch targets). From `sm` up they share a row
+  again (`sm:flex-row sm:w-auto sm:min-h-9`); the desktop `lg` two-sided layout is
+  unchanged.
+- **Task Console examples** — the "Examples" label sits on its own row and the
+  quick-fill buttons wrap below it (`flex flex-wrap gap-1.5`); each button is a compact
+  secondary action (`h-8 px-2.5 text-[11px]`) so the example list no longer squeezes
+  the title row on narrow screens while staying readable and tappable.
+- **Real brand logo** — the mobile menu sheet header, the More-sheet header and the
+  Tool IDE loading card show the actual NexTool logo from the active icon package
+  (monogram fallback); see [Frontend](frontend.md#brand-logo-brand-logotsx-v104).
+- **Tool selection required** — the tool multi-select is labeled *"Tool selection *"*
+  with an amber "required — select at least 1" hint; submit is blocked (validation
+  banner + toast) until at least one tool is chosen, so a phone user can no longer
+  create a task the runtime would reject.
+
 ## Live Monitor priority layout
 
 Live Mode gets the priority treatment on small screens:

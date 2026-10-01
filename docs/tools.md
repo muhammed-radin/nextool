@@ -68,9 +68,77 @@ single `async function execute(params, context) { …; return value; }`.
   [Tool Development](tool-development.md).
 
 Grid actions on the Tools view (v1.0.2): **New Tool**, **Edit**, **Duplicate** (built-ins
-included — creates an editable `js-function` copy), **Test**, **Enable/Disable**, and
-**Delete** (user tools only, behind a confirm dialog; built-ins are rejected
-`READ_ONLY`).
+included — creates an editable `js-function` copy), **Test**, **Enable/Disable**,
+**Export** (v1.0.4, per-tool JSON download), and **Delete** (user tools only, behind a
+confirm dialog; built-ins are rejected `READ_ONLY`). The header actions dropdown adds
+**Import tool (JSON)…** and **Export all tools (JSON)** (v1.0.4).
+
+## Tool export / import as JSON (v1.0.4)
+
+Tools are portable: the exact function source travels with the tool as text, so a
+tool can be moved between registries (dev → prod, or between projects) without
+retyping code. Everything runs through the **existing** registry endpoints — there are
+no new API routes; validation, preview and conflict handling happen client-side in
+`src/lib/nexool/tool-portable.ts` + the Tools view.
+
+### Export format
+
+One tool = one JSON file (named `<tool-name>.json`; any characters outside letters,
+digits, dots, hyphens and underscores are replaced with `_`):
+
+```jsonc
+{
+  "nexool": { "kind": "nextool.tool", "version": 1, "appVersion": "1.0.4", "exportedAt": "…" },
+  "name": "utility.wordcount",
+  "description": "Counts words, characters or lines of a text.",
+  "purpose": "…",                     // optional, present when the tool has one
+  "category": "utility",
+  "environment": "js-function",        // js-function | dynamic
+  "toolVersion": "1.0.0",              // optional
+  "enabled": true,
+  "schema": { "type": "object", "properties": [ /* ToolParamDef[] — the real field names */ ] },
+  "functionSource": "async function execute(params, context) { … }",  // EXACT source, as text
+  "handlerKind": "…",                  // dynamic tools only
+  "handlerConfig": { … }               // dynamic tools only
+}
+```
+
+The `nexool` envelope is advisory metadata (read on import, not enforced).
+**Export all tools (JSON)** downloads `nextool-tools-<YYYY-MM-DD>.json` — an array of
+these single-tool objects. Bundle files are *export-only*: the importer accepts one
+tool at a time.
+
+### Import workflow
+
+**Import tool (JSON)…** runs this pipeline — nothing is registered until you confirm:
+
+1. **Parse** — must be valid JSON; arrays and `{ "tools": [...] }` bundles are rejected
+   with a pointed message ("import one tool at a time").
+2. **Client-side validation** (human-readable errors, shown in a rejection dialog):
+   - `name` — required, `namespace.action` regex (lowercase).
+   - `description` — required (the CoreModule matches on it).
+   - `environment` — must be `js-function` or `dynamic`; `builtin`/`virtual-env`
+     (read-only registry tools) are rejected with a "read-only" message — duplicate
+     them into a `js-function` tool instead.
+   - `functionSource` — required for `js-function`, ≤ 64 000 chars; a warning (not a
+     rejection) fires when no `execute(params, context)` definition is visible.
+   - `schema` — validated against the real param rules (`string|number|boolean|object|
+     array` types, `enumValues` must be an array, every param needs a name); a bare
+     param array (the register-dialog format) is tolerated.
+   - `dynamic` tools require `handlerKind` (`echo|delay|http_get|uuid`) and, when
+     present, an object `handlerConfig`.
+3. **Preview dialog** — name, environment, category, schema param count, description
+   and the full function source, plus any warnings, before you choose **Register tool**.
+4. **Conflict handling** — if the name already exists a dialog offers
+   **Replace existing tool** (`PUT /api/tools/{name}` with the imported definition),
+   **Import as copy** (auto non-conflicting name `base.copy`, then `base.copy-2`,
+   `base.copy-3` …) or **Cancel** — never a silent overwrite.
+5. **Registration** via the existing endpoints: `POST /api/tools/js` for
+   `js-function`, `POST /api/tools/register` for `dynamic`. The backend re-validates
+   everything (zod + function-source syntax via the sandbox compiler) and surfaces
+   `ALREADY_EXISTS` honestly if a race slipped past the conflict check.
+6. The imported tool appears in the registry and is fully editable in the Tool IDE
+   (its function loads into Monaco like any other `js-function` tool).
 
 ## Parameter generation: extractive vs constructive
 
@@ -191,7 +259,8 @@ Then give the runtime a goal task:
 
 ```bash
 curl -X POST http://localhost:3000/api/tasks -H 'Content-Type: application/json' \
-  -d '{ "request": "Check whether the deployment of service web finished successfully" }'
+  -d '{ "request": "Check whether the deployment of service web finished successfully",
+        "config": { "mode": "goal", "enabledTools": ["deploy.health"] } }'
 ```
 
 The Planner includes `deploy.health` in its tool inventory; CoreModule matches the

@@ -14,8 +14,9 @@ a zustand store. No routing library, no other pages.
 
 `src/components/console/console-app.tsx` composes:
 
-- **Header** (glass shell): brand button (logo + `Q1 v1.0.3` tech badge),
-  `RuntimeConnectionStatus` pill, notification bell with unread badge and dropdown.
+- **Header** (glass shell): brand button (the real NexTool logo via `BrandLogo` +
+  `Q1 v1.0.4` tech badge), `RuntimeConnectionStatus` pill, notification bell with unread
+  badge and dropdown.
 - **Navigation**: desktop glass sidebar (12 items + a conditional *Task Preview* entry
   showing the short id once a task is selected); mobile bottom nav (see
   [Mobile](mobile.md)); view transitions via framer-motion `AnimatePresence`.
@@ -24,6 +25,24 @@ a zustand store. No routing library, no other pages.
   `min-h-screen flex-col + mt-auto` pattern so it sits at the bottom on every screen.
 - **Toaster** (sonner) for operation feedback.
 
+## Brand logo (`brand-logo.tsx`, v1.0.4)
+
+The product identity is the **real NexTool logo**, sourced from the active icon
+package — the same package that feeds the favicon:
+
+- `useBrandLogoUrl()` fetches the active branding manifest once from `GET /api/icons`
+  (module-level cache + shared listeners — navigating between views never refetches,
+  and every `BrandLogo` instance updates together) and picks the best square PNG in
+  preference order `apple-touch-icon.png` → `icon-192.png` → `icon-512.png` →
+  `icon-32.png` → `icon-16.png` (any other sized PNG as last resort, never the `.ico`).
+- **`BrandLogo`** renders it as a rounded `size-7` tile (glow, `object-cover`); when no
+  package is active (or while loading) it renders a plain **N** monogram tile on the
+  brand gradient — typography only, deliberately **not** a recreated logo.
+- Usage sites: header brand button, mobile menu sheet header, mobile More-sheet header,
+  and the Tool IDE loading card. Functional nav icons (Wrench, Activity, …) are
+  unchanged — only the brand tile is the logo. The browser-tab favicon continues to
+  come from `layout.tsx` `generateMetadata` (unchanged mechanism).
+
 ## The 16 views
 
 `ConsoleView` union in `console-store.ts` — each a file in `views/`:
@@ -31,29 +50,29 @@ a zustand store. No routing library, no other pages.
 | View | File | Purpose |
 | --- | --- | --- |
 | Dashboard | `dashboard.tsx` | Metric cards, latency area chart, recent tasks → preview, recent events. |
-| Task Console | `task-console.tsx` | Create tasks: request, mode + live opt-in, L1–6, memory switch, limits (incl. v1.0.3 "Parallel tool calls" toggle + "Max parallel calls" in Execution limits), tool multi-select. |
+| Task Console | `task-console.tsx` | Create tasks: request, mode + live opt-in, L1–6, memory switch, limits (incl. v1.0.3 "Parallel tool calls" toggle + "Max parallel calls" in Execution limits), tool multi-select — **required** since v1.0.4 ("Tool selection *" label, amber "required — select at least 1" hint, submit blocked with "Select at least one tool before running the task."); compact quick-fill examples on their own wrapping row (v1.0.4). |
 | Task Preview | `task-preview.tsx` | Dedicated per-task screen: badges, stop/send-event/feedback dialogs, live checklist/timeline **while the task is active** (removed + replaced by *Final task output* on terminal states — v1.0.3), plan-as-checklist, parallel-batch grouping, executions, MainState JSON, 5 context panels, events timeline, runtime terminal (+ *Preview as Terminal* toggle). |
 | Live Monitor | `live-monitor.tsx` | Live tasks (3 s polls), fleet with injections, filtered event terminal, terminal preview toggle. |
-| Tools | `tools.tsx` | Registry grid, enable switches, stats, schema accordions, register dialog; v1.0.2 grid actions (New Tool / Edit / Duplicate / Test / Enable/Disable / Delete). |
-| Tool IDE | `tool-editor.tsx` | v1.0.2: Monaco JS editor (`nextool-dark` theme), schema editor, IntelliSense, References pane, test panel — see [Tool Development](../tools/tool-development.md). v1.0.3: definite editor heights at every breakpoint (420 px mobile/tablet; `lg` fills the viewport with a 480 px floor) — the editor no longer collapses on mobile. |
+| Tools | `tools.tsx` | Registry grid, enable switches, stats, schema accordions, register dialog; grid actions (New Tool / Edit / Duplicate / Test / Enable/Disable / Delete); v1.0.4 per-tool **Export** + dropdown **Import tool (JSON)…** / **Export all tools (JSON)** with preview + conflict dialogs — see [Tools](../tools/tools.md). |
+| Tool IDE | `tool-editor.tsx` | v1.0.2: Monaco JS editor (`nextool-dark` theme), schema editor, IntelliSense, References pane, test panel — see [Tool Development](../tools/tool-development.md). v1.0.3: definite editor heights at every breakpoint. v1.0.4: `source` state is the single source of truth (Monaco controlled + writes back); save/test read the code directly from the Monaco model via a live editor ref; in-editor **Duplicate** registers a copy instead of renaming the original; per-session remount on tool switch. |
 | Training | `training.tsx` | v1.0.2: dataset + config picker, per-epoch metrics table, streamed log lines, job history, cancel/delete. |
 | Benchmark | `benchmark.tsx` | v1.0.2: dataset + model-key picker, metrics cards, per-case results table, run history. |
 | Memory | `memory.tsx` | Persistent Memory CRUD vs Live State explainer. |
 | Live State | `live-state.tsx` | Fleet banner + cards + injections (3 s refresh). |
 | Events | `events.tsx` | Filterable event stream: source, type search, priority ≥ slider, expandable rows. |
 | History | `history.tsx` | 100-entry table, filters, expandable params/result. |
-| Models | `models.tsx` | Active engine card, adapters panel, packages + manifests, load dialog, export dropdown + import model dialog (v1.0.2). |
+| Models | `models.tsx` | Active engine card, adapters panel, packages + manifests, load dialog, export dropdown + import model dialog (v1.0.2); v1.0.4 responsive header — title/description then full-width stacked *Export Current Model* + *Import model* buttons on mobile (`min-h-11 w-full` → `sm:min-h-9 sm:w-auto`), unchanged multi-column layout on desktop. |
 | Datasets | `datasets.tsx` | Split bars, example-schema panel, import dialog (JSON paste/file **or binary `.parquet` upload** — cyan selected-file panel, multipart), separate **JSON** and **Parquet** export buttons per card, cyan parquet format badge, delete. |
 | Docs | `docs.tsx` | Built-in documentation reader (search, category index, two-pane). |
-| Settings | `settings.tsx` | Bound settings form, unsaved-changes badge, SSE transport locked note; v1.0.3 "Parallel tool calls by default" + "Max parallel calls"; v1.0.2 *Branding & icons* section (upload → validate → preview → Apply; skipped entries listed). |
+| Settings | `settings.tsx` | Bound settings form, unsaved-changes badge, SSE transport locked note; v1.0.3 "Parallel tool calls by default" + "Max parallel calls". v1.0.4: the *Branding & icons* card was **removed** from the UI — the icon infrastructure itself (uploads, `/api/icons`, staging/activation, favicon serving, the in-app `BrandLogo`) remains fully functional; manage packages via the API (see [Deployment](deployment.md)). |
 
 Shared widgets live in `ui-bits.tsx` (StatusChip, SourceDot, TypeChip, EventRow,
 JsonBlock, MetricCard, SectionTitle, EmptyState, ErrorCard, SkeletonBlock, PulsingDot,
 TimeAgo, formatters + the v1.0.2 derivation helpers), `server-card.tsx` (fleet card),
-`terminal.tsx` (runtime terminal), `json-tree.tsx`/`json-theme.ts` (JSON viewer) and
-`task-checklist.tsx` (live checklist/timeline). Every view follows the same discipline:
-skeletons while loading, honest empty states, error cards with retry, and full cleanup on
-unmount.
+`terminal.tsx` (runtime terminal), `json-tree.tsx`/`json-theme.ts` (JSON viewer),
+`brand-logo.tsx` (v1.0.4 brand identity — see above) and `task-checklist.tsx` (live
+checklist/timeline). Every view follows the same discipline: skeletons while loading,
+honest empty states, error cards with retry, and full cleanup on unmount.
 
 ## Dynamic runtime status, terminal and checklist (v1.0.2)
 
@@ -72,6 +91,10 @@ bar all consume it (single source of truth; pages cannot invent statuses).
   `[!]` failed, `[~]` waiting. Derived from the actual `PlanStep[]` (or real task events
   when no plan exists). A progress % renders only when a meaningful percentage exists
   (plan-based); otherwise the bar is indeterminate — never an invented number.
+  v1.0.4: the vertical timeline rail that used to run alongside the steps was removed —
+  `ChecklistItems` is now a clean checklist/card structure; **all** states, the moving
+  highlight, the completion pulse and the spring glyph are unchanged, and
+  `deriveChecklist` remains the single state source.
 - **Preview as Terminal toggle** — Task Preview (and Live Monitor) can switch the
   visualization to a terminal; **OFF is the default** and the choice persists in
   `localStorage` (`nextool.previewAsTerminal`). Both views consume the same runtime
@@ -105,12 +128,22 @@ partial_failure`, `subgoal.created`) trigger an instant detail + executions refr
   executions sharing a `batchId` render inside one labeled group card:
   "parallel batch · N concurrent".
 
-## JSON tree viewer (v1.0.2)
+## JSON tree viewer (v1.0.2, theme fixed in v1.0.4)
 
 All JSON is rendered by ONE consistent viewer (`json-tree.tsx`, built on
 `@uiw/react-json-view` with a NexTool theme): expand/collapse (default depth 2), copy
 support, long strings wrap instead of breaking layout, containers scroll inside a capped
 height. Every previous `JSON.stringify` dump was replaced by it.
+
+**v1.0.4 root cause + fix** (`json-theme.ts` rewritten): the installed library version
+(2.0.0-alpha.43) reads `--w-rjv-*` CSS custom properties **only**. The old theme set
+`--json-tree-*` variables, which the library ignores — so every syntax color silently
+fell back to the library default `#002b36` (near-black), almost invisible on the dark
+`.glass-inset` background. The theme now sets the real `--w-rjv-*` tokens with a bright
+dark-console palette: keys bright sky (lightness ≥ 0.88), strings bright green, ints /
+floats amber, booleans orange, null rose, undefined slate, braces/brackets cyan, arrows
+sky; the background stays transparent so the `.glass-inset` well shows through. The
+component itself is unchanged (copy support, collapsed depth 2, wrapped long strings).
 
 ## State management
 

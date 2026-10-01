@@ -17,7 +17,7 @@ Exactly what `tf.loadLayersModel` consumes, plus a NexTool metadata sidecar:
 
 ```
 model.zip
-├── model.json               ← { modelTopology, weightsManifest, format: "tfjs-layers-model", generatedBy: "NexTool Q1 v1.0.3" }
+├── model.json               ← { modelTopology, weightsManifest, format: "tfjs-layers-model", generatedBy: "NexTool Q1 v1.0.4" }
 ├── group1-shard1of1.bin     ← raw weight payload (referenced by weightsManifest paths)
 └── metadata.json            ← ExportedModelMetadata (below)
 ```
@@ -47,7 +47,7 @@ Download name: `<packageName>-v<version>.nextool` (served as
 | Field | Content |
 | --- | --- |
 | `packageName` | ModelRecord name |
-| `applicationVersion` | the exporting app's `APP_VERSION` (e.g. `1.0.3`) |
+| `applicationVersion` | the exporting app's `APP_VERSION` (e.g. `1.0.4`) |
 | `modelVersion` | ModelRecord version (e.g. `tc-…` for trained classifiers) |
 | `architecture` | `tfjs-sequential` / `tfjs-model` (from topology `className`) or the manifest's architecture string |
 | `parameterCount` | Sum of weight-shape products |

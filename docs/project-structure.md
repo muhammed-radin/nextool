@@ -15,7 +15,7 @@ nextool-q1/
 ├── prisma/schema.prisma       ← 12-model SQLite schema
 ├── db/custom.db               ← SQLite database file (DATABASE_URL target)
 ├── scripts/nextool.ts         ← CLI entry (commander; shares the service layer)
-├── tests/                     ← sandbox-infrastructure checks (shell scripts, NOT app tests)
+├── tests/                     ← bun test suites (*.test.ts) + sandbox-infrastructure shell scripts
 ├── exports/                   ← model packages written by `nextool model export -o ./exports/…`
 ├── public/
 │   ├── generated/             ← images produced by image.generate (PNG)
@@ -38,14 +38,14 @@ nextool-q1/
 
 | Path | Purpose |
 | --- | --- |
-| `package.json` | `nextool-q1` v1.0.3. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (v1.0.2), `@dsnp/parquetjs` **1.8.9 pinned** (v1.0.3 Parquet adapter), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view`, `commander` (CLI), `fflate` (zip packaging). |
+| `package.json` | `nextool-q1` v1.0.4. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (v1.0.2), `@dsnp/parquetjs` **1.8.9 pinned** (v1.0.3 Parquet adapter), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view` 2.0.0-alpha.43 (JSON tree — reads `--w-rjv-*` tokens only), `commander` (CLI), `fflate` (zip packaging). |
 | `next.config.ts` | `output: "standalone"` (production server bundle), `reactStrictMode: false`, `typescript.ignoreBuildErrors: true`, `serverExternalPackages: ["@dsnp/parquetjs"]` (v1.0.3 — the Parquet adapter is required from node_modules at runtime, not bundled). |
 | `tsconfig.json` | Standard Next.js TS config with `@/*` path alias → `src/*`. |
 | `.env` | Only `DATABASE_URL`. Never committed, values never documented. |
 | `Caddyfile` | Sandbox infrastructure (local reverse proxy) — not part of the application. |
-| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions, v1.0.3 updates. |
+| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions, v1.0.3 updates, v1.0.4 refinements. |
 | `scripts/nextool.ts` | The CLI (`nextool train / benchmark / model / dataset / tool / runtime / version`). Directly imports the same service modules the API routes use. |
-| `tests/*.sh` | Sandbox-infrastructure verification scripts (e.g. a fake-bun harness for `db:push`); they test the hosting environment, not the application. No `*.test.ts` files exist. |
+| `tests/*.sh` | Sandbox-infrastructure verification scripts (e.g. a fake-bun harness for `db:push`); they test the hosting environment, not the application. The `*.test.ts` files (`nextool-v102/v103/v104`) ARE app tests — see [Testing](testing.md). |
 
 ## prisma/schema.prisma
 
@@ -72,12 +72,13 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | --- | --- | --- |
 | `types.ts` | All domain types: ToolDefinition, CoreModuleOutput, MainState, TaskConfig, NexToolEvent, GlobalLiveState, ContextComposition, SystemStats, ApiEnvelope… | (binding contract) |
 | `api-contract.ts` | REST contract comment + DTOs (`TaskDetail`, `ToolEntry`, `MemoryEntryDTO`…) | `types.ts` |
-| `version.ts` | `APP_VERSION` 1.0.3, `RELEASE_NAME`, `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0, SSE constants | everything reads this |
+| `version.ts` | `APP_VERSION` 1.0.4, `RELEASE_NAME`, `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0, SSE constants | everything reads this |
 | `eventbus.ts` | Global event manager: `emitEvent`, `subscribe`, `recentEvents`, `queryEvents`, SSE controller registry, runtime metrics (`coreCalls`, latency series) | db, types |
 | `settings.ts` | `DEFAULT_SETTINGS`, cached `getSettings`, clamping `updateSettings` | db |
 | `schemas.ts` | zod schemas for every mutating endpoint (tasks, tools incl. `registerJsToolSchema`/`updateToolSchema`/`testToolSchema`, training, benchmark, memory, datasets, settings) | zod |
 | `branding.ts` | v1.0.2 icon packages: zip validation (PNG IHDR parsing, safe names, size caps), staging/activation under `public/icons/<packageId>/` | fflate, db |
 | `tool-runtime-declarations.ts` | v1.0.2 Monaco `extraLib` + References-pane source for the js-function sandbox (one declaration module for both) | types |
+| `tool-portable.ts` | v1.0.4 tool portability (pure, dependency-free): `exportToolJson`/`exportToolsJson` (portable envelope, function source as text), `parseToolImport`, `validateImportedTool`, `validateSchemaJson`, `proposeCopyName`; shared by the Tools view and the unit tests | types, api-contract |
 | `environment.ts` | Virtual server fleet state machine: drift/crash/degrade/recover/restart, `getGlobalLiveState` | eventbus |
 | `api-helpers.ts` | `ok()` / `fail()` ApiEnvelope responses, `readJson` | types |
 | `docs.ts` | Docs loader: front-matter parse, SAFE_SLUG anti-traversal, `listDocs`/`readDoc` | filesystem `docs/` |
@@ -122,13 +123,14 @@ Binding data model (SQLite). Everything in the runtime persists here:
 
 | File | Contents |
 | --- | --- |
-| `console-app.tsx` | Shell: header (brand, RuntimeConnectionStatus, bell), glass sidebar, mobile bottom nav + More sheet, status bar, view switching with AnimatePresence. |
+| `console-app.tsx` | Shell: header (brand, RuntimeConnectionStatus, bell), glass sidebar, mobile bottom nav + More sheet, status bar, view switching with AnimatePresence; v1.0.4 renders the real `BrandLogo` in the brand button + sheet headers, and remounts the Tool IDE route per session (`key=toolEditorKey`) so editor state always re-initializes. |
 | `console-store.ts` | Zustand: `activeView` (16 views incl. `tool-editor`, `training`, `benchmark`), `selectedTaskId`, `openTaskPreview`, `openToolEditor` / `closeToolEditor`. |
 | `providers.tsx` | `SystemStatsProvider` (5 s poll), `GlobalStreamProvider` (one SSE, 15 min replay), `NotificationsProvider` (10 s poll). |
 | `runtime-connection-status.tsx` | Accessible connection pill + details popover (5 states, retry countdown, reconnect button). |
 | `ui-bits.tsx` | StatusChip, SourceDot, TypeChip, EventRow, JsonBlock, MetricCard, EmptyState, ErrorCard, formatters — plus `deriveTaskRuntime` / `terminalStatusLine` / `deriveChecklist` (v1.0.2 status + checklist derivation, one source of truth). |
-| `json-tree.tsx` + `json-theme.ts` | v1.0.2 ONE consistent JSON tree viewer (@uiw/react-json-view, NexTool-themed, expand depth 2, copy, wrapped long strings). |
-| `task-checklist.tsx` | v1.0.2 Live Mode checklist/timeline (Aceternity-style): `[✓] [-] [ ] [!] [~]` states from the real plan/events, percent only when meaningful. |
+| `json-tree.tsx` + `json-theme.ts` | v1.0.2 ONE consistent JSON tree viewer (@uiw/react-json-view, expand depth 2, copy, wrapped long strings). v1.0.4: theme rewritten with the library's real `--w-rjv-*` tokens (the old `--json-tree-*` names were ignored → near-black default colors). |
+| `brand-logo.tsx` | v1.0.4 product identity: `BrandLogo` + `useBrandLogoUrl` — the real NexTool logo from the active icon package (module-level cache; `apple-touch-icon.png` → `icon-192` → `icon-512` → `icon-32` → `icon-16` preference), plain "N" monogram fallback. |
+| `task-checklist.tsx` | v1.0.2 Live Mode checklist/timeline (Aceternity-style): `[✓] [-] [ ] [!] [~]` states from the real plan/events, percent only when meaningful. v1.0.4: the vertical timeline rail was removed — clean checklist/card rows, states and animations unchanged. |
 | `terminal.tsx` | Runtime terminal surface — v1.0.2: dynamic status line from `deriveTaskRuntime` (no hardcoded prompt), real event lines, blinking cursor only while a tool runs. |
 | `server-card.tsx` | Fleet card with CPU/memory bars and Crash/Degraded/Recover injections. |
 | `views/*.tsx` | dashboard, task-console, task-preview, live-monitor, tools, tool-editor, memory, live-state, events, history, models, datasets, training, benchmark, docs, settings. |

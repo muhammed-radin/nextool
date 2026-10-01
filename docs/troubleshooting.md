@@ -70,6 +70,26 @@ data or dependency problems, and every message says which.
 | `Parquet row N: split must be one of train \| validation \| test` | Invalid `split` value in that row | Use exactly `train`, `validation` or `test` (blank defaults to `train`). |
 | Large imports/exports rejected | Caps: **5000 examples** per dataset, **25 MiB** multipart upload limit | Split the file; both caps mirror the JSON import limits. |
 
+## JSON tree visibility (v1.0.4 fix)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| JSON syntax colors are all near-black (#002b36-ish) on the dark glass wells — keys/strings barely readable | The theme set `--json-tree-*` variables, but the installed `@uiw/react-json-view` (2.0.0-alpha.43) reads **only** `--w-rjv-*` custom properties, so everything fell back to the library's dark default | Fixed in v1.0.4 (`src/components/console/json-theme.ts` rewritten with the real `--w-rjv-*` tokens). If you reintroduce a theme, use only `--w-rjv-*` names; a `bun test` guard checks the namespace |
+| Single values/primitives show as plain text, not a tree | By design — primitives render as formatted text in the inset well (`json-tree.tsx`) | Not a bug |
+
+## Tool import problems (v1.0.4)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| "The file contains an array — import one tool at a time" | An *Export all tools* bundle was fed to **Import tool (JSON)** | Import one tool per file; export a single tool to get the right shape |
+| "Not a tool definition — expected a single JSON object …" | The file is not a portable tool JSON (wrong export, hand-written file) | Export a tool from the Tools view to see the expected format (see [Tools](../tools/tools.md#tool-export--import-as-json-v104)) |
+| `"environment" must be "js-function" or "dynamic" … read-only registry tools` | The file carries `environment: "builtin"` or `"virtual-env"` | Built-in / virtual-env tools cannot be imported (they are read-only code); duplicate one into a `js-function` tool in the Tool IDE, then export that |
+| `"functionSource" is required for js-function tools` | Export source was edited by hand and lost the source | Re-export from a working registry; the function source travels **as text** |
+| `"functionSource" exceeds the 64,000 character sandbox limit` | Source longer than the js-function cap | Split the tool or move heavy logic into a dynamic handler / built-in |
+| Warning: "does not visibly define execute(params, context)" | The source may not define the `execute` entry point the sandbox calls | Warning only — check the code; the sandbox invokes `execute()` |
+| Import dialog says "Tool already exists" | A registry tool already uses that name | Choose **Replace existing tool** (PUT overwrite), **Import as copy** (auto `base.copy`, `base.copy-2` … name), or **Cancel** — nothing is overwritten without confirmation |
+| Import rejected after preview with `REGISTER_FAILED` / syntax error | The backend re-validates source syntax with the real sandbox compiler | Fix the function source; the console editor shows the same compile error on save |
+
 ## DB issues
 
 | Symptom | Cause | Fix |

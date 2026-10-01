@@ -167,7 +167,7 @@ HTTP-dependent behaviors care about the running console.
 nextool version
 ```
 
-Prints the three separate version lines: application version (1.0.3), model version
+Prints the three separate version lines: application version (1.0.4), model version
 (llm-core 1.0.0, the decision unit) and dataset version (latest imported dataset, or
 `- none imported`).
 

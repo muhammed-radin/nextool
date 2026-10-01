@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.3** — release name: *"Task Output Cleanup, Checklist State, Monaco Fix, Parquet Support, Icons & Parallel Tool Configuration"* |
-| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2/v1.0.3 add tooling around it; trained classifier checkpoints carry their own versions) |
+| **Application version** | **1.0.4** — release name: *"UI Refinements, Tool Sync, Tool Import/Export & Responsive Improvements"* |
+| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2–v1.0.4 add tooling around it; trained classifier checkpoints carry their own versions) |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
@@ -42,8 +42,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | AI Core | [Benchmarks](benchmarks.md) | The real `tool-selection` benchmark: model keys, split preference, exact metric definitions, history. |
 | Modes | [Goal Mode](goal-mode.md) | Full lifecycle with sequence diagram and a real example. |
 | Modes | [Live Mode](live-mode.md) | Activation, intervals, event-driven wake, feedback, stopping. |
-| Tools | [Tools](tools.md) | Writing tools: definitions, handler kinds, registration paths (incl. Tool IDE), full example. |
-| Tools | [Tool Development](tool-development.md) | v1.0.2 Tool IDE: schema editor, IntelliSense, `js-function` sandbox contract, testing, worked example. |
+| Tools | [Tools](tools.md) | Writing tools: definitions, handler kinds, registration paths (incl. Tool IDE), JSON export/import (v1.0.4), full example. |
+| Tools | [Tool Development](tool-development.md) | v1.0.2 Tool IDE: schema editor, IntelliSense, `js-function` sandbox contract, testing, editor↔code sync (v1.0.4), worked example. |
 | Tools | [Tool Runtime](tool-runtime.md) | Async execution, parallel groups, timeouts, failure/cancel states. |
 | Data | [Memory](memory.md) | Persistent Memory vs Live State — storage, retrieval, lifecycle. |
 | Data | [Live State](live-state.md) | Virtual server fleet, runtimeStatus, counters. |
@@ -51,51 +51,84 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Data | [History](history.md) | HistoryEntry records, retention, querying. |
 | Realtime | [Realtime](realtime.md) | SSE protocol, connection states, backoff policy, frontend wiring. |
 | API | [API Reference](api.md) | Every endpoint: method, path, request/response, errors, curl. |
-| Frontend | [Frontend](frontend.md) | SPA shell, 16 views, dynamic terminal/checklist, JSON tree, zustand + providers. |
-| Frontend | [UI Design System](ui.md) | Blue-gradient glassmorphism layers, typography, do-not rules. |
+| Frontend | [Frontend](frontend.md) | SPA shell, 16 views, real brand logo, dynamic terminal/checklist, JSON tree, zustand + providers. |
+| Frontend | [UI Design System](ui.md) | Blue-gradient glassmorphism layers, typography, JSON-tree theme, do-not rules. |
 | Frontend | [Mobile & Responsive](mobile.md) | Bottom nav, safe areas, breakpoints, touch targets, priority layouts. |
 | Operations | [Deployment](deployment.md) | Env vars, standalone build/start, proxies, CLI availability, model/icon artifacts. |
 | Operations | [CLI](cli.md) | v1.0.2 `nextool` reference: train, benchmark, model, dataset (JSON + Parquet), tool, runtime, version. |
-| Operations | [Testing](testing.md) | Manual verification workflows + lint; no automated suite (stated). |
+| Operations | [Testing](testing.md) | `bun test` unit suite (56 tests / 200 assertions) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
 
-## What's new in v1.0.3
+## What's new in v1.0.4
+
+- **The real NexTool logo in-app** — a new `BrandLogo` component
+  (`src/components/console/brand-logo.tsx`) renders the product identity from the
+  **active icon package** (fetched once from `GET /api/icons`; prefers
+  `apple-touch-icon.png` → `icon-192.png` → `icon-512.png` → `icon-32.png` →
+  `icon-16.png`). Used by the header brand button, the mobile menu sheet header, the
+  More-sheet header and the Tool IDE loading card. Without an active package it falls
+  back to a plain **N** monogram tile on the brand gradient — deliberately not a
+  recreated logo. Functional nav icons are unchanged; the browser-tab favicon keeps
+  coming from `layout.tsx` `generateMetadata`. See [Frontend](frontend.md) and [UI](ui.md).
+- **JSON tree readability fix** — the installed `@uiw/react-json-view` (2.0.0-alpha.43)
+  reads `--w-rjv-*` CSS custom properties **only**; the previous theme set
+  `--json-tree-*` variables the library ignores, so every syntax color silently fell
+  back to the library default `#002b36` (near-black — almost invisible on the dark
+  glass background). The theme now uses the real `--w-rjv-*` tokens with a bright
+  dark-console palette: keys bright sky, strings bright green, numbers amber,
+  booleans orange, null rose, braces cyan, transparent background. See
+  [Frontend](frontend.md) and [Troubleshooting](troubleshooting.md).
+- **Tool code ↔ Monaco sync + non-destructive Duplicate** — at save **and** test time
+  the function code is read directly from the Monaco model through a live editor ref,
+  so the exact on-screen code is saved (never a stale React state value). The
+  in-editor **Duplicate** button no longer renames the original (the old behavior was
+  destructive); it switches the session into register-a-copy mode — the copy keeps the
+  exact function code + schema and Save POSTs a **new** tool. Switching tools remounts
+  the editor so state always re-initializes from the freshly loaded definition. See
+  [Tool Development](tool-development.md).
+- **Tool export / import (JSON)** — every tool can be exported as a portable JSON file
+  (function source preserved **as text**), and Tools gains **Import tool (JSON)** +
+  **Export all tools (JSON)**. Import validates client-side (name, description,
+  environment, source ≤ 64 000 chars, schema), shows a preview, and resolves name
+  conflicts explicitly (Replace / Import as copy / Cancel — never silent overwrite).
+  Built on the existing registry endpoints — no new API routes. See
+  [Tools](tools.md).
+- **Tasks require at least one tool** — the Task Console blocks submission without a
+  tool selection ("Select at least one tool before running the task."), and
+  `POST /api/tasks` enforces it server-side: a missing or empty `config.enabledTools`
+  fails with 400 `TOOLS_REQUIRED` (the zod schema also rejects an explicit empty
+  array). Defense in depth: frontend + zod + route. See [API](api.md) and
+  [Configuration](configuration.md).
+- **UI refinements** — Models header stacks its full-width *Export Current Model* /
+  *Import model* buttons on mobile (unchanged on desktop); Task Console examples get
+  their own title row with compact wrapping quick-fill buttons; the plan checklist
+  drops the vertical timeline rail (clean card rows — all checklist states and
+  animations unchanged); the Settings **Branding & icons** card was removed (the icon
+  system itself — `/api/icons`, staging/activation, favicon serving, the in-app logo —
+  remains fully functional; manage packages via the API). See [Frontend](frontend.md),
+  [Mobile](mobile.md) and [Deployment](deployment.md).
+
+### What v1.0.3 delivered (condensed)
 
 - **Real Parquet interchange** — the Parquet adapter is installed (`@dsnp/parquetjs`
-  **1.8.9**, pinned — see [Datasets](datasets.md)). `POST /api/datasets/import` accepts
-  multipart `.parquet` uploads, `GET /api/datasets/{id}/export?format=parquet` returns a
-  binary download, the CLI reads/writes `.parquet`, and `/api/models` now reports
-  `adapters.parquet: true`. Columnar Parquet is the efficient interchange format for
-  larger datasets; JSON stays the human-readable default.
-- **Parallel tool calls configuration** — new explicit `parallelToolCalls` (default on)
-  and `maxParallelToolCalls` (1–8, default 4) settings, overridable per task. The goal
-  loop batches ≥ 2 consecutive independent action steps (same `parallelGroup`) and
-  executes them concurrently via `executeParallelBatch` — capped waves, one sibling
-  failing never cancels the others, `planner.parallel_batch` / `planner.partial_failure`
-  events, and batch provenance on executions ("parallel batch" group cards in Task
-  Preview). See [Configuration](configuration.md), [Planner](planner.md),
-  [Tool Runtime](tool-runtime.md).
-- **Task output cleanup** — the Live Checklist/Terminal area in Task Preview exists only
-  while the task is active; on a terminal state it is removed entirely and replaced by a
-  **Final task output** section (runtime-recorded summary, result status/steps/tool
-  calls/duration tiles, artifacts, full FinalResult JSON). The mobile Timeline terminal
-  hides after completion too. See [Frontend](frontend.md).
-- **Plan is a live checklist** — the Task Preview plan section uses the same
-  `deriveChecklist` states and animated `ChecklistItems` as the Live checklist
-  (`[✓] [-] [ ] [!] [~]`), and plan/checklist refresh immediately when tool/task events
-  arrive over SSE (no waiting for the 2.5 s poll).
-- **Tool IDE Monaco fix** — the Function editor gets definite heights at every
-  breakpoint (420 px mobile/tablet; `lg` fills the available viewport with a 480 px
-  floor) — it no longer collapses to ~1 px on mobile.
-- **Icons: favicon-generator aliases** — the icons ZIP upload also accepts common
-  favicon-generator filenames (`favicon-16x16.png` → `icon-16.png`, `android-chrome-*`,
-  `apple-touch-icon-*.png`, …); `site.webmanifest`/`manifest.json`/`browserconfig.xml`
-  entries are skipped and returned in a new `ignored` list instead of rejected. Real PNG
-  dimension validation and the staged → preview → activate flow are unchanged
+  **1.8.9**, pinned — see [Datasets](datasets.md)): multipart `.parquet` import, binary
+  export, CLI support, `adapters.parquet: true`.
+- **Parallel tool calls configuration** — `parallelToolCalls` (default on) and
+  `maxParallelToolCalls` (1–8, default 4), per-task overridable; capped waves via
+  `executeParallelBatch`, `planner.parallel_batch` / `planner.partial_failure` events,
+  batch provenance on executions. See [Tool Runtime](tool-runtime.md).
+- **Task output cleanup** — the Live Checklist/Terminal area exists only while the task
+  is active; terminal states show a **Final task output** section instead.
+- **Plan is a live checklist** — same `deriveChecklist` states and animated
+  `ChecklistItems` in the plan section, with immediate SSE-driven refresh.
+- **Tool IDE Monaco fix** — definite editor heights at every breakpoint (420 px mobile;
+  `lg` fills the viewport with a 480 px floor).
+- **Icons: favicon-generator aliases** — `favicon-16x16.png`-style names are aliased to
+  canonical `icon-<size>.png` names; metadata files are skipped into an `ignored` list
   (see [Deployment](deployment.md) and [API](api.md)).
 
 ### What v1.0.2 delivered (condensed)
@@ -114,7 +147,8 @@ Pages are also readable inside the console under **Documentation** (served by
 - **Runtime UX** — event-derived terminal status, animated checklist/timeline,
   *Preview as Terminal* toggle, one consistent JSON tree viewer.
 - **Branding & icons** — icons.zip upload with real PNG validation, staged → preview →
-  Apply, served via `generateMetadata`.
+  activate, served via `generateMetadata`. (The Settings card for it was removed in
+  v1.0.4; the pipeline itself remains and now also feeds the in-app logo.)
 
 ### Carried over from v1.0.1
 

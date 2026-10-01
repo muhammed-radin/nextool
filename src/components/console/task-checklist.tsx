@@ -50,8 +50,10 @@ const STATE_STYLE: Record<string, { ring: string; text: string; glyph: string; b
  */
 export function ChecklistItems({ items, finished }: { items: ChecklistItem[]; finished: boolean }) {
   return (
-    <ol className="relative space-y-1.5" aria-label="Task checklist">
-      <span aria-hidden className="absolute bottom-3 left-[13px] top-3 w-px bg-white/[0.08]" />
+    <ol className="space-y-1.5" aria-label="Task checklist">
+      {/* v1.0.4 §25-26: the vertical timeline rail that used to run alongside
+          these steps was REMOVED — the Plan section is a clean checklist/card
+          structure. All step states (§27) and animations are unchanged. */}
       {items.map((item, idx) => {
         const style = STATE_STYLE[item.state] ?? STATE_STYLE.pending;
         const isRunning = item.state === 'running';

@@ -35,6 +35,14 @@ export async function POST(req: Request) {
     config.reasoningLevel = body.reasoningLevel as TaskConfig['reasoningLevel'];
   }
 
+  // v1.0.4 §23/§24 — BACKEND tool-selection validation (defense in depth):
+  // every task must carry at least one selected tool. The zod schema already
+  // rejects an explicit empty array; this check rejects a MISSING list too,
+  // so raw API calls cannot bypass the console's requirement.
+  if (!Array.isArray(config.enabledTools) || config.enabledTools.length < 1) {
+    return fail('TOOLS_REQUIRED', 'Select at least one tool before running the task.', 400);
+  }
+
   try {
     const detail = await createTask(body.request, config);
     return ok(detail, 201);

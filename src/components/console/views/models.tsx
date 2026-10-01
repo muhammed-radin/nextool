@@ -119,40 +119,47 @@ export default function ModelsView() {
 
   return (
     <div className="space-y-6">
-      <SectionTitle
-        icon={<Box className="size-4 text-sky-300" aria-hidden />}
-        title="Models"
-        desc="Active decision engine, adapter availability and registered .nextool packages."
-        right={
-          <div className="flex items-center gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" className="min-h-9 gap-1.5 border-sky-400/30 bg-sky-400/[0.07] text-sky-300 hover:bg-sky-400/10" disabled={!hasExportable}>
-                  <Download className="size-3.5" aria-hidden /> Export Current Model
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="glass-strong min-w-64">
-                <DropdownMenuLabel className="font-tech text-[9px] uppercase tracking-widest text-sky-300/70">export current model</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {(info?.packages ?? []).filter(isExportable).map((p) => (
-                  <div key={p.id} className="px-1 py-0.5">
-                    <p className="px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{p.name} v{p.version}</p>
-                    <DropdownMenuItem onClick={() => exportPackage(p.id, 'tfjs')}>
-                      <Download className="size-3.5" aria-hidden /> native TFJS (model.json + .bin zip)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => exportPackage(p.id, 'nextool')}>
-                      <Download className="size-3.5" aria-hidden /> .nextool package
-                    </DropdownMenuItem>
-                  </div>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button size="sm" className="bg-primary-gradient min-h-9 gap-1.5 text-primary-foreground hover:opacity-90" onClick={() => setLoadOpen(true)}>
-              <Upload className="size-3.5" aria-hidden /> Import model
-            </Button>
-          </div>
-        }
-      />
+      {/* v1.0.4 §9-10 — responsive header: vertical (title / description /
+          buttons stacked) on mobile, horizontal on desktop. Buttons keep a
+          usable width and never squeeze or overlap. */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight text-foreground">
+            <Box className="size-4 text-sky-300" aria-hidden />
+            Models
+          </h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Active decision engine, adapter availability and registered .nextool packages.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:shrink-0">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="min-h-11 w-full gap-1.5 border-sky-400/30 bg-sky-400/[0.07] px-4 text-sky-300 hover:bg-sky-400/10 sm:min-h-9 sm:w-auto" disabled={!hasExportable}>
+                <Download className="size-3.5" aria-hidden /> Export Current Model
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="glass-strong min-w-64">
+              <DropdownMenuLabel className="font-tech text-[9px] uppercase tracking-widest text-sky-300/70">export current model</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {(info?.packages ?? []).filter(isExportable).map((p) => (
+                <div key={p.id} className="px-1 py-0.5">
+                  <p className="px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{p.name} v{p.version}</p>
+                  <DropdownMenuItem onClick={() => exportPackage(p.id, 'tfjs')}>
+                    <Download className="size-3.5" aria-hidden /> native TFJS (model.json + .bin zip)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => exportPackage(p.id, 'nextool')}>
+                    <Download className="size-3.5" aria-hidden /> .nextool package
+                  </DropdownMenuItem>
+                </div>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button size="sm" className="min-h-11 w-full gap-1.5 bg-primary-gradient px-4 text-primary-foreground hover:opacity-90 sm:min-h-9 sm:w-auto" onClick={() => setLoadOpen(true)}>
+            <Upload className="size-3.5" aria-hidden /> Import model
+          </Button>
+        </div>
+      </div>
 
       {error && info === null ? (
         <ErrorCard title="Model registry unavailable" message={error} onRetry={load} />

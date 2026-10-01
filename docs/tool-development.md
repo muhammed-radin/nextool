@@ -10,8 +10,11 @@ v1.0.2 adds a full in-console Tool IDE: author a JavaScript tool in Monaco, defi
 parameter schema, get schema-driven IntelliSense, test it in the real sandbox, and save
 it into the live registry. The execution environment is `js-function` — the tool **is**
 a JavaScript function (`async function execute(params, context)`) run inside a hardened
-`node:vm` sandbox. This page is the complete guide; the ToolDefinition schema, dynamic
-handler kinds and the built-in tools live in [Tools](tools.md).
+`node:vm` sandbox. v1.0.4 hardens the editor loop (the code you see is the code that is
+saved and tested) and makes **Duplicate** non-destructive; it also adds JSON
+export/import of tools (see [Tools](tools.md#tool-export--import-as-json-v104)). This
+page is the complete guide; the ToolDefinition schema, dynamic handler kinds and the
+built-in tools live in [Tools](tools.md).
 
 ## Entry points
 
@@ -156,6 +159,9 @@ return {
 ```
 
 **3. Test before saving** — press **Test Tool** (or call the API with unsaved source):
+(v1.0.4) the test always executes the code currently visible in Monaco — the editor
+model is read through a live editor ref, so unsaved edits are tested exactly as shown,
+never a stale cached value:
 
 ```bash
 curl -X POST http://localhost:3000/api/tools/test -H 'Content-Type: application/json' \
@@ -203,7 +209,10 @@ curl -X POST http://localhost:3000/api/tools/js -H 'Content-Type: application/js
 
 The source is syntax-validated server-side before registration; a broken source never
 becomes an active tool (`REGISTER_FAILED` with the syntax error). The tool lands in the
-real `ToolRecord` registry with `environment: 'js-function'`.
+real `ToolRecord` registry with `environment: 'js-function'`. (v1.0.4) **Save** also
+reads the code straight from the Monaco model through the live editor ref — the exact
+on-screen code is what gets registered, and the `source` React state is synced from it,
+so state and editor can never disagree.
 
 **5. Enable / disable / delete** — Tools grid actions, or:
 
@@ -223,15 +232,26 @@ Watch `tool.started → tool.completed` in Task Preview.
 
 ## Editing, renaming, duplicating
 
-- **Edit** re-opens the saved source; saving an edit issues
-  `PUT /api/tools/{name}` (partial update: description, category, schema,
+- **Edit** re-opens the saved source (loaded via `GET /api/tools/{name}`); saving an
+  edit issues `PUT /api/tools/{name}` (partial update: description, category, schema,
   `functionSource`, `toolVersion`, `enabled`, and `name` itself for renaming).
+  Switching between tools remounts the editor view (per-session key), so every session
+  initializes its state from the freshly loaded definition — no carry-over of the
+  previous tool's code or schema.
 - **Rename** is a real registry operation — executions already in flight keep their
   resolved handler; the next decision uses the new name.
-- **Duplicate** (built-ins and dynamic tools included) creates a new `js-function` tool
-  prefilled from the source entry; the original stays read-only.
+- **Duplicate** (v1.0.4 — non-destructive) — the in-editor **Duplicate** button
+  switches the session into *register-a-copy* mode: the target name resets to
+  `namespace.copy`, the session becomes a "new tool" session, and the copy keeps the
+  **exact** function code + schema + metadata of the original. **Save** then calls the
+  register endpoint (`POST /api/tools/js`) and creates a NEW tool — the original is
+  never renamed or overwritten. The Tools-grid **Duplicate** action uses the same
+  flow (it opens the editor prefilled as a copy under `<namespace>.copy`).
 - `GET /api/tools/{name}` returns the full entry including `functionSource` — the IDE
   loads the editor content from it.
+- **Export / import** — tools (including this exact source) can be downloaded as
+  portable JSON and imported into another registry; see
+  [Tools](tools.md#tool-export--import-as-json-v104).
 
 ## Debugging checklist
 

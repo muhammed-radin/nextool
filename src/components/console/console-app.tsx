@@ -23,6 +23,7 @@ import { APP_NAME, APP_VERSION } from '@/lib/nexool/version';
 import { getTool, ApiClientError } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import { useConsoleStore, shortId, type ConsoleView } from './console-store';
+import { BrandLogo } from './brand-logo';
 import { RuntimeConnectionStatus } from './runtime-connection-status';
 import { GlobalStreamProvider, NotificationsProvider, SystemStatsProvider, useGlobalStream, useNotifications, useSystemStats } from './providers';
 import { fmtUptime, statusTone } from './ui-bits';
@@ -157,12 +158,13 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+/**
+ * v1.0.4 §1 — the product identity mark is the REAL NexTool logo (from the
+ * active icon package). Functional nav icons (Wrench etc.) are untouched —
+ * only the brand tile changed.
+ */
 function LogoMark({ className }: { className?: string }) {
-  return (
-    <span className={cn('flex size-7 items-center justify-center rounded-md bg-primary-gradient glow-blue', className)}>
-      <Wrench className="size-4 text-white" aria-hidden />
-    </span>
-  );
+  return <BrandLogo className={className} />;
 }
 
 function BrandButton() {
@@ -444,7 +446,14 @@ function ToolEditorRoute() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <div className="h-16 w-full animate-pulse rounded-lg bg-white/[0.06]" />
+        <div className="glass-panel flex h-16 w-full items-center gap-3 rounded-lg px-4">
+          <BrandLogo className="size-8" />
+          <div className="min-w-0">
+            <div className="h-4 w-40 animate-pulse rounded bg-white/[0.08]" />
+            <div className="mt-1.5 h-3 w-56 animate-pulse rounded bg-white/[0.05]" />
+          </div>
+          <span className="ml-auto font-tech text-[9px] uppercase tracking-widest text-sky-300/70">loading tool…</span>
+        </div>
         <div className="h-96 w-full animate-pulse rounded-lg bg-white/[0.05]" />
       </div>
     );

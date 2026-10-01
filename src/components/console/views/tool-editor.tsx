@@ -12,6 +12,19 @@
  *  - Save validates schema + syntax server-side and updates the REAL registry.
  *  - Test executes the actual function in the controlled sandbox and shows
  *    status, duration, result (JSON tree), error and logs.
+ *
+ * v1.0.4 §3-8 — function-code synchronization rework:
+ *  - `source` state is the SINGLE source of truth for the function code.
+ *    Monaco is controlled by it (value=) and writes back through onChange.
+ *  - At SAVE time the code is read DIRECTLY from the Monaco model via the
+ *    editor ref (§8) — never a stale React closure — then written back into
+ *    `source` so state and editor agree.
+ *  - The in-editor "Duplicate" action now switches the session into
+ *    register-a-copy mode (§5): the new tool receives the EXACT function code
+ *    from the original and saves via POST (register), not by renaming the
+ *    original (the old behavior was destructive: it renamed the source tool).
+ *  - Switching tools remounts this view (parent key) so state always
+ *    re-initializes from the freshly loaded tool definition (§7).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -45,6 +58,7 @@ const MonacoEditor = dynamic(() => import('@monaco-editor/react').then((m) => m.
   loading: () => <Skeleton className="h-full min-h-[260px] w-full rounded-md" />,
 });
 import type { Monaco, BeforeMount, OnMount } from '@monaco-editor/react';
+import type { editor } from 'monaco-editor';
 
 const DEFAULT_SOURCE = `async function execute(params, context) {
   context.log('tool invoked', params);
@@ -80,7 +94,11 @@ interface ToolEditorProps {
 }
 
 export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, onClose }: ToolEditorProps) {
-  const isNew = toolName === null;
+  // v1.0.4 §5: the session's target tool name. `null` ⇒ register-a-new-tool
+  // session. Starts as the tool being edited; the in-editor Duplicate action
+  // flips it to null so Save REGISTERS A COPY instead of renaming the original.
+  const [sessionToolName, setSessionToolName] = useState<string | null>(toolName);
+  const isNew = sessionToolName === null;
 
   const [name, setName] = useState(initial?.name ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
@@ -88,6 +106,10 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   const [category, setCategory] = useState(initial?.category ?? 'utility');
   const [toolVersion, setToolVersion] = useState(initial?.toolVersion ?? '1.0.0');
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  // v1.0.4 §4/§6 — single source of truth for the function code. Initialized
+  // from the STORED tool definition (the parent loaded it via GET /api/tools/:name
+  // before mounting); for a duplicate session the parent passes the original
+  // entry, so the copy starts with the EXACT function code of the original.
   const [source, setSource] = useState(initial?.functionSource ?? DEFAULT_SOURCE);
   const [schemaText, setSchemaText] = useState(() => JSON.stringify(schemaToEditable(initial?.schema) ?? emptySchema(), null, 2));
   const [schemaError, setSchemaError] = useState<string | null>(null);
@@ -98,6 +120,9 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   const [testParams, setTestParams] = useState('{}');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const monacoInstanceRef = useRef<Monaco | null>(null);
+  // v1.0.4 §8 — live Monaco editor instance: at save time the CURRENT model
+  // content is read from here (the truth of what is visible on screen).
+  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
   const parsedSchema = useMemo<ToolSchema | null>(() => parseSchemaText(schemaText).schema, [schemaText]);
 
@@ -110,6 +135,18 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     setSchemaError(parsed.error);
   }, [schemaText]);
 
+  /**
+   * v1.0.4 §8 — read the function code EXACTLY as visible in Monaco. The
+   * editor model is the screen truth; `source` is kept in sync so both agree.
+   * Never saves a stale React/state value.
+   */
+  const currentCode = (): string => {
+    const modelValue = editorRef.current?.getValue();
+    const code = typeof modelValue === 'string' ? modelValue : source;
+    if (code !== source) setSource(code);
+    return code;
+  };
+
   const save = async () => {
     if (!/^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*$/.test(name.trim())) {
       toast.error('Invalid tool name', { description: 'Use namespace.action, e.g. utility.summarize' });
@@ -120,6 +157,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
       toast.error('Schema is invalid', { description: parsed.error ?? 'Fix the schema before saving.' });
       return;
     }
+    const code = currentCode();
     setSaving(true);
     try {
       if (isNew) {
@@ -130,21 +168,21 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           category: category.trim() || 'utility',
           toolVersion: toolVersion.trim() || undefined,
           schema: parsed.schema,
-          functionSource: source,
+          functionSource: code,
           enabled,
         });
         toast.success('Tool registered', { description: `${entry.name} is now available to the CoreModule.` });
         setDirty(false);
         onSaved(entry);
-      } else if (toolName) {
-        const entry = await updateTool(toolName, {
-          renameTo: name.trim() !== toolName ? name.trim() : undefined,
+      } else if (sessionToolName) {
+        const entry = await updateTool(sessionToolName, {
+          renameTo: name.trim() !== sessionToolName ? name.trim() : undefined,
           description: description.trim() || undefined,
           purpose: purpose.trim() || undefined,
           category: category.trim() || 'utility',
           toolVersion: toolVersion.trim() || undefined,
           schema: parsed.schema,
-          functionSource: source,
+          functionSource: code,
           enabled,
         });
         toast.success('Tool updated', { description: `${entry.name} saved to the registry.` });
@@ -171,8 +209,9 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     setTest({ running: true });
     try {
       // Unsaved changes are tested against the CURRENT editor source (§27/§29:
-      // a real sandboxed execution — never a mock result).
-      const result = await testTool({ functionSource: source, params });
+      // a real sandboxed execution — never a mock result). The code is read
+      // straight from the Monaco model so the test always runs what is on screen.
+      const result = await testTool({ functionSource: currentCode(), params });
       setTest({
         running: false,
         status: result.status,
@@ -188,11 +227,11 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   };
 
   const doDelete = async () => {
-    if (!toolName) return;
+    if (!sessionToolName) return;
     try {
-      await deleteTool(toolName);
-      toast.success('Tool deleted', { description: `${toolName} removed from the registry.` });
-      onDeleted(toolName);
+      await deleteTool(sessionToolName);
+      toast.success('Tool deleted', { description: `${sessionToolName} removed from the registry.` });
+      onDeleted(sessionToolName);
     } catch (e) {
       toast.error('Delete failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
     } finally {
@@ -200,11 +239,23 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     }
   };
 
-  const duplicateTool = async () => {
+  /**
+   * v1.0.4 §5 — Duplicate switches this session into "register a copy" mode.
+   * The copy keeps the EXACT function code (and schema/description) currently
+   * loaded from the original; only the name changes. Saving then calls the
+   * REGISTER endpoint — the original tool is never renamed or overwritten.
+   */
+  const duplicateTool = () => {
+    if (isNew) return;
     const base = name.trim().replace(/^([a-z0-9-]+)\..*$/, '$1') || 'custom';
+    setSessionToolName(null);
     setName(`${base}.copy`);
     setDirty(true);
-    toast.info('Renamed for duplicate', { description: 'Adjust the name, then Save to register the copy.' });
+    // Keep schema + function code exactly as loaded; refresh the schema parse
+    // surface so the valid badge reflects the carried-over schema.
+    const parsed = parseSchemaText(schemaText);
+    setSchemaError(parsed.error);
+    toast.info('Duplicated — adjust the name', { description: 'The copy carries the original function code. Save to register it as a new tool.' });
   };
 
   // ---- Monaco setup (schema-driven IntelliSense, §18-21) ----
@@ -253,8 +304,11 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     monaco.editor.setTheme('nextool-dark');
   }, [extraLib]);
 
-  const onRuntimeMount = useCallback<OnMount>((_editor, monaco: Monaco) => {
+  const onRuntimeMount = useCallback<OnMount>((ed, monaco: Monaco) => {
     monacoInstanceRef.current = monaco;
+    // v1.0.4 §8 — keep the live editor instance so save/test read the CURRENT
+    // model content (screen truth) instead of a possibly stale state value.
+    editorRef.current = ed;
     monaco.languages.typescript.javascriptDefaults.addExtraLib(extraLib, 'nextool-runtime.d.ts');
   }, [extraLib]);
 
@@ -302,9 +356,9 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
         </div>
         <Switch id="tool-enabled" checked={enabled} onCheckedChange={(v) => { setEnabled(v); markDirty(); }} aria-label="Tool enabled" />
       </div>
-      {!isNew && toolName ? (
+      {!isNew && sessionToolName ? (
         <p className="font-mono text-[10px] text-muted-foreground">
-          registered as <span className="text-sky-300">{toolName}</span> · {initial?.stats.callCount ?? 0} calls
+          registered as <span className="text-sky-300">{sessionToolName}</span> · {initial?.stats.callCount ?? 0} calls
         </p>
       ) : null}
     </div>
@@ -467,7 +521,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           </span>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold text-foreground">
-              {isNew ? 'New Tool' : `Edit ${toolName}`}
+              {isNew ? (sessionToolName === null && dirty ? 'Duplicate Tool' : 'New Tool') : `Edit ${sessionToolName}`}
             </h2>
             <p className="text-xs text-muted-foreground">Tool IDE — sandboxed JavaScript function editor</p>
           </div>
@@ -476,7 +530,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {!isNew ? (
+          {!isNew && sessionToolName ? (
             <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" onClick={duplicateTool}>
               <Copy className="size-3.5" aria-hidden /> Duplicate
             </Button>
@@ -484,13 +538,13 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" onClick={() => void runTest()} disabled={test?.running}>
             {test?.running ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Play className="size-3.5" aria-hidden />} Test
           </Button>
-          {!isNew ? (
+          {!isNew && sessionToolName ? (
             <Button variant="outline" size="sm" className="min-h-9 border-rose-500/40 text-rose-300 hover:bg-rose-500/10" onClick={() => setDeleteOpen(true)}>
               <Trash2 className="size-3.5" aria-hidden /> Delete
             </Button>
           ) : null}
           <Button size="sm" className="min-h-9 gap-1.5 bg-primary-gradient text-primary-foreground hover:opacity-90" onClick={() => void save()} disabled={saving || (schemaError !== null)}>
-            {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Save className="size-3.5" aria-hidden />} Save
+            {saving ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Save className="size-3.5" aria-hidden />} {isNew ? 'Register' : 'Save'}
           </Button>
           <Button variant="ghost" size="sm" className="min-h-9 text-muted-foreground" onClick={onClose}>Close</Button>
         </div>
@@ -555,7 +609,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="glass-strong sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-rose-300"><AlertTriangle className="size-4" aria-hidden /> Delete {toolName}?</DialogTitle>
+            <DialogTitle className="flex items-center gap-2 text-rose-300"><AlertTriangle className="size-4" aria-hidden /> Delete {sessionToolName}?</DialogTitle>
             <DialogDescription>
               The tool is removed from the registry and stops being available to the CoreModule. This cannot be undone.
             </DialogDescription>

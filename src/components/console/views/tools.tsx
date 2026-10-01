@@ -5,9 +5,16 @@
  * stats, schema accordion, dynamic tool registration dialog AND the full
  * v1.0.2 tool lifecycle: New Tool (Tool IDE) · Edit · Duplicate · Test ·
  * Enable/Disable · Delete (destructive ops confirmed).
+ *
+ * v1.0.4 §11-17 — tool portability:
+ *  - Export a single tool (or all tools) as JSON with the EXACT function
+ *    source code preserved as text (real registry data, no placeholders).
+ *  - Import a tool JSON: parse → validate (structure/name/schema/function) →
+ *    preview → conflict handling (replace / import as copy / cancel) →
+ *    register through the REAL registry endpoints → editable in the Tool IDE.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
@@ -24,13 +31,18 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn } from '@/lib/utils';
 import { JsonTree } from '../json-tree';
 import {
-  ApiClientError, deleteTool, listTools, registerTool, testTool, toggleTool,
+  ApiClientError, deleteTool, listTools, registerJsTool, registerTool, testTool, toggleTool, updateTool,
 } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import type { ToolTestResult } from '@/lib/nexool/client';
-import { EmptyState, ErrorCard, SectionTitle, fmtMs } from '../ui-bits';
 import {
-  Copy, FilePlus2, Loader2, Pencil, Play, Plus, Squircle, Trash2, Wrench,
+  exportToolJson, exportToolsJson, parseToolImport, proposeCopyName, toolExportFilename, validateImportedTool,
+  type PortableTool,
+} from '@/lib/nexool/tool-portable';
+import { APP_VERSION } from '@/lib/nexool/version';
+import { EmptyState, ErrorCard, SectionTitle, TechLabel, fmtMs } from '../ui-bits';
+import {
+  Copy, Download, FilePlus2, FileUp, Loader2, Pencil, Play, Plus, Squircle, Trash2, Upload, Wrench,
 } from 'lucide-react';
 
 function EnvironmentBadge({ environment }: { environment: ToolEntry['environment'] }) {
@@ -56,7 +68,7 @@ function EnvironmentBadge({ environment }: { environment: ToolEntry['environment
 }
 
 function ToolCard({
-  tool, onToggle, toggling, onEdit, onTest, onDuplicate, onDelete, deleteBusy,
+  tool, onToggle, toggling, onEdit, onTest, onDuplicate, onDelete, deleteBusy, onExport,
 }: {
   tool: ToolEntry;
   onToggle: (name: string, enabled: boolean) => void;
@@ -66,6 +78,7 @@ function ToolCard({
   onDuplicate: (tool: ToolEntry) => void;
   onDelete: (tool: ToolEntry) => void;
   deleteBusy: boolean;
+  onExport: (tool: ToolEntry) => void;
 }) {
   const s = tool.stats;
   const readOnly = tool.environment === 'builtin' || tool.environment === 'virtual-env';
@@ -113,6 +126,15 @@ function ToolCard({
         )}
         <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onTest(tool)}>
           <Play className="size-3.5" aria-hidden /> Test
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200"
+          onClick={() => onExport(tool)}
+          aria-label={`Export tool ${tool.name} as JSON`}
+        >
+          <Download className="size-3.5" aria-hidden /> Export
         </Button>
         {!readOnly ? (
           <Button
@@ -206,6 +228,16 @@ export default function ToolsView({
 
   const [deleteCandidate, setDeleteCandidate] = useState<ToolEntry | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+
+  // ---- v1.0.4 §11-17: tool export / import state ----
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  /** Validated tool awaiting confirmation (preview dialog). */
+  const [importPreview, setImportPreview] = useState<{ tool: PortableTool; warnings: string[] } | null>(null);
+  /** Validated tool whose name already exists (conflict dialog). */
+  const [importConflict, setImportConflict] = useState<{ tool: PortableTool; existing: ToolEntry } | null>(null);
+  /** Import rejected — readable validation errors. */
+  const [importErrors, setImportErrors] = useState<{ errors: string[]; warnings: string[] } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -320,6 +352,130 @@ export default function ToolsView({
     }
   };
 
+  // ---------- v1.0.4 §11-12: export ----------
+
+  const downloadJson = (filename: string, data: unknown) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const exportOne = (tool: ToolEntry) => {
+    downloadJson(toolExportFilename(tool.name), exportToolJson(tool, APP_VERSION));
+    toast.success('Tool exported', { description: `${tool.name} — function code preserved as text.` });
+  };
+
+  const exportAll = () => {
+    if (!tools || tools.length === 0) return;
+    downloadJson(`nextool-tools-${new Date().toISOString().slice(0, 10)}.json`, exportToolsJson(tools, APP_VERSION));
+    toast.success('Tools exported', { description: `${tools.length} tool definition(s) exported.` });
+  };
+
+  // ---------- v1.0.4 §13-16: import ----------
+
+  const onImportFile = async (file: File | undefined) => {
+    if (!file) return;
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      toast.error('Import failed', { description: 'The file could not be read.' });
+      return;
+    }
+    const parsed = parseToolImport(text);
+    if (!parsed.ok) {
+      setImportErrors({ errors: [parsed.error], warnings: [] });
+      return;
+    }
+    const result = validateImportedTool(parsed.value);
+    if (!result.ok || !result.tool) {
+      setImportErrors({ errors: result.errors, warnings: result.warnings });
+      return;
+    }
+    const existing = (tools ?? []).find((t) => t.name === result.tool!.name);
+    if (existing) {
+      setImportConflict({ tool: result.tool, existing });
+    } else {
+      setImportPreview({ tool: result.tool, warnings: result.warnings });
+    }
+  };
+
+  /** §15 — register a validated import through the REAL registry endpoints. */
+  const registerImported = async (tool: PortableTool, successDesc: string) => {
+    setImportBusy(true);
+    try {
+      if (tool.environment === 'js-function') {
+        await registerJsTool({
+          name: tool.name,
+          description: tool.description,
+          purpose: tool.purpose,
+          category: tool.category,
+          toolVersion: tool.toolVersion,
+          schema: tool.schema,
+          functionSource: tool.functionSource ?? '',
+          enabled: tool.enabled ?? true,
+        });
+      } else {
+        await registerTool({
+          definition: {
+            name: tool.name,
+            description: tool.description,
+            category: tool.category,
+            ...(tool.purpose ? { purpose: tool.purpose } : {}),
+            environment: 'dynamic',
+            schema: tool.schema,
+          },
+          handlerKind: tool.handlerKind as 'echo' | 'delay' | 'http_get' | 'uuid',
+          ...(tool.handlerConfig ? { handlerConfig: tool.handlerConfig } : {}),
+        });
+      }
+      toast.success('Tool imported', { description: successDesc });
+      setImportPreview(null);
+      setImportConflict(null);
+      void load();
+    } catch (e) {
+      // Registry-side re-validation (syntax/schema/exists) — surface honestly.
+      toast.error('Import rejected', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  /** §16 — replace the existing tool with the imported definition. */
+  const replaceImported = async (conflict: { tool: PortableTool; existing: ToolEntry }) => {
+    setImportBusy(true);
+    try {
+      await updateTool(conflict.existing.name, {
+        description: conflict.tool.description,
+        purpose: conflict.tool.purpose,
+        category: conflict.tool.category,
+        toolVersion: conflict.tool.toolVersion,
+        schema: conflict.tool.schema,
+        functionSource: conflict.tool.environment === 'js-function' ? conflict.tool.functionSource : undefined,
+        enabled: conflict.tool.enabled ?? true,
+      });
+      toast.success('Tool replaced', { description: `${conflict.existing.name} now uses the imported definition.` });
+      setImportConflict(null);
+      void load();
+    } catch (e) {
+      toast.error('Replace failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  /** §16 — import under a fresh, non-conflicting copy name. */
+  const importAsCopy = async (conflict: { tool: PortableTool; existing: ToolEntry }) => {
+    const copyName = proposeCopyName(new Set((tools ?? []).map((t) => t.name)), conflict.tool.name);
+    await registerImported({ ...conflict.tool, name: copyName }, `${copyName} registered as a copy of ${conflict.existing.name}.`);
+  };
+
   const inputCls = 'min-h-11 border-white/[0.09] bg-white/[0.04] text-sm';
 
   return (
@@ -335,13 +491,21 @@ export default function ToolsView({
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200">
+                <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200" aria-label="More tool actions">
                   <Squircle className="size-3.5" aria-hidden />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="glass-strong">
                 <DropdownMenuItem onClick={() => setRegOpen(true)}>
                   <FilePlus2 className="size-3.5" aria-hidden /> Register handler tool…
+                </DropdownMenuItem>
+                {/* v1.0.4 §13 — import a tool JSON file */}
+                <DropdownMenuItem onClick={() => importFileRef.current?.click()}>
+                  <FileUp className="size-3.5" aria-hidden /> Import tool (JSON)…
+                </DropdownMenuItem>
+                {/* v1.0.4 §11 — export all tools */}
+                <DropdownMenuItem onClick={exportAll} disabled={!tools || tools.length === 0}>
+                  <Download className="size-3.5" aria-hidden /> Export all tools (JSON)
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -370,10 +534,24 @@ export default function ToolsView({
               onDuplicate={(t) => onOpenEditor({ mode: 'duplicate', name: null, source: t })}
               onDelete={setDeleteCandidate}
               deleteBusy={deleteBusy}
+              onExport={exportOne}
             />
           ))}
         </div>
       )}
+
+      {/* v1.0.4 §11/§13 — import file picker (hidden; triggered from the actions menu) */}
+      <input
+        ref={importFileRef}
+        type="file"
+        accept="application/json,.json"
+        className="hidden"
+        onChange={(e) => {
+          void onImportFile(e.target.files?.[0]);
+          e.target.value = '';
+        }}
+        aria-label="Import tool JSON file"
+      />
 
       {/* Handler-tool registration dialog (dynamic handler kinds) */}
       <Dialog open={regOpen} onOpenChange={setRegOpen}>
@@ -494,6 +672,100 @@ export default function ToolsView({
             <Button variant="destructive" className="min-h-11" disabled={deleteBusy} onClick={() => void doDelete()}>
               {deleteBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Trash2 className="size-4" aria-hidden />} Delete tool
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* v1.0.4 §15 — import preview / confirmation before registering */}
+      <Dialog open={importPreview !== null} onOpenChange={(open) => !open && setImportPreview(null)}>
+        <DialogContent className="glass-strong sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import tool</DialogTitle>
+            <DialogDescription>Validated against the tool schema. Review before registering.</DialogDescription>
+          </DialogHeader>
+          {importPreview ? (
+            <div className="nextool-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+              <div className="grid gap-2 text-xs sm:grid-cols-2">
+                <p><TechLabel className="text-[9px]">name</TechLabel><span className="mt-0.5 block break-words font-mono text-sky-200">{importPreview.tool.name}</span></p>
+                <p><TechLabel className="text-[9px]">environment</TechLabel><span className="mt-0.5 block font-mono text-foreground/90">{importPreview.tool.environment}</span></p>
+                <p><TechLabel className="text-[9px]">category</TechLabel><span className="mt-0.5 block font-mono text-foreground/90">{importPreview.tool.category}</span></p>
+                <p><TechLabel className="text-[9px]">schema params</TechLabel><span className="mt-0.5 block font-mono text-foreground/90">{importPreview.tool.schema.properties?.length ?? 0}</span></p>
+              </div>
+              <p className="break-words text-xs text-muted-foreground">{importPreview.tool.description}</p>
+              {importPreview.tool.functionSource ? (
+                <div>
+                  <TechLabel className="text-[9px]">function code (exact source from the file)</TechLabel>
+                  <pre className="glass-inset nextool-scroll mt-1 max-h-40 overflow-auto rounded-md p-2.5 font-mono text-[11px] leading-relaxed text-sky-100/90">
+                    {importPreview.tool.functionSource}
+                  </pre>
+                </div>
+              ) : null}
+              {importPreview.warnings.length > 0 ? (
+                <div className="rounded-md border border-amber-400/30 bg-amber-400/[0.06] p-2">
+                  <ul className="space-y-0.5">
+                    {importPreview.warnings.map((w) => (
+                      <li key={w} className="break-words text-[11px] text-amber-200/90">⚠ {w}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11" onClick={() => setImportPreview(null)}>Cancel</Button>
+            <Button className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90" disabled={importBusy} onClick={() => importPreview && void registerImported(importPreview.tool, `${importPreview.tool.name} is now available to the CoreModule.`)}>
+              {importBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />} Register tool
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* v1.0.4 §16 — name conflict: replace / import as copy / cancel */}
+      <Dialog open={importConflict !== null} onOpenChange={(open) => !open && setImportConflict(null)}>
+        <DialogContent className="glass-strong sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-300">Tool already exists</DialogTitle>
+            <DialogDescription>
+              A tool named <span className="font-mono text-foreground/90">{importConflict?.existing.name}</span> is already registered ({importConflict?.existing.environment}). Choose how to proceed — nothing is overwritten without confirmation.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-col sm:items-stretch">
+            <Button className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90" disabled={importBusy} onClick={() => importConflict && void replaceImported(importConflict)}>
+              {importBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />} Replace existing tool
+            </Button>
+            <Button variant="outline" className="min-h-11 border-white/[0.09] bg-white/[0.04] text-slate-200" disabled={importBusy} onClick={() => importConflict && void importAsCopy(importConflict)}>
+              <Copy className="size-4" aria-hidden /> Import as copy
+            </Button>
+            <Button variant="ghost" className="min-h-11 text-muted-foreground" onClick={() => setImportConflict(null)}>Cancel</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* v1.0.4 §14 — import rejected: readable validation errors */}
+      <Dialog open={importErrors !== null} onOpenChange={(open) => !open && setImportErrors(null)}>
+        <DialogContent className="glass-strong sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-rose-300">Import rejected</DialogTitle>
+            <DialogDescription>The file was not registered. Fix the issues below and try again.</DialogDescription>
+          </DialogHeader>
+          {importErrors ? (
+            <div className="nextool-scroll max-h-[50vh] space-y-3 overflow-y-auto pr-1">
+              <ul className="space-y-1.5">
+                {importErrors.errors.map((err) => (
+                  <li key={err} role="alert" className="break-words rounded-md border border-rose-400/30 bg-rose-400/5 px-2.5 py-1.5 font-mono text-[11px] text-rose-300">{err}</li>
+                ))}
+              </ul>
+              {importErrors.warnings.length > 0 ? (
+                <ul className="space-y-1">
+                  {importErrors.warnings.map((w) => (
+                    <li key={w} className="break-words text-[11px] text-amber-200/90">⚠ {w}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11" onClick={() => setImportErrors(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

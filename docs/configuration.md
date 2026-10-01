@@ -71,8 +71,13 @@ Where to configure:
 Example task config:
 
 ```json
-{"mode":"goal","parallelToolCalls":true,"maxParallelToolCalls":4}
+{"mode":"goal","enabledTools":["server.health","server.restart"],"parallelToolCalls":true,"maxParallelToolCalls":4}
 ```
+
+The tool-selection rule is defense in depth (v1.0.4): the Task Console blocks the submit
+with *"Select at least one tool before running the task."* when nothing is selected and
+always sends `config.enabledTools: [...selectedTools]`; `taskConfigSchema.enabledTools`
+is `.min(1)`; and `POST /api/tasks` re-checks the merged config (`TOOLS_REQUIRED`).
 
 Semantics live in [Planner](planner.md) (group batching) and
 [Tool Runtime](../tools/tool-runtime.md) (`executeParallelBatch`: waves, caps, failure
@@ -88,7 +93,7 @@ provided** — it defaults to `settings.defaultMode` but is never auto-switched 
 | `name` | string? | — | Optional display name. |
 | `mode` | `'goal' \| 'live'` | `settings.defaultMode` | Other values are deleted at creation; Live Mode is explicit opt-in. |
 | `reasoningLevel` | `1..6` | `settings.defaultReasoningLevel` | 1–6. |
-| `enabledTools` | string[]? | all enabled tools | Empty/undefined = every enabled tool; otherwise an allow-list. |
+| `enabledTools` | string[] | — | **v1.0.4: required, non-empty at creation** — `POST /api/tasks` rejects a missing or empty list (400 `TOOLS_REQUIRED`; the zod schema also rejects `[]` with `INVALID_REQUEST`). Otherwise an allow-list of enabled tool names. |
 | `useMemory` | boolean | `settings.useMemory` | Enables memory in the context bundle. |
 | `learnFrom` | `{feedback?, results?}` | both `true` | `feedback: true` stores user feedback into memory (key `feedback_<taskId>`). |
 | `autoExecuteSubtools` | boolean | `true` | Enables parallel group execution. |

@@ -132,6 +132,8 @@ export default function TaskConsoleView() {
   const validate = (): string | null => {
     if (!request.trim()) return 'Request is required — describe what the runtime should do.';
     if (request.trim().length < 4) return 'Request is too short to plan against.';
+    // v1.0.4 §21/§22 — a task runs TOOLS: at least one tool must be selected.
+    if (selectedTools.size < 1) return 'Select at least one tool before running the task.';
     if (mode === 'live' && !liveConfirmed) return 'Live Mode requires explicit opt-in — flip the confirmation switch.';
     for (const [k, v] of Object.entries(limits)) {
       if (!Number.isFinite(v) || v <= 0) return `${k} must be a positive number.`;
@@ -159,7 +161,9 @@ export default function TaskConsoleView() {
           mode,
           reasoningLevel: reasoningLevel as 1 | 2 | 3 | 4 | 5 | 6,
           useMemory,
-          ...(selectedTools.size > 0 ? { enabledTools: [...selectedTools] } : {}),
+          // v1.0.4 §21/§24 — the selected tools travel explicitly in the task
+          // config (always present now; the backend rejects an empty set too).
+          enabledTools: [...selectedTools],
           maxSubtoolCalls: limits.maxSubtoolCalls,
           safetyLimit: limits.safetyLimit,
           maxIterations: limits.maxIterations,
@@ -204,25 +208,30 @@ export default function TaskConsoleView() {
         }}
         noValidate
       >
-        {/* quick-fill examples */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* v1.0.4 §18-20 — quick-fill examples: the title sits on its own row
+            and the compact example buttons wrap below it (never squeezed into
+            the title row). Buttons are small secondary quick-actions: compact
+            padding, still readable and touch-friendly. */}
+        <div className="space-y-2">
           <span className="flex items-center gap-1.5">
             <Sparkles className="size-3 text-sky-300/70" aria-hidden />
             <TechLabel>Examples</TechLabel>
           </span>
-          {EXAMPLES.map((ex) => (
-            <Button
-              key={ex.label}
-              type="button"
-              variant="outline"
-              size="sm"
-              className="min-h-11 border-white/[0.09] bg-white/[0.04] text-xs text-slate-300 hover:border-sky-400/40 hover:bg-white/[0.06] hover:text-sky-300"
-              onClick={() => applyExample(ex)}
-            >
-              {ex.label}
-              {ex.live ? <span className="ml-1 font-mono text-[10px] text-amber-300">live</span> : null}
-            </Button>
-          ))}
+          <div className="flex flex-wrap gap-1.5">
+            {EXAMPLES.map((ex) => (
+              <Button
+                key={ex.label}
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 min-h-8 border-white/[0.09] bg-white/[0.04] px-2.5 text-[11px] leading-none text-slate-300 hover:border-sky-400/40 hover:bg-white/[0.06] hover:text-sky-300"
+                onClick={() => applyExample(ex)}
+              >
+                {ex.label}
+                {ex.live ? <span className="ml-1 font-mono text-[9px] text-amber-300">live</span> : null}
+              </Button>
+            ))}
+          </div>
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
@@ -350,12 +359,16 @@ export default function TaskConsoleView() {
           </CollapsibleContent>
         </Collapsible>
 
-        {/* Tool selection */}
+        {/* Tool selection — v1.0.4 §21: at least one tool must be selected
+            before the task can run. */}
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <Label className="text-sm">Tool selection</Label>
-            <span className="font-mono text-[11px] text-muted-foreground">
-              {selectedTools.size === 0 ? 'all enabled tools' : `${selectedTools.size} selected`}
+            <Label className="text-sm">
+              Tool selection <span className="text-rose-400" aria-hidden>*</span>
+              <span className="sr-only">(required — select at least one tool)</span>
+            </Label>
+            <span className={cn('font-mono text-[11px]', selectedTools.size === 0 ? 'text-amber-300' : 'text-muted-foreground')}>
+              {selectedTools.size === 0 ? 'required — select at least 1' : `${selectedTools.size} selected`}
             </span>
           </div>
           {toolsError ? (
@@ -408,9 +421,13 @@ export default function TaskConsoleView() {
               ))}
               {selectedTools.size > 0 ? (
                 <Button type="button" variant="ghost" size="sm" className="min-h-11 text-xs text-muted-foreground hover:text-foreground" onClick={() => setSelectedTools(new Set())}>
-                  Clear selection — use all tools
+                  Clear selection
                 </Button>
-              ) : null}
+              ) : (
+                <p className="px-1 pb-1 text-[11px] text-muted-foreground">
+                  The planner may only use the selected tools — pick every tool that could help with this request.
+                </p>
+              )}
             </div>
           )}
         </div>

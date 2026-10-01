@@ -10,7 +10,7 @@ NexTool Q1 ships a focused **bun test** unit suite alongside `bun run lint`
 and the manual verification workflows below.
 
 ```bash
-bun test                     # runs tests/*.test.ts (36 tests / 91 assertions across 2 files)
+bun test                     # runs tests/*.test.ts (56 tests / 200 assertions across 3 files)
 bun run lint                 # eslint over the repo
 bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ```
@@ -18,7 +18,8 @@ bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ## Unit suite
 
 Pure-function coverage (no database required): `tests/nextool-v102.test.ts` (v1.0.2
-core) and `tests/nextool-v103.test.ts` (v1.0.3 additions).
+core), `tests/nextool-v103.test.ts` (v1.0.3 additions) and `tests/nextool-v104.test.ts`
+(v1.0.4 additions).
 
 | Area | What is verified |
 | --- | --- |
@@ -31,6 +32,11 @@ core) and `tests/nextool-v103.test.ts` (v1.0.3 additions).
 | **v1.0.3 icon aliases** | `favicon-16x16.png`→`icon-16.png`, `favicon-32x32.png`→`icon-32.png`, `android-chrome-*`→sized icons, `apple-touch-icon-*`→`apple-touch-icon.png`; aliased content still passes real PNG dimension validation against the canonical size |
 | **v1.0.3 parallel config** | task-config and settings zod schemas accept `parallelToolCalls` / `maxParallelToolCalls` (int 1–8) |
 | **v1.0.3 checklist states** | each `PlanStep` status maps to the documented glyph state; a finishing step becomes completed dynamically (not hardcoded) |
+| **v1.0.4 tool export** | `exportToolJson`/`exportToolsJson` round-trip through the portable envelope (`nexool.kind "nextool.tool"`, version 1, function source preserved as text, real schema field names); `toolExportFilename` sanitizes names |
+| **v1.0.4 tool import validation** | arrays/bundles/non-objects rejected; missing/bad `name` and `description` rejected; js-function tools require `functionSource` (≤ 64 000 chars); schema rules (param types, `enumValues` array, names); `builtin`/`virtual-env` environments rejected (read-only registry tools); dynamic tools require a known `handlerKind`; a bare-array schema (register-dialog format) is tolerated |
+| **v1.0.4 import parsing + conflicts** | `parseToolImport` readable errors for invalid JSON and multi-tool bundles; `proposeCopyName` yields `base.copy` then `base.copy-2`, `base.copy-3` … |
+| **v1.0.4 task tool requirement** | `taskConfigSchema.enabledTools` accepts a non-empty list and rejects an explicit empty array / non-array values (zod `min(1)`) |
+| **v1.0.4 JSON theme tokens** | every `NextoolDarkTheme` entry uses the `--w-rjv-*` namespace the library actually reads, and the core syntax tokens exist with bright values (contrast on the dark background) |
 
 The `tests/` directory also contains shell scripts that verify the **sandbox
 infrastructure** (fake-`bun` harness around `db:push`, python-runtime
@@ -52,9 +58,9 @@ curl -s http://localhost:3000/api/system | grep -o '"runtimeStatus":"[a-z]*"'
 # 2. tools seeded (15 built-ins)?
 curl -s http://localhost:3000/api/tools | grep -o '"name":"[^"]*"' | wc -l
 
-# 3. goal task completes
+# 3. goal task completes (config.enabledTools is required since v1.0.4)
 TASK=$(curl -s -X POST http://localhost:3000/api/tasks -H 'Content-Type: application/json' \
-  -d '{"request":"Check the health of server api-01"}' | grep -o 'task_[0-9a-f]*')
+  -d '{"request":"Check the health of server api-01","config":{"enabledTools":["server.health"]}}' | grep -o 'task_[0-9a-f]*')
 sleep 12
 curl -s http://localhost:3000/api/tasks/$TASK | grep -o '"status":"[a-z]*"' | head -1
 
@@ -117,8 +123,10 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
    recovery subgoal → health → restart → verified healthy; counters update.
 5. **Tools + Tool IDE** — 15 built-ins with schema accordions; New Tool opens Monaco
    with `nextool-dark`; IntelliSense completes schema params; invalid schema JSON blocks
-   save; Test Tool runs the sandbox (logs visible); Duplicate creates a js-function
-   copy; toggle off → subsequent decisions avoid the tool; Delete has a confirm dialog.
+   save; Test Tool runs the sandbox (logs visible); Duplicate registers a copy (the
+   original is untouched); toggle off → subsequent decisions avoid the tool; Delete has
+   a confirm dialog; Export downloads the tool JSON; Import accepts it back (and
+   offers Replace / Import as copy on a name conflict).
 6. **Training** — pick dataset, run a short job, per-epoch metrics grow, logs stream,
    cancel works between epochs; too-small dataset fails with the honest message.
 7. **Benchmark** — run `heuristic-fallback`, then `llm-core`, then a trained model id;
@@ -128,16 +136,20 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
    shows the *not runnable* warning.
 9. **Memory / Live State** — add/delete memory entries; inject crash/degrade/recover
    and watch fleet + status pill flip.
-10. **Settings → Branding & icons** — upload an icons.zip (missing favicon.ico → explicit
-    rejection; wrong-sized `icon-192.png` → per-file reason; `favicon-16x16.png`-style
-    names accepted via aliases; manifest/metadata files listed as skipped), preview,
-    Apply, favicon swaps to the packaged one; DELETE discards a staged package.
+10. **Icons (API-managed since v1.0.4)** — the Settings *Branding & icons* card was
+    removed; upload an icons.zip via `curl -F file=@icons.zip` to `POST /api/icons`
+    (missing favicon.ico → explicit rejection; wrong-sized `icon-192.png` → per-file
+    reason; `favicon-16x16.png`-style names accepted via aliases; manifest/metadata
+    files listed as skipped), `PATCH /api/icons` `{action:"activate"}` → the favicon
+    swaps AND the in-app header/more-sheet logo renders the packaged icon; `DELETE`
+    discards a staged package. Without an active package the in-app logo is the "N"
+    monogram.
 11. **Docs view** — this documentation index renders (37 pages), search filters, pages
     open.
 12. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
     connection pill reflects real SSE state when you kill the dev server mid-session.
 
-## Regression checklist (v1.0.2 focus areas, still valid in v1.0.3)
+## Regression checklist (v1.0.2 focus areas, still valid in v1.0.4)
 
 - Dynamic runtime status: no hardcoded `nextool@runtime:~$` prompt or static "Running";
   `[running]: Tool called <tool>` cursor behavior matches actual executions.
@@ -149,7 +161,7 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Benchmark honesty: `paramAccuracy` `-`/null without `expectedParams` or for
   classifiers; suite fixed to `tool-selection`.
 - Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
-  version` all read 1.0.3; engine stays llm-core 1.0.0.
+  version` all read 1.0.4; engine stays llm-core 1.0.0.
 - Parallel batching (v1.0.3): a multi-step plan with independent steps emits
   `planner.parallel_batch`, executions share a `batchId` (grouped card in Task Preview),
   a failing sibling does not cancel the others (`planner.partial_failure`), and
@@ -157,6 +169,20 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Task output (v1.0.3): on a completed task the Live Checklist/Terminal area is gone and
   the *Final task output* section shows the recorded summary + metric tiles; the plan
   section renders as the animated checklist.
+- Tool requirement (v1.0.4): the Task Console blocks submit without a selected tool;
+  `POST /api/tasks` without `config.enabledTools` → 400 `TOOLS_REQUIRED`; an explicit
+  `[]` fails zod validation with `INVALID_REQUEST`.
+- Tool code sync (v1.0.4): edit code in Monaco without touching anything else → Save
+  persists exactly the on-screen code (re-open the tool to confirm); Test runs the
+  same code; in-editor Duplicate + Save creates a NEW tool and leaves the original
+  unchanged.
+- Tool portability (v1.0.4): Export → Import the same file back; the import preview
+  shows the exact source; importing under the same name offers Replace / Import as
+  copy / Cancel — never a silent overwrite.
+- JSON tree (v1.0.4): syntax colors are readable on the dark glass wells (bright
+  palette), not the near-black library default.
+- Plan checklist (v1.0.4): no vertical rail line alongside the steps; checklist states
+  and animations unchanged.
 
 ## Known gaps (by design)
 

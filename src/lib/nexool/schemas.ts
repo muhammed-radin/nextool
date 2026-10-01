@@ -38,7 +38,10 @@ export const taskConfigSchema = z
     name: z.string().trim().max(80).optional(),
     mode: z.enum(['goal', 'live']),
     reasoningLevel: z.number().int().min(1).max(6),
-    enabledTools: z.array(z.string().trim().min(1).max(160)).max(200).optional(),
+    // v1.0.4 §23/§24 — when tools are provided they must be a NON-empty list:
+    // an explicit empty selection (`enabledTools: []`) is rejected so neither
+    // the console nor a raw API call can bypass tool selection.
+    enabledTools: z.array(z.string().trim().min(1).max(160)).min(1).max(200).optional(),
     useMemory: z.boolean().optional(),
     learnFrom: z
       .object({ feedback: z.boolean().optional(), results: z.boolean().optional() })

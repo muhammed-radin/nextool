@@ -36,7 +36,7 @@ scrollbars.
 | Role | Font | Variable / class | Usage |
 | --- | --- | --- | --- |
 | Primary interface | **Readex Pro** 300–700 | `--font-readex-pro` (`font-sans`) | Headings, body, nav, forms. |
-| Technical labels | **Michroma** 400 | `--font-michroma` (`font-tech`) | Version badges (`Q1 v1.0.3`), small-caps section labels like `Notifications`, `Runtime`, status bar markers. Michroma renders best small and uppercase with wide tracking. |
+| Technical labels | **Michroma** 400 | `--font-michroma` (`font-tech`) | Version badges (`Q1 v1.0.4`), small-caps section labels like `Notifications`, `Runtime`, status bar markers. Michroma renders best small and uppercase with wide tracking. |
 | Code | **Geist Mono** | `--font-geist-mono` (`font-mono`) | Terminal output, JSON blocks, ids, metrics, event types. |
 
 Loaded in `layout.tsx` via `next/font/google`; variables set on `<html>`. Body uses
@@ -74,12 +74,25 @@ Loaded in `layout.tsx` via `next/font/google`; variables set on `<html>`. Body u
 
 ## Component conventions
 
+- **Brand logo** (`brand-logo.tsx`, v1.0.4) — the brand tile is the REAL NexTool logo
+  from the active icon package (fetched once via `GET /api/icons`; preference
+  `apple-touch-icon.png` → `icon-192` → `icon-512` → `icon-32` → `icon-16`), rendered
+  in a `size-7` rounded `.bg-primary-gradient` + `.glow-blue` tile. Fallback (no active
+  package): a plain **N** monogram in the same tile — deliberately typography only, so
+  the system never shows a recreated/fake logo. Functional nav icons are not brand
+  elements and stay as-is.
 - **StatusChip / SourceDot / TypeChip** (`ui-bits.tsx`) are the only way statuses,
   event sources and event types are rendered — tones map through `statusTone`:
   running/completed/healthy/online → ok; waiting/degraded/timeout/restarting → warn;
   failed/unhealthy/offline → err; queued/pending/stopped/cancelled → neutral;
   goal → neutral, live → warn.
-- **JsonBlock** renders JSON in `.glass-inset` wells with capped heights.
+- **JsonBlock** renders JSON in `.glass-inset` wells with capped heights. The JSON tree
+  itself (`json-tree.tsx` on `@uiw/react-json-view`) is themed through the library's
+  real `--w-rjv-*` custom properties (v1.0.4 — earlier `--json-tree-*` names were
+  ignored by the library, collapsing every color to its near-black default): bright
+  sky keys, bright green strings, amber numbers, orange booleans, rose null, cyan
+  braces, transparent background so the glass-inset well shows through. Do not swap
+  these tokens for other variable names.
 - **MetricCard** pairs a `TechLabel` (Michroma) with a large mono value in a
   `.glass-card`.
 - **Terminal** (`terminal.tsx`) uses `.glass-panel` chrome, `nextool-terminal`
