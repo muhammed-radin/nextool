@@ -14,6 +14,10 @@ import { hasPendingInteraction } from './sandbox-interactive';
 
 export interface ExecuteOptions {
   timeoutMs?: number;
+  /** v1.0.9 §14 — task-level Network Policy request timeout (ms); forwarded
+   *  to the handler context where the effective per-request timeout is
+   *  resolved (request → tool → task → global Settings → shipped default). */
+  networkTimeoutMs?: number;
   taskId?: string;
   signal?: AbortSignal;
   /** v1.0.3: batch info stamped on the execution + events when the call runs
@@ -200,7 +204,7 @@ export async function executeTool(
       return finish('failed', undefined, { code: 'NO_HANDLER', message: `No handler available for tool: ${toolName}` });
     }
 
-    const ctx: HandlerContext = { taskId: opts.taskId, executionId, timeoutMs };
+    const ctx: HandlerContext = { taskId: opts.taskId, executionId, timeoutMs, networkTimeoutMs: opts.networkTimeoutMs };
     const startedEpoch = Date.now();
     const result = await Promise.race([
       handler(params, ctx),
@@ -248,9 +252,14 @@ export async function executeTool(
     if (message === 'cancelled' || opts.signal?.aborted) {
       return finish('cancelled', undefined, { code: 'CANCELLED', message: 'Execution cancelled.' });
     }
+    // v1.0.9 §14.7 — stable error codes survive the handler boundary:
+    // NetworkPolicyError.NETWORK_TIMEOUT stays NETWORK_TIMEOUT (a Network
+    // Policy request timeout is never re-labelled as a tool execution
+    // timeout). ToolFailure/ToolTimeoutError codes flow unchanged.
+    const errCode = typeof (err as { code?: unknown } | null)?.code === 'string' ? (err as { code: string }).code : undefined;
     const isTimeout = err instanceof ToolTimeoutError || message.includes('timed out');
     return finish(isTimeout ? 'timeout' : 'failed', undefined, {
-      code: isTimeout ? 'TIMEOUT' : 'TOOL_FAILURE',
+      code: isTimeout ? 'TIMEOUT' : errCode === 'NETWORK_TIMEOUT' ? 'NETWORK_TIMEOUT' : errCode && errCode !== 'TOOL_FAILURE' ? errCode : 'TOOL_FAILURE',
       message,
     });
   }

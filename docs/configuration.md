@@ -333,11 +333,60 @@ hard-coded limit:
 ```
 Task → Main → CoreModule → Tool Runtime (executor watchdog)
                               ├─ Network layer      policyFetch / XHR / virtual http(s)
-                              │                      (NetworkAccounting.requestTimeoutMs)
+                              │                      (NetworkAccounting.requestTimeoutMs —
+                              │                       v1.0.9: resolved from the Network
+                              │                       Policy chain, NOT the tool timeout)
                               ├─ Sandbox deadline   js-runner / node-runner watchdogs
+                              │                      (v1.0.9: capped by execution.timeoutMs.MAX,
+                              │                       never by the 10000 ms default)
                               └─ child_process       virtual commands (ceiling = effective
                                                       timeout; default 8 s when unset)
 ```
+
+## Network Policy request timeout (v1.0.9)
+
+The timeout applied to **each individual network request** made inside a tool —
+fetch, XMLHttpRequest, virtual http/https, URL imports and npm registry access — is
+directly configurable from the Settings page as a SEPARATE limit from the tool
+execution timeout (neither setting silently overwrites the other):
+
+- **Settings default**: `networkRequestTimeoutMs` = **60000 ms (60 s)** (shipped
+  central default), configurable in **Settings → Network policy → "Network request
+  timeout (ms)"** (numeric input + preset select up to 1 hour).
+- **Bounds**: resolved from the central `network.timeoutMs` metadata — shipped
+  min 1000 ms, max 3600000 ms — and validated by the frontend schema, the backend
+  API (`PUT /api/settings`) and the runtime clamp from the SAME metadata.
+- **Persistence**: stored with the existing Settings system (survives page
+  refresh, application restart, new tasks and new executions).
+- **Runtime propagation**: Settings → Settings API → resolved configuration →
+  Network Policy → `policyFetch` (fetch / XHR / virtual http(s) / URL imports /
+  npm). A request longer than 10 s succeeds once the setting is raised — e.g.
+  `llm.chat` with tool timeout 300000 ms and network timeout 120000 ms.
+
+Precedence (first present wins; every value clamped into the central bounds;
+the owning tool's effective execution timeout remains the outer ceiling so a
+request never outlives its tool):
+
+```
+1. Request-specific override   fetch(url, { timeoutMs })
+2. Tool-specific Network Policy ToolDefinition.networkTimeoutMs (Tool IDE)
+3. Task-level Network Policy   POST /api/tasks → config.networkTimeoutMs
+4. Global Network Policy       Settings.networkRequestTimeoutMs
+5. Shipped default             network.timeoutMs.default (60000 ms)
+```
+
+Error reporting: a request killed by the Network Policy fails with the stable
+code **`NETWORK_TIMEOUT`** and the message
+`Network request exceeded the configured timeout of <effective>ms.` — it is
+never reported as a tool execution timeout (`TOOL_TIMEOUT` / `TIMEOUT`), and the
+message always carries the actually configured value.
+
+v1.0.9 also fixed the v1.0.8 conflation where the sandbox network layer
+inherited the TOOL EXECUTION timeout as the per-request timeout, and the
+js/node runner watchdogs clamped the effective tool timeout to the
+`execution.timeoutMs` DEFAULT (10000 ms) instead of its MAX (1 h) — the root
+cause of long-running tools (e.g. `llm.chat`) failing after exactly 10 seconds
+with `Function exceeded 10000ms and was aborted.` despite a 300000 ms tool timeout.
 
 A network request inside a tool is therefore **not** forcibly terminated after 10 s
 when the effective tool timeout is longer — `10000` ms exists in exactly one place:

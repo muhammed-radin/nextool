@@ -50,6 +50,7 @@ import {
   type ImportContext,
 } from './import-resolver';
 import { getResolvedLimits } from '../config-limits';
+import { defaultToolTimeoutMs, maxToolTimeoutMs } from './timeout';
 
 // ---------- execution limits (v1.0.8 §6/§17 — resolved from the CENTRAL limits) ----------
 
@@ -127,6 +128,11 @@ export interface JsEnvExecution {
    *  runtime (global → tool-specific, capped at the live maximum). Defaults to
    *  the documented JS_TOOL_TIMEOUT_MS (10 s) when absent. */
   timeoutMs?: number;
+  /** v1.0.9 §14 — the EFFECTIVE Network Policy request timeout (ms) resolved
+   *  by the handler (request → tool → task → global Settings → default).
+   *  Applied to every fetch/XHR/URL-import of THIS execution. When absent the
+   *  central network.timeoutMs default applies — never the tool timeout. */
+  networkTimeoutMs?: number;
 }
 
 export interface JsToolRunResult {
@@ -211,7 +217,7 @@ export function runJsTool(
       logs.push(parts.map(stringifyLogPart).join(' ').slice(0, logLineCap));
     };
 
-    const accounting: NetworkAccounting = exec.accounting ?? createNetworkAccounting(exec.timeoutMs);
+    const accounting: NetworkAccounting = exec.accounting ?? createNetworkAccounting(exec.networkTimeoutMs);
     const moduleCache = exec.moduleCache ?? new Map<string, unknown>();
     const importCtx: ImportContext = {
       toolId: exec.toolId,
@@ -220,16 +226,14 @@ export function runJsTool(
       moduleCache,
     };
 
-    // v1.0.7 §1 — effective execution timeout (global → tool config, live cap);
-    // the documented 10 s default applies when the caller passes nothing.
-    let execTimeoutMs = JS_TOOL_TIMEOUT_MS;
-    try {
-      execTimeoutMs = getResolvedLimits().execution.timeoutMs;
-    } catch { /* limits file missing → keep the shipped default; enforcement layers will fail clearly */ }
+    // v1.0.7 §1 — effective execution timeout (global → tool config); the cap
+    // is the LIVE execution.timeoutMs.MAX (shipped 1 h) — v1.0.9 fixes the
+    // v1.0.8 regression that clamped to the execution.timeoutMs DEFAULT
+    // (10000 ms), killing legitimate long-running tools (spec §14). The
+    // documented default applies only when the caller passes nothing.
+    let execTimeoutMs = defaultToolTimeoutMs();
     if (exec.timeoutMs && Number.isFinite(exec.timeoutMs) && exec.timeoutMs > 0) {
-      let cap = 3_600_000;
-      try { cap = getResolvedLimits().execution.timeoutMs; } catch { /* shipped cap */ }
-      execTimeoutMs = Math.min(Math.round(exec.timeoutMs), cap);
+      execTimeoutMs = Math.min(Math.round(exec.timeoutMs), maxToolTimeoutMs());
     }
 
     // Interaction-aware deadline (§1.6/§1.7) — same model as node-runner.
@@ -362,9 +366,14 @@ export function runJsTool(
           finish({ ok: true, result: check.value, logs: [] });
         })
         .catch((err: unknown) => {
+          // v1.0.9 §14.7 — stable error codes survive the sandbox boundary:
+          // NetworkPolicyError.NETWORK_TIMEOUT stays NETWORK_TIMEOUT (a
+          // Network Policy request timeout is never re-labelled as a generic
+          // tool failure).
+          const code = typeof (err as { code?: unknown } | null)?.code === 'string' ? (err as { code: string }).code : undefined;
           finish({
             ok: false,
-            error: { code: 'TOOL_FAILURE', message: err instanceof Error ? err.message : String(err) },
+            error: { code: code && code !== 'TOOL_FAILURE' ? code : 'TOOL_FAILURE', message: err instanceof Error ? err.message : String(err) },
             logs: [],
           });
         });

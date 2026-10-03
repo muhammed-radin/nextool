@@ -23,6 +23,7 @@
 
 import { Readable } from 'node:stream';
 import { getLimitProperty, getResolvedLimits } from '../config-limits';
+import { clampNetworkTimeoutMs } from './network-timeout';
 
 /** Shape of the live network policy resolved from the central limits. */
 export interface NetworkPolicy {
@@ -75,7 +76,9 @@ export type NetworkPolicyErrorCode =
   | 'REQUEST_LIMIT'
   | 'RESPONSE_TOO_LARGE'
   | 'REDIRECT_LIMIT'
-  | 'TIMEOUT'
+  /** v1.0.9 §14.7 — a Network Policy request timeout is reported as
+   *  NETWORK_TIMEOUT (never conflated with a tool execution TIMEOUT). */
+  | 'NETWORK_TIMEOUT'
   | 'NETWORK_ERROR';
 
 export class NetworkPolicyError extends Error {
@@ -191,6 +194,10 @@ interface FetchOptions {
   headers?: Record<string, string>;
   body?: string | Uint8Array;
   signal?: AbortSignal;
+  /** v1.0.9 §14 — request-specific Network Policy override (precedence
+   *  layer 1): fetch(url, { timeoutMs }) bounds THIS request only. Still
+   *  clamped into the central network.timeoutMs [min, max]. */
+  timeoutMs?: number;
 }
 
 /**
@@ -217,10 +224,15 @@ export async function policyFetch(
     throw new NetworkPolicyError('INVALID_URL', `Invalid HTTP method: ${method}`);
   }
   const controller = new AbortController();
-  // v1.0.7 §1 — the effective timeout comes from the execution-scoped
-  // accounting (global → tool configuration); network.timeoutMs is only the
-  // fallback default. No hardcoded timeout at call sites.
-  const effectiveTimeoutMs = accounting?.requestTimeoutMs ?? policy.timeoutMs;
+  // v1.0.9 §14.5 — resolution precedence (network-timeout.ts):
+  //   request override → accounting (tool/task/global Settings resolved by
+  //   the handler) → central network.timeoutMs default. The TOOL EXECUTION
+  //   timeout is never silently substituted here (spec §14.3).
+  const configuredTimeoutMs =
+    options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? clampNetworkTimeoutMs(options.timeoutMs)
+      : (accounting?.requestTimeoutMs ?? policy.timeoutMs);
+  const effectiveTimeoutMs = clampNetworkTimeoutMs(configuredTimeoutMs);
   const timer = setTimeout(() => controller.abort(new Error('timeout')), effectiveTimeoutMs);
   if (typeof timer.unref === 'function') timer.unref();
   const onOuterAbort = () => controller.abort(new Error('cancelled'));
@@ -299,7 +311,10 @@ export async function policyFetch(
     if (err instanceof NetworkPolicyError) throw err;
     const message = err instanceof Error ? err.message : String(err);
     if (message === 'timeout' || /timeout|abort/i.test(message)) {
-      throw new NetworkPolicyError('TIMEOUT', `Network policy: request timed out after ${effectiveTimeoutMs}ms.`);
+      // v1.0.9 §14.7 — a Network Policy timeout is reported as NETWORK_TIMEOUT
+      // with the CONFIGURED timeout in the message — never as a tool
+      // execution timeout and never as a hard-coded 10000ms.
+      throw new NetworkPolicyError('NETWORK_TIMEOUT', `Network request exceeded the configured timeout of ${effectiveTimeoutMs}ms.`);
     }
     throw new NetworkPolicyError('NETWORK_ERROR', `Network request failed: ${message}`);
   } finally {
@@ -467,7 +482,7 @@ export function createXhrClass(): (new () => unknown) {
           }
         } catch (err) {
           if (err instanceof NetworkPolicyError) {
-            fail(err.code === 'TIMEOUT' ? 'ontimeout' : 'onerror', err.code, err.message);
+            fail(err.code === 'NETWORK_TIMEOUT' ? 'ontimeout' : 'onerror', err.code, err.message);
             return;
           }
           const message = err instanceof Error ? err.message : String(err);

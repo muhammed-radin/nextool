@@ -32,7 +32,8 @@ import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { RuntimeTerminal } from '../terminal';
 import { ChecklistItems, TaskChecklist } from '../task-checklist';
-import { EmptyState, ErrorCard, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
+import { EmptyState, ErrorCard, ExecutionStatusBadge, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
+import { reconcileExecutions, isTerminalExecutionStatus } from '@/lib/nexool/execution-merge';
 import {
   Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, Flag, Layers, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, Square, TerminalSquare, Wrench, X, Zap,
 } from 'lucide-react';
@@ -55,13 +56,18 @@ const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'stopped'
 const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm)|task\.(completed|failed|cancelled|started|paused|resumed)|planner\.(plan|parallel_batch|partial_failure)|subgoal\.created|live\.event\.)/;
 
 function ExecutionCard({ ex }: { ex: ToolExecution }) {
+  // v1.0.9 §15.1/§15.3-§15.6 — the status comes from the execution record via
+  // the ONE reusable badge (Pending/Running/Completed/Failed/Timed out/
+  // Cancelled/Stopped). The "running…" duration placeholder renders ONLY for
+  // genuinely active executions — never after a terminal state.
+  const active = !isTerminalExecutionStatus(ex.status) && ex.status !== 'pending';
   return (
     <div className="glass-card rounded-md px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusChip status={ex.status} />
+        <ExecutionStatusBadge status={ex.status} />
         <span className="font-mono text-xs font-semibold text-foreground">{ex.tool}</span>
         <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-          {ex.durationMs !== undefined ? fmtMs(ex.durationMs) : 'running…'} · {fmtClock(ex.startedAt)}
+          {ex.durationMs !== undefined ? fmtMs(ex.durationMs) : active ? 'running…' : '—'} · {fmtClock(ex.startedAt)}
         </span>
       </div>
       {ex.error ? <p className="mt-1 font-mono text-[11px] text-rose-300">{ex.error.code}: {ex.error.message}</p> : null}
@@ -225,7 +231,12 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
   const loadSide = useCallback(async () => {
     const [ex, ctx] = await Promise.allSettled([getTaskExecutions(taskId), getTaskContext(taskId)]);
-    if (ex.status === 'fulfilled') setExecutions(ex.value);
+    // v1.0.9 §15.9 — fold each fetched snapshot through the reconciler so a
+    // stale running status can never overwrite a newer terminal one
+    // (SSE-triggered refreshes and the 2.5s poll may interleave).
+    if (ex.status === 'fulfilled') {
+      setExecutions((prev) => (prev ? reconcileExecutions(prev, ex.value) : ex.value));
+    }
     if (ctx.status === 'fulfilled') setContext(ctx.value);
   }, [taskId]);
 

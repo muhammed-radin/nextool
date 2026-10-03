@@ -51,6 +51,14 @@ function toolTimeoutValidator() {
   return z.number().int().min(min).max(max);
 }
 
+/** v1.0.9 §14.8 — Network Policy request-timeout bounds: min/max resolve from
+ *  the central network.timeoutMs metadata so the frontend schema, the backend
+ *  API and the runtime clamp agree on the SAME limits (no frontend-only max). */
+function networkTimeoutValidator() {
+  const { min, max } = limitBounds('network', 'timeoutMs', 1_000, 3_600_000);
+  return z.number().int().min(min).max(max);
+}
+
 /** Collect "field: message" pairs from a zod error into one readable string. */
 export function zodMessage(error: z.ZodError): string {
   return error.issues
@@ -93,6 +101,9 @@ export const taskConfigSchema = z
     taskTimeoutMs: intLimit('taskTimeoutMs', 5_000, 3_600_000),
     // v1.0.7 §1 — task-level tool timeout default, ceiling = execution.timeoutMs.max.
     toolTimeoutMs: toolTimeoutValidator(),
+    // v1.0.9 §14 — task-level Network Policy request timeout (undefined =
+    // inherit tool policy → global Settings → shipped default).
+    networkTimeoutMs: networkTimeoutValidator().optional(),
     liveIntervalMs: intLimit('liveIntervalMs', 1_000, 3_600_000),
     parallelToolCalls: z.boolean().optional(),
     maxParallelToolCalls: intLimit('maxParallelToolCalls', 1, 8).optional(),
@@ -262,6 +273,9 @@ export const settingsSchema = z
     // execution.timeoutMs.max (shipped 1 hour). Values above the ceiling are
     // REJECTED here (API validation), never silently clamped.
     toolTimeoutMs: toolTimeoutValidator(),
+    // v1.0.9 §14.1/§14.8 — Network Policy "Network Request Timeout": validated
+    // here (API) with the same central limits the runtime enforces.
+    networkRequestTimeoutMs: networkTimeoutValidator(),
     liveIntervalMs: intLimit('liveIntervalMs', 1_000, 3_600_000),
     useMemory: z.boolean(),
     parallelToolCalls: z.boolean(),
@@ -309,6 +323,8 @@ export const registerJsToolSchema = z
     // ceiling = the configured execution.timeoutMs.max). Values above the
     // ceiling are rejected at registration.
     timeoutMs: toolTimeoutValidator().optional(),
+    /** v1.0.9 §14 — tool-specific Network Policy request timeout. */
+    networkTimeoutMs: networkTimeoutValidator().optional(),
     enabled: z.boolean().optional(),
   })
   .strict();
@@ -336,6 +352,8 @@ export const updateToolSchema = z
     autoExecute: z.boolean().optional(),
     // v1.0.7 §1 — per-tool execution timeout (undefined keeps stored value).
     timeoutMs: toolTimeoutValidator().optional(),
+    /** v1.0.9 §14 — per-tool Network Policy request timeout (undefined keeps stored value). */
+    networkTimeoutMs: networkTimeoutValidator().optional(),
     /** v1.0.5: dynamic tools only — validated against the real handler registry. */
     handlerKind: z.enum(['echo', 'delay', 'http_get', 'uuid']).optional(),
     handlerConfig: jsonObject.optional(),
@@ -353,6 +371,8 @@ export const testToolSchema = z
     params: jsonObject.optional(),
     /** v1.0.7 §1 — effective execution timeout for the test run (ms). */
     timeoutMs: toolTimeoutValidator().optional(),
+    /** v1.0.9 §14 — Network Policy request timeout for the test run (ms). */
+    networkTimeoutMs: networkTimeoutValidator().optional(),
   })
   .refine((v) => !!v.name !== !!v.functionSource, {
     message: 'provide either a registered tool name or an unsaved functionSource — not both',

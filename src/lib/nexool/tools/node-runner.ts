@@ -85,6 +85,7 @@ export const HTTP_GET_MIN_TIMEOUT_MS = 1000;
 export const HTTP_GET_MAX_TIMEOUT_MS = 15_000;
 
 import { getResolvedLimits } from '../config-limits';
+import { maxToolTimeoutMs } from './timeout';
 
 /** LIVE execution limits from the central configuration (no hard-coded copies). */
 export function getLiveExecutionLimits() {
@@ -382,6 +383,11 @@ export interface NodeEnvExecution {
    *  ceiling for virtual child_process operations (never shorter than the
    *  hard-coded 8 s when a longer tool timeout is configured). */
   timeoutMs?: number;
+  /** v1.0.9 §14 — the EFFECTIVE Network Policy request timeout (ms) resolved
+   *  by the handler (request → tool → task → global Settings → default).
+   *  When absent the central network.timeoutMs default applies — never the
+   *  tool execution timeout. */
+  networkTimeoutMs?: number;
 }
 
 export function declaresExecute(source: string): boolean {
@@ -481,14 +487,16 @@ export function runNodeTool(
       logs.push(parts.map(stringifyLogPart).join(' ').slice(0, caps.maxLogLineChars));
     };
 
-    const accounting = exec.accounting ?? createNetworkAccounting(exec.timeoutMs);
+    const accounting = exec.accounting ?? createNetworkAccounting(exec.networkTimeoutMs);
     const moduleCache = exec.moduleCache ?? new Map<string, unknown>();
     const processCount = { n: 0 };
 
     // v1.0.7 §1 — effective execution timeout (global → tool config); the cap
-    // is the LIVE execution.timeoutMs.max from the central limits (shipped 1 h).
+    // is the LIVE execution.timeoutMs.MAX (shipped 1 h) — v1.0.9 fixes the
+    // v1.0.8 regression that clamped to the execution.timeoutMs DEFAULT
+    // (10000 ms), killing legitimate long-running tools (spec §14).
     const execTimeoutMs = exec.timeoutMs && Number.isFinite(exec.timeoutMs) && exec.timeoutMs > 0
-      ? Math.min(Math.round(exec.timeoutMs), caps.execTimeoutMs)
+      ? Math.min(Math.round(exec.timeoutMs), maxToolTimeoutMs())
       : caps.execTimeoutMs;
 
     // Interaction-aware deadline (§1.6/§1.7): while a prompt waits for the
@@ -633,9 +641,12 @@ export function runNodeTool(
           finish({ ok: true, result: check.value, logs: [] });
         })
         .catch((err: unknown) => {
+          // v1.0.9 §14.7 — stable error codes survive the sandbox boundary
+          // (NetworkPolicyError.NETWORK_TIMEOUT stays NETWORK_TIMEOUT).
+          const code = typeof (err as { code?: unknown } | null)?.code === 'string' ? (err as { code: string }).code : undefined;
           finish({
             ok: false,
-            error: { code: 'TOOL_FAILURE', message: err instanceof Error ? err.message : String(err) },
+            error: { code: code && code !== 'TOOL_FAILURE' ? code : 'TOOL_FAILURE', message: err instanceof Error ? err.message : String(err) },
             logs: [],
           });
         });

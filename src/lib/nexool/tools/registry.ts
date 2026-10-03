@@ -15,6 +15,7 @@ import { notificationSend } from './notify';
 import { imageGenerate } from './image';
 import { runJsTool, validateFunctionSource, JS_TOOL_TIMEOUT_MS } from './js-runner';
 import { runNodeTool, validateNodeFunctionSource, NODE_TOOL_TIMEOUT_MS } from './node-runner';
+import { resolveNetworkRequestTimeoutForExecution, clampNetworkTimeoutMs } from './network-timeout';
 import { openVirtualFs } from './vfs';
 import { createNetworkAccounting } from './sandbox-net';
 import { createTestInteractions } from './sandbox-interactive';
@@ -255,14 +256,14 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
   }
 
   if (def.environment === 'js-function' && typeof def.functionSource === 'string' && def.functionSource.trim()) {
-    const jsHandler = makeJsHandler(def.name, def.functionSource);
+    const jsHandler = makeJsHandler(def.name, def.functionSource, def.networkTimeoutMs);
     s.handlers.set(def.name, jsHandler);
     return jsHandler;
   }
 
   // v1.0.5 — nodejs environment executes through the restricted Node.js sandbox.
   if (def.environment === 'nodejs' && typeof def.functionSource === 'string' && def.functionSource.trim()) {
-    const nodeHandler = makeNodeHandler(def.name, def.functionSource);
+    const nodeHandler = makeNodeHandler(def.name, def.functionSource, def.networkTimeoutMs);
     s.handlers.set(def.name, nodeHandler);
     return nodeHandler;
   }
@@ -344,6 +345,9 @@ export interface ToolEntryFull {
   /** v1.0.7 §1: tool-specific execution timeout (ms) — overrides the global
    *  default; runtime caps at 1 hour. Undefined = use global default. */
   timeoutMs?: number;
+  /** v1.0.9 §14: tool-specific Network Policy request timeout (ms).
+   *  Undefined = use task policy → global Settings → shipped default. */
+  networkTimeoutMs?: number;
   enabled: boolean;
   stats: ToolStats;
   createdAt: string;
@@ -386,6 +390,8 @@ function rowToEntry(row: {
     autoExecute: def.autoExecute === true,
     /** v1.0.7 §1: tool-specific execution timeout (ms). */
     timeoutMs: typeof def.timeoutMs === 'number' && Number.isFinite(def.timeoutMs) && def.timeoutMs > 0 ? def.timeoutMs : undefined,
+    /** v1.0.9 §14: tool-specific Network Policy request timeout (ms). */
+    networkTimeoutMs: typeof def.networkTimeoutMs === 'number' && Number.isFinite(def.networkTimeoutMs) && def.networkTimeoutMs > 0 ? def.networkTimeoutMs : undefined,
     enabled: row.enabled,
     stats: {
       callCount: row.callCount,
@@ -576,6 +582,8 @@ export interface JsToolRegistration {
   autoExecute?: boolean;
   /** v1.0.7 §1: tool-specific execution timeout (ms, 1000–3600000). */
   timeoutMs?: number;
+  /** v1.0.9 §14: tool-specific Network Policy request timeout (ms). */
+  networkTimeoutMs?: number;
   enabled?: boolean;
 }
 
@@ -618,6 +626,11 @@ export async function registerJsTool(input: JsToolRegistration): Promise<ToolEnt
     // v1.0.7 §1 — tool-specific execution timeout (runtime also clamps).
     ...(typeof input.timeoutMs === 'number' && Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
       ? { timeoutMs: Math.min(Math.max(Math.round(input.timeoutMs), 1_000), 3_600_000) }
+      : {}),
+    // v1.0.9 §14 — tool-specific Network Policy request timeout (clamped
+    // into the central network.timeoutMs bounds as defense in depth).
+    ...(typeof input.networkTimeoutMs === 'number' && Number.isFinite(input.networkTimeoutMs) && input.networkTimeoutMs > 0
+      ? { networkTimeoutMs: clampNetworkTimeoutMs(input.networkTimeoutMs) }
       : {}),
   };
 
@@ -686,6 +699,14 @@ export async function updateTool(
       ? Math.min(Math.max(Math.round(input.timeoutMs), 1_000), 3_600_000)
       : undefined)
     : (typeof currentDef.timeoutMs === 'number' && currentDef.timeoutMs > 0 ? currentDef.timeoutMs : undefined);
+  // v1.0.9 §14 — per-tool Network Policy request timeout (undefined keeps
+  // stored value; explicit null-ish input clears it; runtime clamps as
+  // defense in depth).
+  const nextNetworkTimeoutMs = input.networkTimeoutMs !== undefined
+    ? (typeof input.networkTimeoutMs === 'number' && Number.isFinite(input.networkTimeoutMs) && input.networkTimeoutMs > 0
+      ? clampNetworkTimeoutMs(input.networkTimeoutMs)
+      : undefined)
+    : (typeof currentDef.networkTimeoutMs === 'number' && currentDef.networkTimeoutMs > 0 ? currentDef.networkTimeoutMs : undefined);
 
   if (nextEnvironment === 'js-function' || nextEnvironment === 'nodejs') {
     if (typeof nextSource !== 'string' || nextSource.trim().length === 0) {
@@ -727,6 +748,7 @@ export async function updateTool(
     toolVersion: nextVersion ?? undefined,
     autoExecute: nextAutoExecute,
     ...(nextTimeoutMs !== undefined ? { timeoutMs: nextTimeoutMs } : {}),
+    ...(nextNetworkTimeoutMs !== undefined ? { networkTimeoutMs: nextNetworkTimeoutMs } : {}),
     ...(Object.keys(nextMetadata).length > 0 ? { metadata: nextMetadata } : {}),
     ...(currentEnvironment === 'dynamic'
       ? { handlerKind: nextHandlerKind, handlerConfig: nextHandlerConfig ?? {} }
@@ -771,10 +793,18 @@ export async function deleteTool(name: string): Promise<{ deleted: boolean; name
  * v1.0.6 — each execution gets the shared runtime layers: network policy
  * accounting, interaction events (alert/prompt) and, when the tool owns one,
  * its persistent Virtual FS workspace (restricted require() of VFS modules).
+ * v1.0.9 §14 — the per-request Network Policy timeout is resolved from
+ * request → tool → task → global Settings → shipped default (NEVER from the
+ * tool execution timeout); the tool's effective execution timeout only caps it.
  */
-function makeJsHandler(name: string, source: string): ToolHandler {
+function makeJsHandler(name: string, source: string, networkTimeoutMs?: number): ToolHandler {
   return async (params, ctx) => {
     const vfs = await openVirtualFs(name);
+    const net = await resolveNetworkRequestTimeoutForExecution({
+      toolNetworkTimeoutMs: networkTimeoutMs,
+      taskNetworkTimeoutMs: ctx.networkTimeoutMs,
+      toolExecutionTimeoutMs: ctx.timeoutMs,
+    });
     const run = await runJsTool(
       source,
       params,
@@ -788,14 +818,17 @@ function makeJsHandler(name: string, source: string): ToolHandler {
       {
         toolId: name,
         vfs,
-        // v1.0.7 §1 — the sandbox deadline + network policy inherit the
-        // EFFECTIVE execution timeout resolved by the executor.
+        // v1.0.7 §1 — the sandbox deadline inherits the EFFECTIVE execution
+        // timeout resolved by the executor.
+        // v1.0.9 §14 — the network accounting inherits the EFFECTIVE Network
+        // Policy request timeout (NOT the tool execution timeout).
         // v1.0.8 §1.2 — interactions are created by the RUNNER so the
         // interaction-aware deadline controller is wired (confirm()/prompt()
         // defer the sandbox watchdog while the user answers).
-        accounting: createNetworkAccounting(ctx.timeoutMs),
+        accounting: createNetworkAccounting(net.effective),
         moduleCache: new Map(),
         timeoutMs: ctx.timeoutMs,
+        networkTimeoutMs: net.effective,
       },
     );
     if (!run.ok) {
@@ -805,10 +838,16 @@ function makeJsHandler(name: string, source: string): ToolHandler {
   };
 }
 
-/** v1.0.5 → v1.0.7 — nodejs handler with the expanded runtime environment. */
-function makeNodeHandler(name: string, source: string): ToolHandler {
+/** v1.0.5 → v1.0.7 — nodejs handler with the expanded runtime environment.
+ *  v1.0.9 §14 — same Network Policy request-timeout resolution as js-function. */
+function makeNodeHandler(name: string, source: string, networkTimeoutMs?: number): ToolHandler {
   return async (params, ctx) => {
     const vfs = await openVirtualFs(name);
+    const net = await resolveNetworkRequestTimeoutForExecution({
+      toolNetworkTimeoutMs: networkTimeoutMs,
+      taskNetworkTimeoutMs: ctx.networkTimeoutMs,
+      toolExecutionTimeoutMs: ctx.timeoutMs,
+    });
     const run = await runNodeTool(
       source,
       params,
@@ -822,14 +861,14 @@ function makeNodeHandler(name: string, source: string): ToolHandler {
       {
         toolId: name,
         vfs,
-        // v1.0.7 §1 — sandbox deadline, network policy and the virtual
-        // child_process ceiling all inherit the EFFECTIVE execution timeout.
-        // v1.0.8 §1.2 — interactions are created by the RUNNER so the
-        // interaction-aware deadline controller is wired (confirm()/prompt()
-        // defer the sandbox watchdog while the user answers).
-        accounting: createNetworkAccounting(ctx.timeoutMs),
+        // v1.0.7 §1 — sandbox deadline and the virtual child_process ceiling
+        // inherit the EFFECTIVE execution timeout.
+        // v1.0.9 §14 — network accounting inherits the EFFECTIVE Network
+        // Policy request timeout (NOT the tool execution timeout).
+        accounting: createNetworkAccounting(net.effective),
         moduleCache: new Map(),
         timeoutMs: ctx.timeoutMs,
+        networkTimeoutMs: net.effective,
       },
     );
     if (!run.ok) {
@@ -852,12 +891,25 @@ function makeNodeHandler(name: string, source: string): ToolHandler {
 export async function testToolSource(
   source: string,
   params: Record<string, unknown>,
-  opts: { taskId?: string; environment?: 'js-function' | 'nodejs'; /** v1.0.7 §1 — effective test execution timeout (ms). */ timeoutMs?: number } = {},
+  opts: {
+    taskId?: string;
+    environment?: 'js-function' | 'nodejs';
+    /** v1.0.7 §1 — effective test execution timeout (ms). */
+    timeoutMs?: number;
+    /** v1.0.9 §14 — Network Policy request timeout for the test run (ms). */
+    networkTimeoutMs?: number;
+  } = {},
 ): Promise<{ ok: boolean; result?: unknown; error?: { code: string; message: string }; logs: string[]; durationMs: number }> {
   const started = Date.now();
   const executionId = `test_${Date.now().toString(36)}`;
   const scratchToolId = `__scratch_${executionId}`;
   const vfs = await openVirtualFs(scratchToolId);
+  // v1.0.9 §14 — resolve the effective per-request Network Policy timeout for
+  // the test run (explicit override wins; otherwise Settings/global/default).
+  const net = await resolveNetworkRequestTimeoutForExecution({
+    requestOverrideMs: opts.networkTimeoutMs,
+    toolExecutionTimeoutMs: opts.timeoutMs,
+  });
   const ctx = {
     executionId,
     taskId: opts.taskId,
@@ -871,17 +923,19 @@ export async function testToolSource(
         toolId: scratchToolId,
         vfs,
         interactions: createTestInteractions(),
-        accounting: createNetworkAccounting(opts.timeoutMs),
+        accounting: createNetworkAccounting(net.effective),
         moduleCache: new Map(),
         timeoutMs: opts.timeoutMs,
+        networkTimeoutMs: net.effective,
       })
       : await runJsTool(source, params, ctx, {
         toolId: scratchToolId,
         vfs,
         interactions: createTestInteractions(),
-        accounting: createNetworkAccounting(opts.timeoutMs),
+        accounting: createNetworkAccounting(net.effective),
         moduleCache: new Map(),
         timeoutMs: opts.timeoutMs,
+        networkTimeoutMs: net.effective,
       });
     return { ...run, durationMs: Date.now() - started };
   } finally {

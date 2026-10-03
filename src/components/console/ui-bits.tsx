@@ -133,6 +133,69 @@ export function StatusChip({ status, className }: { status: string | undefined |
   );
 }
 
+// ---------- v1.0.9 §15 — ExecutionStatusBadge (THE reusable execution-status component) ----------
+
+/**
+ * Canonical Task Preview tool-call status mapping (v1.0.9 §15.2). The label
+ * comes from the execution record's ACTUAL status — never hard-coded to
+ * "running". Backend status values map 1:1:
+ *
+ *   pending   → Pending
+ *   running   → Running
+ *   completed → Completed
+ *   failed    → Failed
+ *   timeout   → Timed out
+ *   cancelled → Cancelled
+ *   stopped   → Stopped
+ */
+export const EXECUTION_STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  completed: 'Completed',
+  failed: 'Failed',
+  timeout: 'Timed out',
+  cancelled: 'Cancelled',
+  stopped: 'Stopped',
+};
+
+/** Execution-specific tones: running is an ACTIVE state (sky), completed the
+ *  success state (emerald), timeout a warning, stopped/cancelled muted. */
+const EXECUTION_STATUS_TONES: Record<string, Tone> = {
+  pending: 'muted',
+  running: 'info',
+  completed: 'ok',
+  failed: 'err',
+  timeout: 'warn',
+  cancelled: 'muted',
+  stopped: 'muted',
+};
+
+/** Human label for an execution status (falls back to the raw value). */
+export function executionStatusLabel(status: string | undefined | null): string {
+  if (!status) return 'Unknown';
+  return EXECUTION_STATUS_LABELS[status] ?? status;
+}
+
+/**
+ * THE single status badge for every Task Preview tool-call card (v1.0.9
+ * §15.10). All execution-status rendering goes through here — components
+ * must not duplicate status logic or hard-code "running".
+ */
+export function ExecutionStatusBadge({ status, className }: { status: string | undefined | null; className?: string }) {
+  if (!status) return <Badge variant="outline" className={cn('font-mono text-[11px]', toneClasses.muted, className)}>Unknown</Badge>;
+  const tone = EXECUTION_STATUS_TONES[status] ?? 'muted';
+  return (
+    <Badge
+      variant="outline"
+      data-execution-status={status}
+      className={cn('font-mono text-[11px]', toneClasses[tone], className)}
+      aria-label={`Execution status: ${executionStatusLabel(status)}`}
+    >
+      {executionStatusLabel(status)}
+    </Badge>
+  );
+}
+
 /** Michroma technical metadata label — version numbers, system identifiers. */
 export function TechLabel({ children, className }: { children: ReactNode; className?: string }) {
   return <span className={cn('font-tech text-[10px] uppercase tracking-wider text-sky-300/80', className)}>{children}</span>;

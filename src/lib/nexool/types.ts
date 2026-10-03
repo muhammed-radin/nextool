@@ -65,6 +65,11 @@ export interface ToolDefinition {
    *  the global default; the runtime still caps every value at 1 hour
    *  (3600000 ms). Default when unset: global toolTimeoutMs (10000 ms). */
   timeoutMs?: number;
+  /** v1.0.9 §14 — tool-specific Network Policy request timeout (optional).
+   *  Overrides the global networkRequestTimeoutMs for THIS tool's individual
+   *  network requests; still bounded by the central network.timeoutMs limits
+   *  and never beyond the tool's own effective execution timeout. */
+  networkTimeoutMs?: number;
 }
 
 // ---------- Tool execution approval (v1.0.6 §9) ----------
@@ -103,7 +108,12 @@ export interface ToolStats {
   enabled: boolean;
 }
 
-export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'timeout' | 'cancelled';
+/** v1.0.9 §15.2/§15.6 — 'stopped' joins the canonical execution statuses:
+ *  a task stopped while a tool is active records the execution as stopped.
+ *  Task Preview maps every value 1:1 (running → Running, timeout → Timed out,
+ *  stopped → Stopped, …) via ExecutionStatusBadge — never a hard-coded
+ *  running state. */
+export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'timeout' | 'cancelled' | 'stopped';
 
 export interface ToolExecution {
   executionId: string;
@@ -122,6 +132,10 @@ export interface ToolExecution {
   /** v1.0.7 §1: the EFFECTIVE execution timeout enforced for this call (ms) —
    *  resolved from tool-specific config → global default, capped at 1 hour. */
   timeoutMs?: number;
+  /** v1.0.9 §14: the EFFECTIVE Network Policy request timeout applied to
+   *  each individual network request of this execution (ms) — resolved from
+   *  request override → tool → task → global Settings → shipped default. */
+  networkTimeoutMs?: number;
 }
 
 // ---------- CoreModule ----------
@@ -215,6 +229,9 @@ export interface TaskConfig {
   /** v1.0.7 — task-level tool execution timeout default (tool-specific
    *  ToolDefinition.timeoutMs still overrides this). Default 10000, max 1 h. */
   toolTimeoutMs?: number; // default 10000
+  /** v1.0.9 §14 — task-level Network Policy request timeout (optional).
+   *  Precedence: request → tool → THIS → global Settings → shipped default. */
+  networkTimeoutMs?: number;
   liveIntervalMs?: number; // live mode scheduled tick interval, default 60000
   /** v1.0.3: explicit parallel tool execution policy (default true — independent
    *  plan steps sharing a parallelGroup may execute concurrently). */
@@ -453,6 +470,14 @@ export interface NexToolSettings {
    *  anything above and the runtime clamps as defense in depth. Tool-specific
    *  ToolDefinition.timeoutMs overrides this per tool. */
   toolTimeoutMs: number;
+  /** v1.0.9 §14 — Global Network Policy: the timeout applied to EACH
+   *  individual network request made inside a tool (fetch/XHR/virtual
+   *  http(s)/URL imports/npm). Deliberately SEPARATE from toolTimeoutMs —
+   *  neither setting overwrites the other. Default 60000 ms (60 s); bounds
+   *  resolved from the central network.timeoutMs metadata (shipped
+   *  1 s … 1 h). Precedence: request override → tool policy → task policy →
+   *  this global setting → shipped default. */
+  networkRequestTimeoutMs: number;
   liveIntervalMs: number;
   useMemory: boolean;
   /** v1.0.3: runtime default for the explicit parallel tool call policy. */

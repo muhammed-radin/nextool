@@ -48,6 +48,8 @@ const DEFAULTS: Draft = {
   taskTimeoutMs: 120000,
   // v1.0.7 §1 — default tool execution timeout is 10 seconds.
   toolTimeoutMs: 10000,
+  // v1.0.9 §14 — Global Network Policy request timeout (default 60 s).
+  networkRequestTimeoutMs: 60000,
   liveIntervalMs: 60000,
   useMemory: true,
   parallelToolCalls: true,
@@ -65,6 +67,17 @@ const TOOL_TIMEOUT_PRESETS: { value: number; label: string }[] = [
   { value: 60_000, label: '1 min' },
   { value: 300_000, label: '5 min' },
   { value: 1_800_000, label: '30 min' },
+  { value: 3_600_000, label: '1 hour (maximum)' },
+];
+
+/** v1.0.9 §14 — preset durations for the Network Request Timeout quick-select. */
+const NETWORK_TIMEOUT_PRESETS: { value: number; label: string }[] = [
+  { value: 10_000, label: '10 s' },
+  { value: 30_000, label: '30 s' },
+  { value: 60_000, label: '1 min (default)' },
+  { value: 120_000, label: '2 min' },
+  { value: 180_000, label: '3 min' },
+  { value: 300_000, label: '5 min' },
   { value: 3_600_000, label: '1 hour (maximum)' },
 ];
 
@@ -679,7 +692,54 @@ export default function SettingsView() {
             </div>
           </section>
 
-          {/* Logging & transport */}
+          {/* v1.0.9 §14 — Network Policy: direct configuration of the timeout
+              applied to EACH individual network request made inside a tool
+              (fetch/XHR/virtual http(s)/URL imports/npm). Deliberately
+              SEPARATE from the Tool Execution Timeout — neither setting
+              silently overwrites the other. Metadata (default/min/max/unit/
+              description) comes from the central limits like every other
+              field; the value persists via GET/PUT /api/settings. */}
+          <section aria-label="Network policy" className="glass-panel rounded-lg p-4 md:p-6">
+            <h3 className="text-sm font-semibold text-foreground">Network policy</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Timeout for each individual network request made inside a tool — separate from the Tool Execution Timeout above. Example: tool timeout 300000 ms + network request timeout 120000 ms means a tool may live 5 minutes while one request may live 2 minutes.
+            </p>
+            {limitsError ? (
+              <p role="alert" className="mt-3 rounded-md border border-rose-400/30 bg-rose-400/5 p-3 font-mono text-[11px] text-rose-300">{limitsError}</p>
+            ) : null}
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <NumberField
+                id="set-network-timeout"
+                label="Network request timeout (ms)"
+                value={draft.networkRequestTimeoutMs}
+                onChange={(v) => set('networkRequestTimeoutMs', v)}
+                hint={limitsHint(limitProps?.['network.timeoutMs'])}
+                min={limitProps?.['network.timeoutMs']?.min}
+                max={limitProps?.['network.timeoutMs']?.max}
+              />
+              <div className="space-y-1">
+                <Label htmlFor="set-network-timeout-preset" className="text-xs text-muted-foreground">Network timeout preset</Label>
+                <Select
+                  value={NETWORK_TIMEOUT_PRESETS.some((p) => p.value === draft.networkRequestTimeoutMs) ? String(draft.networkRequestTimeoutMs) : 'custom'}
+                  onValueChange={(v) => { if (v !== 'custom') set('networkRequestTimeoutMs', Number(v)); }}
+                >
+                  <SelectTrigger id="set-network-timeout-preset" className={inputCls}><SelectValue placeholder="Custom value" /></SelectTrigger>
+                  <SelectContent>
+                    {NETWORK_TIMEOUT_PRESETS.map((p) => (
+                      <SelectItem key={p.value} value={String(p.value)}>{p.label}</SelectItem>
+                    ))}
+                    {!NETWORK_TIMEOUT_PRESETS.some((p) => p.value === draft.networkRequestTimeoutMs) ? (
+                      <SelectItem value="custom">Custom — {draft.networkRequestTimeoutMs} ms</SelectItem>
+                    ) : null}
+                  </SelectContent>
+                </Select>
+                <p className="font-mono text-[10px] text-muted-foreground/70">Reaches fetch / XHR / http(s) / URL imports / npm inside tools at runtime</p>
+              </div>
+            </div>
+            <p className="mt-3 rounded-md border border-white/[0.08] bg-white/[0.03] p-3 text-[11px] text-muted-foreground">
+              A request-specific override or a tool-level Network Policy may still narrow this value for individual calls; the tool execution timeout always remains the hard outer boundary. When a request exceeds this timeout the tool fails with <span className="font-mono text-rose-300">NETWORK_TIMEOUT</span> and the configured value in the message.
+            </p>
+          </section>
           <section aria-label="Logging and transport" className="glass-panel grid gap-4 rounded-lg p-4 md:grid-cols-2 md:p-6">
             <div className="space-y-1.5">
               <Label htmlFor="set-log">Log level</Label>

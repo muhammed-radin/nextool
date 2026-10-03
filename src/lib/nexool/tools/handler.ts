@@ -9,6 +9,12 @@ export interface HandlerContext {
    *  Handlers and sandbox layers derive their child-operation timeouts from
    *  this value instead of hard-coded constants. */
   timeoutMs?: number;
+  /** v1.0.9 §14 — the task-level Network Policy request timeout (ms) when the
+   *  run/task config supplies one (precedence layer 3). Handlers resolve the
+   *  effective per-request timeout from request → tool → THIS → global
+   *  Settings → shipped default; it is deliberately NOT derived from
+   *  timeoutMs. */
+  networkTimeoutMs?: number;
 }
 
 export type ToolHandler = (

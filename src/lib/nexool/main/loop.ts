@@ -7,6 +7,7 @@ import { emitEvent } from '../eventbus';
 import { getSettings } from '../settings';
 import { getEnabledToolDefs } from '../tools/registry';
 import { executeTool, executeParallelBatch } from '../tools/executor';
+import { clampNetworkTimeoutMs } from '../tools/network-timeout';
 import { decide } from '../core/coremodule';
 import { buildPlan } from './planner';
 import { interpret, checkGoalComplete } from './observer';
@@ -80,6 +81,9 @@ export interface ResolvedTaskConfig extends TaskConfig {
   maxIterations: number;
   taskTimeoutMs: number;
   toolTimeoutMs: number;
+  /** v1.0.9 §14 — task-level Network Policy request timeout (undefined =
+   *  inherit tool policy → global Settings → shipped default). */
+  networkTimeoutMs?: number;
   liveIntervalMs: number;
   parallelToolCalls: boolean;
   maxParallelToolCalls: number;
@@ -109,6 +113,11 @@ function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<t
     taskTimeoutMs: clampLimit('task', 'taskTimeoutMs', stored.taskTimeoutMs, settings.taskTimeoutMs),
     // v1.0.7 §1 — task-level tool timeout default, ceiling = execution.timeoutMs.max.
     toolTimeoutMs: clampLimit('task', 'toolTimeoutMs', stored.toolTimeoutMs, settings.toolTimeoutMs),
+    // v1.0.9 §14 — task-level Network Policy request timeout (clamped into
+    // the central network.timeoutMs bounds; undefined inherits the global).
+    networkTimeoutMs: stored.networkTimeoutMs !== undefined
+      ? clampNetworkTimeoutMs(stored.networkTimeoutMs)
+      : undefined,
     liveIntervalMs: clampLimit('task', 'liveIntervalMs', stored.liveIntervalMs, settings.liveIntervalMs),
     parallelToolCalls: stored.parallelToolCalls ?? settings.parallelToolCalls,
     maxParallelToolCalls: clampLimit('task', 'maxParallelToolCalls', stored.maxParallelToolCalls, settings.maxParallelToolCalls),
@@ -279,11 +288,11 @@ async function executeWithApproval(
   ctx: RunContext,
   tool: string,
   params: Record<string, unknown>,
-  opts: { timeoutMs?: number; batch?: { batchId: string; parallelGroup: number }; purpose?: string; reason?: string } = {},
+  opts: { timeoutMs?: number; networkTimeoutMs?: number; batch?: { batchId: string; parallelGroup: number }; purpose?: string; reason?: string } = {},
 ): Promise<ToolExecution> {
   const outcome = await requestApprovalIfNeeded(ctx, tool, params, { purpose: opts.purpose, reason: opts.reason });
   if (outcome === 'auto' || outcome === 'allowed') {
-    return executeTool(tool, params, { timeoutMs: opts.timeoutMs ?? ctx.config.toolTimeoutMs, taskId: ctx.taskId, signal: ctx.handle.abortController.signal, batch: opts.batch });
+    return executeTool(tool, params, { timeoutMs: opts.timeoutMs ?? ctx.config.toolTimeoutMs, networkTimeoutMs: ctx.config.networkTimeoutMs, taskId: ctx.taskId, signal: ctx.handle.abortController.signal, batch: opts.batch });
   }
   return deniedExecution(tool, params, outcome === 'denied'
     ? `${tool} was denied by the user — skipped. Dependent steps must not assume this step succeeded.`
@@ -401,6 +410,7 @@ async function decideAndExecute(
   // v1.0.6 §9 — every task-driven tool execution passes the approval gate.
   const execution = await executeWithApproval(ctx, decision.tool, decision.params ?? {}, {
     timeoutMs: ctx.config.toolTimeoutMs,
+    networkTimeoutMs: ctx.config.networkTimeoutMs,
     reason: decision.reason,
   });
   if (ctx.blockedStop) {
@@ -657,6 +667,7 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
             })),
             {
               timeoutMs: ctx.config.toolTimeoutMs,
+              networkTimeoutMs: ctx.config.networkTimeoutMs,
               taskId: ctx.taskId,
               signal: ctx.handle.abortController.signal,
               maxParallel: ctx.config.maxParallelToolCalls,
@@ -842,7 +853,7 @@ async function runRepairPasses(ctx: RunContext, serverId: string): Promise<boole
 
   let calls = 0;
   // 1) observe health
-  let health = await executeTool('server.health', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId });
+  let health = await executeTool('server.health', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, networkTimeoutMs: ctx.config.networkTimeoutMs, taskId: ctx.taskId });
   calls += 1;
   recordExecution(ctx, 'server.health', { execution: health, observation: interpret('server.health', health) });
 
@@ -858,7 +869,7 @@ async function runRepairPasses(ctx: RunContext, serverId: string): Promise<boole
 
   // 2) restart
   if (calls < 3) {
-    const restart = await executeTool('server.restart', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId });
+    const restart = await executeTool('server.restart', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, networkTimeoutMs: ctx.config.networkTimeoutMs, taskId: ctx.taskId });
     calls += 1;
     recordExecution(ctx, 'server.restart', { execution: restart, observation: interpret('server.restart', restart) });
     await new Promise((res) => setTimeout(res, RESTART_SETTLE_MS));
@@ -866,7 +877,7 @@ async function runRepairPasses(ctx: RunContext, serverId: string): Promise<boole
 
   // 3) verify
   if (calls < 4) {
-    const verify = await executeTool('server.health', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, taskId: ctx.taskId });
+    const verify = await executeTool('server.health', { serverId }, { timeoutMs: ctx.config.toolTimeoutMs, networkTimeoutMs: ctx.config.networkTimeoutMs, taskId: ctx.taskId });
     calls += 1;
     recordExecution(ctx, 'server.health', { execution: verify, observation: interpret('server.health', verify) });
     const r = verify.result as { health?: string } | undefined;

@@ -177,7 +177,8 @@ describe('v1.0.7 §1.5 — network layer respects the effective timeout', () => 
       }
       expect(caught).toBeInstanceOf(NetworkPolicyError);
       const e = caught as NetworkPolicyError;
-      expect(e.code).toBe('TIMEOUT');
+      // v1.0.9 §14.7 — Network Policy request timeouts report NETWORK_TIMEOUT
+      expect(e.code).toBe('NETWORK_TIMEOUT');
       // reports the ACTUAL configured timeout, not the hard-coded 10000 default
       expect(e.message).toContain('1000ms');
       expect(e.message).not.toBe(`Network policy: request timed out after ${NETWORK_POLICY.requestTimeoutMs}ms.`);

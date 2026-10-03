@@ -24,6 +24,10 @@ export const DEFAULT_SETTINGS: NexToolSettings = {
   // v1.0.7 §1 — default tool execution timeout is 10 seconds (10000 ms);
   // configurable up to the configured maximum (shipped 1 hour).
   toolTimeoutMs: limitsDefault('task', 'toolTimeoutMs', 10_000),
+  // v1.0.9 §14 — Global Network Policy request timeout (default 60 s).
+  // Bounds resolve from the central network.timeoutMs metadata (1 s … 1 h).
+  // Deliberately separate from toolTimeoutMs — one never overwrites the other.
+  networkRequestTimeoutMs: limitsDefault('network', 'timeoutMs', 60_000),
   liveIntervalMs: limitsDefault('task', 'liveIntervalMs', 60_000),
   useMemory: true,
   parallelToolCalls: true,
@@ -82,6 +86,10 @@ export async function updateSettings(partial: Partial<NexToolSettings>): Promise
   next.taskTimeoutMs = clampToLimit('task', 'taskTimeoutMs', next.taskTimeoutMs);
   // v1.0.7 §1 — tool timeout: default 10 s, ceiling = execution.timeoutMs.max.
   next.toolTimeoutMs = clampToLimit('task', 'toolTimeoutMs', next.toolTimeoutMs);
+  // v1.0.9 §14 — Network Policy request timeout: bounds = network.timeoutMs
+  // [min, max] from the central limits (backend validation agrees with the
+  // frontend schema and the runtime clamp — spec §14.8).
+  next.networkRequestTimeoutMs = clampToLimit('network', 'timeoutMs', next.networkRequestTimeoutMs);
   next.liveIntervalMs = clampToLimit('task', 'liveIntervalMs', next.liveIntervalMs);
   next.parallelToolCalls = next.parallelToolCalls !== false;
   next.maxParallelToolCalls = clampToLimit('task', 'maxParallelToolCalls', next.maxParallelToolCalls);
