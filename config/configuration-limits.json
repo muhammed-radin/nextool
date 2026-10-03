@@ -1,0 +1,329 @@
+{
+  "version": 1,
+  "$meta": {
+    "name": "NexTool Q1 configuration limits",
+    "description": "Single authoritative source for every configurable NexTool limit. A self-hosted administrator can customize the allowed range, default, type, unit and nullability of each setting by editing THIS file \u2014 no source-code modification or rebuild is required. The application validates min <= default <= max for every numeric property at startup and fails clearly when the file is invalid. Changing a limit requires no rebuild: new values are picked up after a reload/restart (see docs/configuration.md).",
+    "notes": [
+      "null means 'no explicit limit' ONLY for properties explicitly marked nullable \u2014 each nullable property documents exactly what null does. null is never interpreted as unlimited automatically.",
+      "The security boundaries (virtual filesystem isolation, network host policy, sandbox escapes) are NOT controlled by this file and can never be weakened by raising a limit.",
+      "Timeouts are intentionally separate properties: execution.timeoutMs governs the whole tool execution; network.timeoutMs governs one network request; childProcess.timeoutMs is the per-command default ceiling (the effective tool execution timeout raises it); task.toolTimeoutMs is the global tool default; task.taskTimeoutMs governs the whole task. Tool approval (300000 ms) and interactive prompts (120000 ms) are fixed runtime semantics, not configurable here."
+    ]
+  },
+  "network": {
+    "timeoutMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 60000,
+      "min": 1000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "network",
+      "description": "Per-request network timeout for fetch/XHR/http(s)/URL imports/npm registry access. Default 60 seconds; the shipped maximum is 1 hour. The per-execution request timeout never exceeds the owning tool execution timeout."
+    },
+    "maxResponseBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 5242880,
+      "min": 1024,
+      "max": 734003200,
+      "unit": "bytes",
+      "category": "network",
+      "description": "Maximum response body size (5 MiB default). Applies to fetch, XMLHttpRequest, virtual http/https, URL-imported modules and npm tarballs. The body download is aborted as soon as the cap is exceeded."
+    },
+    "maxRedirects": {
+      "type": "integer",
+      "nullable": false,
+      "default": 56,
+      "min": 0,
+      "max": 56,
+      "unit": "count",
+      "category": "network",
+      "description": "Maximum HTTP redirect hops per request (default 56). Every hop is re-validated against the protocol/host policy."
+    },
+    "maxRequestsPerExecution": {
+      "type": "integer",
+      "nullable": false,
+      "default": 56,
+      "min": 1,
+      "max": 56,
+      "unit": "count",
+      "category": "network",
+      "description": "Maximum network requests per tool execution (default 56). Counts fetch, XMLHttpRequest, virtual http/https requests, URL imports and npm registry/tarball downloads \u2014 every request goes through the same accounting."
+    },
+    "allowUrlImports": {
+      "type": "boolean",
+      "nullable": false,
+      "default": true,
+      "category": "network",
+      "description": "Enable dynamic import() of http(s) URLs inside both tool environments (v1.0.8). Imported modules pass through the full network policy and run inside the same sandbox as the importing tool. Set false to disable URL imports without changing source code."
+    }
+  },
+  "vfs": {
+    "maxFileBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 2097152,
+      "min": 1024,
+      "max": 734003200,
+      "unit": "bytes",
+      "category": "vfs",
+      "description": "Maximum size of ONE file in a tool's Virtual FS workspace (default 2 MiB). Also caps single reads/writes. Files that already exceed a lowered limit are preserved \u2014 new violating operations fail clearly."
+    },
+    "maxTotalBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 734003200,
+      "min": 65536,
+      "max": 734003200,
+      "unit": "bytes",
+      "category": "vfs",
+      "description": "Maximum TOTAL size of one tool workspace, all files combined (default 700 MiB)."
+    },
+    "maxEntries": {
+      "type": "integer",
+      "nullable": false,
+      "default": 4000,
+      "min": 8,
+      "max": 50000,
+      "unit": "count",
+      "category": "vfs",
+      "description": "Maximum number of stored entries (files + directories) per tool workspace (default 4000)."
+    },
+    "maxDepth": {
+      "type": "integer",
+      "nullable": false,
+      "default": 56,
+      "min": 1,
+      "max": 128,
+      "unit": "levels",
+      "category": "vfs",
+      "description": "Maximum directory nesting depth (default 56 levels)."
+    },
+    "maxPathLength": {
+      "type": "integer",
+      "nullable": false,
+      "default": 512,
+      "min": 64,
+      "max": 4096,
+      "unit": "chars",
+      "category": "vfs",
+      "description": "Maximum length of a normalized virtual path in characters (default 512)."
+    }
+  },
+  "execution": {
+    "timeoutMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 10000,
+      "min": 250,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "execution",
+      "description": "Tool execution timeout \u2014 default 10 seconds. Tool-specific timeoutMs overrides the global default; the max here (1 hour shipped) is the hard runtime ceiling no tool may bypass. Self-hosted administrators may raise the ceiling by editing THIS file."
+    },
+    "syncTimeoutMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 4000,
+      "min": 100,
+      "max": 1800000,
+      "unit": "ms",
+      "category": "execution",
+      "description": "Synchronous (non-awaiting) execution cap inside the sandbox \u2014 protects the server event loop from runaway synchronous loops (default 4 s, maximum 30 minutes)."
+    },
+    "heapSentinelBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 268435456,
+      "min": 16777216,
+      "max": 763363328,
+      "unit": "bytes",
+      "category": "execution",
+      "description": "Heap-growth sentinel for nodejs tool executions (default 256 MiB, shipped maximum 728 MiB). This is a MONITOR, not an operating-system memory limit: it aborts the tool result when observed heap growth exceeds the value \u2014 memory already allocated is not revoked."
+    },
+    "maxSourceChars": {
+      "type": "integer",
+      "nullable": false,
+      "default": 64000,
+      "min": 1000,
+      "max": 200000,
+      "unit": "chars",
+      "category": "execution",
+      "description": "Maximum tool function source length in characters, applied to js-function and nodejs sources (default 64000, shipped maximum 200000)."
+    },
+    "maxResultBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 65536,
+      "min": 1024,
+      "max": 1048576,
+      "unit": "bytes",
+      "category": "execution",
+      "description": "Maximum serialized JSON result size (default 64 KiB). Results above the cap are reported as NOT_SERIALIZABLE failures, never truncated silently."
+    },
+    "maxLogs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 100,
+      "min": 10,
+      "max": 1000,
+      "unit": "lines",
+      "category": "execution",
+      "description": "Maximum captured console log lines per tool execution (default 100, shipped maximum 1000)."
+    },
+    "maxLogLineChars": {
+      "type": "integer",
+      "nullable": false,
+      "default": 2000,
+      "min": 200,
+      "max": 8000,
+      "unit": "chars",
+      "category": "execution",
+      "description": "Maximum characters of one captured log line (default 2000). Longer lines are truncated."
+    }
+  },
+  "childProcess": {
+    "timeoutMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 8000,
+      "min": 1000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "child-process",
+      "description": "Default per-command ceiling for virtual child_process commands (default 8 s). The effective tool execution timeout RAISES this ceiling for the execution (never shorter than this default); an explicit per-command timeout is clamped into [1, ceiling]."
+    },
+    "maxOutputBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 65536,
+      "min": 1024,
+      "max": 1048576,
+      "unit": "bytes",
+      "category": "child-process",
+      "description": "Maximum combined stdout+stderr output of one virtual command (default 64 KiB). Excess output is discarded with a policy error."
+    },
+    "maxProcessesPerExecution": {
+      "type": "integer",
+      "nullable": false,
+      "default": 64,
+      "min": 1,
+      "max": 512,
+      "unit": "count",
+      "category": "child-process",
+      "description": "Maximum virtual command invocations (pipe stages count individually) per tool execution (default 64 \u2014 realistic multi-command workflows like npm init/install/run need far more than one digit; v1.0.6 shipped 4)."
+    },
+    "maxPipeStages": {
+      "type": "integer",
+      "nullable": false,
+      "default": 3,
+      "min": 1,
+      "max": 16,
+      "unit": "count",
+      "category": "child-process",
+      "description": "Maximum pipe stages in one virtual command line (default 3)."
+    },
+    "maxArgs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 32,
+      "min": 4,
+      "max": 512,
+      "unit": "count",
+      "category": "child-process",
+      "description": "Maximum arguments of one virtual command stage (default 32)."
+    },
+    "npmMaxPackages": {
+      "type": "integer",
+      "nullable": false,
+      "default": 25,
+      "min": 1,
+      "max": 200,
+      "unit": "count",
+      "category": "child-process",
+      "description": "Maximum packages (including transitive dependencies) installed by one virtual npm install run (default 25). VFS limits still apply to the installed bytes."
+    }
+  },
+  "task": {
+    "maxIterations": {
+      "type": "integer",
+      "nullable": false,
+      "default": 30,
+      "min": 1,
+      "max": 200,
+      "unit": "count",
+      "category": "task",
+      "description": "Maximum planner iterations per task (default 30). Bounds both the Settings default and per-task configuration."
+    },
+    "maxSubtoolCalls": {
+      "type": "integer",
+      "nullable": false,
+      "default": 20,
+      "min": 1,
+      "max": 200,
+      "unit": "count",
+      "category": "task",
+      "description": "Maximum sub-tool calls per task (default 20)."
+    },
+    "safetyLimit": {
+      "type": "integer",
+      "nullable": false,
+      "default": 100,
+      "min": 1,
+      "max": 500,
+      "unit": "count",
+      "category": "task",
+      "description": "Task safety limit \u2014 total observed runtime actions before the task is force-stopped (default 100)."
+    },
+    "taskTimeoutMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 120000,
+      "min": 5000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "task",
+      "description": "Whole-task timeout (default 2 minutes). Intentionally separate from the tool execution timeout."
+    },
+    "toolTimeoutMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 10000,
+      "min": 1000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "task",
+      "description": "Global DEFAULT tool execution timeout applied when a tool does not define its own timeoutMs (default 10 s). The hard ceiling is execution.timeoutMs.max."
+    },
+    "liveIntervalMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 60000,
+      "min": 1000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "task",
+      "description": "Live Mode scheduler interval (default 60 s)."
+    },
+    "maxParallelToolCalls": {
+      "type": "integer",
+      "nullable": false,
+      "default": 4,
+      "min": 1,
+      "max": 8,
+      "unit": "count",
+      "category": "task",
+      "description": "Maximum tools executed concurrently in a parallel batch (default 4)."
+    },
+    "eventQueueCap": {
+      "type": "integer",
+      "nullable": false,
+      "default": 50,
+      "min": 1,
+      "max": 500,
+      "unit": "count",
+      "category": "task",
+      "description": "Maximum queued live events per task in multi-event mode (default 50). When full, the lowest-priority queued event is dropped (never silently)."
+    }
+  }
+}

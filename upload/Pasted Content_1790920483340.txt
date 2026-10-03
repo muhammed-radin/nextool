@@ -1,0 +1,2236 @@
+# NexTool Q1 — Version 1.0.6
+
+## Tool Runtime Expansion, Virtual Node.js Environment, Tool Approval, Multi-Event Live Processing & Pause/Resume
+
+Upgrade the existing **NexTool Q1 v1.0.5** project to **v1.0.6**.
+
+This is a major tool-runtime and Live Mode enhancement release.
+
+Do not rebuild NexTool.
+
+Preserve all existing architecture and functionality from previous versions, including:
+
+```text
+Main
+Planner
+Observer
+CoreModule
+Tool Registry
+Tool Runtime
+Goal Mode
+Live Mode
+Events
+Scheduler
+Persistent Memory
+Live State
+Context
+History
+Realtime SSE
+Tool IDE
+Monaco / Textarea
+Training
+Benchmark
+Models
+Datasets
+CLI
+Documentation
+```
+
+The v1.0.6 changes must be implemented **end-to-end**, not as frontend-only controls.
+
+---
+
+# 1. Expand Tool Runtime APIs in Both Tool Environments
+
+Expand the capabilities available to:
+
+```text
+js-function
+nodejs
+```
+
+The goal is to provide useful application/runtime functionality while keeping the execution environment isolated from the NexTool application's real source filesystem and host system.
+
+Both environments must support a common safe baseline where practical.
+
+---
+
+# 1.1 Common APIs
+
+The following APIs/functions should be available in **both** tool environments where technically appropriate:
+
+```text
+fetch
+XMLHttpRequest
+alert()
+prompt()
+Math
+Object
+Array
+String
+Number
+Boolean
+Date
+RegExp
+JSON
+Promise
+Map
+Set
+WeakMap
+WeakSet
+URL
+URLSearchParams
+console
+Error
+TypeError
+RangeError
+parseInt
+parseFloat
+isNaN
+isFinite
+structuredClone where supported
+TextEncoder
+TextDecoder
+```
+
+Do not expose an API merely because it exists in Node.js. Only expose APIs that can safely operate inside the NexTool execution boundary.
+
+---
+
+# 1.2 `fetch`
+
+Provide a functional async:
+
+```js
+await fetch(...)
+```
+
+API in both supported tool environments.
+
+Example:
+
+```js
+const response = await fetch("https://example.com/data");
+const data = await response.json();
+
+return data;
+```
+
+Support normal useful functionality such as:
+
+```text
+GET
+POST
+PUT
+PATCH
+DELETE
+headers
+body
+JSON
+text
+status
+statusText
+```
+
+subject to runtime security and network restrictions.
+
+---
+
+# 1.3 Fetch Security
+
+Do not allow fetch to become an unrestricted server-side network escape.
+
+Apply runtime/network policy.
+
+Support configurable restrictions such as:
+
+```text
+allowed protocols
+allowed hosts
+request timeout
+maximum response size
+maximum redirects
+request count
+```
+
+Reject unsafe requests according to the configured tool/runtime policy.
+
+---
+
+# 1.4 XMLHttpRequest
+
+Provide a usable:
+
+```js
+new XMLHttpRequest()
+```
+
+implementation inside both tool environments where practical.
+
+Support common functionality:
+
+```text
+open()
+setRequestHeader()
+send()
+abort()
+readyState
+status
+statusText
+responseText
+response
+onreadystatechange
+onload
+onerror
+ontimeout
+```
+
+Use the same network security policy as `fetch`.
+
+Do not implement XMLHttpRequest as a fake API.
+
+---
+
+# 1.5 Async `alert()`
+
+Provide a custom async:
+
+```js
+await alert("message");
+```
+
+implementation.
+
+This is a NexTool runtime function, not the browser's native blocking `window.alert()`.
+
+Example:
+
+```js
+await alert("Server recovery completed.");
+
+return {
+  notified: true
+};
+```
+
+The function should integrate with the runtime/UI event system.
+
+---
+
+# 1.6 Async `prompt()`
+
+Provide:
+
+```js
+const answer = await prompt("Enter the server name:");
+```
+
+as a NexTool runtime function.
+
+The prompt must pause the tool's execution until the user supplies an answer or the request is cancelled/timed out.
+
+Return the entered value or an explicit cancellation/null result according to the runtime contract.
+
+---
+
+# 1.7 Runtime Interaction Events
+
+Custom:
+
+```text
+alert()
+prompt()
+```
+
+must create observable runtime events where appropriate.
+
+Example:
+
+```text
+tool.started
+ ↓
+tool.prompt_requested
+ ↓
+waiting_for_user
+ ↓
+user response
+ ↓
+tool.resumed
+```
+
+The Task Preview/Live Monitor should be able to display these events.
+
+Do not freeze the entire NexTool runtime while one tool waits for a user prompt.
+
+---
+
+# 1.8 Common JavaScript Globals
+
+Both tool environments should expose the useful standard JavaScript APIs normally expected by tool authors.
+
+The editor's IntelliSense/reference panel must reflect the actual available APIs.
+
+Do not advertise APIs that runtime execution will reject.
+
+---
+
+# 2. Expand the Node.js Tool Environment
+
+The v1.0.5 `nodejs` environment must become a useful but **restricted Node.js-compatible tool runtime**.
+
+The user should be able to use:
+
+```text
+require()
+import()
+Node.js APIs
+virtual filesystem
+HTTP/HTTPS
+child_process
+```
+
+where explicitly supported.
+
+However, the environment must never receive unrestricted access to the NexTool host filesystem or application source.
+
+---
+
+# 2.1 Virtual Filesystem
+
+Create a real **Virtual File System (VFS)** for NexTool tools.
+
+This filesystem belongs to the tool runtime, not the NexTool project itself.
+
+Example:
+
+```text
+/vfs/
+├── input/
+├── output/
+├── tmp/
+├── data/
+└── workspace/
+```
+
+The exact structure can be improved.
+
+---
+
+# 2.2 Why Virtual FS Exists
+
+The purpose of VFS is to prevent tools from accidentally damaging:
+
+```text
+NexTool source code
+Next.js application files
+database files
+node_modules
+environment files
+configuration files
+host filesystem
+```
+
+Tools should operate inside their own isolated filesystem.
+
+---
+
+# 2.3 Virtual FS Operations
+
+Provide normal useful filesystem functionality inside the VFS.
+
+Where supported, implement operations such as:
+
+```text
+readFile
+writeFile
+appendFile
+mkdir
+readdir
+stat
+lstat
+exists
+rename
+copy
+unlink
+rm
+realpath
+```
+
+and useful path utilities.
+
+Both callback and Promise APIs may be provided where useful, but Promise-based APIs should be preferred for modern tools.
+
+---
+
+# 2.4 `fs` Must Mean Virtual FS
+
+Inside the Node.js environment:
+
+```js
+const fs = require("fs");
+```
+
+must resolve to the NexTool Virtual FS implementation, not the host's real `fs`.
+
+Likewise:
+
+```js
+import fs from "fs";
+```
+
+or supported equivalent imports must resolve to the virtualized implementation.
+
+Do NOT give tool code direct access to the application's actual filesystem.
+
+---
+
+# 2.5 Reject Main Filesystem Access
+
+If a tool attempts to escape the VFS and access the NexTool application's real filesystem:
+
+```text
+process.cwd()
+../
+absolute host paths
+application source directories
+node_modules outside approved virtual/runtime packages
+.env
+database files
+```
+
+or any equivalent escape path:
+
+reject the operation.
+
+Return a clear runtime error.
+
+Example:
+
+```text
+VirtualFSAccessError:
+Access to the NexTool host filesystem is not permitted.
+```
+
+Do not silently redirect dangerous access attempts.
+
+---
+
+# 2.6 Path Traversal Protection
+
+Protect against:
+
+```text
+../
+../../
+absolute paths
+symbolic-link escapes
+URL filesystem paths
+encoded traversal
+```
+
+Normalize and validate every VFS path.
+
+A tool must never escape its assigned virtual root.
+
+---
+
+# 2.7 Fully Functional VFS
+
+The VFS must not be a fake API that simply returns placeholders.
+
+It must actually store and retrieve tool files.
+
+Support:
+
+```text
+create
+read
+update
+delete
+list
+rename
+copy
+metadata
+```
+
+where appropriate.
+
+---
+
+# 2.8 VFS Persistence
+
+Define clear VFS lifecycle behavior.
+
+A tool should have a controlled workspace.
+
+Document whether files are:
+
+```text
+per execution
+per task
+per session
+persistent per tool
+```
+
+Choose the appropriate model for NexTool and implement it consistently.
+
+If persistence is enabled, isolate each tool/task workspace from other tools.
+
+---
+
+# 2.9 VFS Size Limits
+
+Implement safety limits such as:
+
+```text
+maximum total VFS size
+maximum file size
+maximum file count
+maximum path length
+maximum read size
+maximum write size
+```
+
+These values must be configurable or centrally defined.
+
+---
+
+# 3. HTTP / HTTPS in Node.js Environment
+
+Provide controlled support for:
+
+```text
+http
+https
+```
+
+Node.js modules.
+
+They must follow the same network security policy as `fetch` and XMLHttpRequest.
+
+Example:
+
+```js
+const https = require("https");
+```
+
+must use the NexTool-controlled networking layer rather than becoming a direct unrestricted host-network escape.
+
+---
+
+# 3.1 HTTP/HTTPS Limits
+
+Apply:
+
+```text
+request timeout
+maximum response size
+connection limits
+redirect limits
+host policy
+protocol policy
+```
+
+and appropriate cancellation.
+
+---
+
+# 4. `child_process` in Node.js Environment
+
+Support:
+
+```js
+require("child_process")
+```
+
+only through a restricted NexTool execution layer.
+
+The purpose is to allow commands that operate on the **Virtual FS**, not the host system.
+
+---
+
+# 4.1 Virtualized Child Process
+
+Commands must execute inside a restricted environment.
+
+They must NOT gain unrestricted ability to:
+
+```text
+modify NexTool source
+delete project files
+inspect secrets
+modify environment variables
+access arbitrary host paths
+launch unrestricted background processes
+escape the sandbox
+```
+
+---
+
+# 4.2 Command Policy
+
+Implement a controlled command policy.
+
+The Node.js environment should have:
+
+```text
+allowed commands
+blocked commands
+execution timeout
+maximum output
+maximum processes
+working directory = VFS workspace
+```
+
+The default working directory must be inside the tool's virtual filesystem.
+
+---
+
+# 4.3 No Host Shell Escape
+
+Explicitly block escape attempts such as:
+
+```text
+shell injection
+host-path traversal
+privileged commands
+container escape attempts
+filesystem escape
+process-control escape
+```
+
+A tool attempting this must fail safely.
+
+---
+
+# 4.4 `exec`, `spawn`, and Related APIs
+
+Expose only the supported subset of:
+
+```text
+exec
+execFile
+spawn
+spawnSync
+```
+
+or equivalent APIs.
+
+Async APIs should be preferred.
+
+The implementation must enforce the same security policy for every process creation path.
+
+Do not provide a hidden alternative route around the restriction.
+
+---
+
+# 5. Node.js API Coverage
+
+Add support for useful Node.js APIs in the `nodejs` environment.
+
+Where safe and practical, support standard modules such as:
+
+```text
+path
+url
+util
+events
+buffer
+stream
+string_decoder
+querystring
+crypto
+os
+assert
+timers
+timers/promises
+zlib
+http
+https
+net where safely supported
+dns where safely supported
+worker APIs only if safely isolated
+```
+
+This is not a requirement to expose every Node.js module blindly.
+
+The implementation must classify APIs into:
+
+```text
+allowed
+restricted
+blocked
+```
+
+---
+
+# 5.1 Node.js API Reference
+
+Add a Tool IDE reference panel for the Node.js environment showing:
+
+```text
+Available module
+Module description
+Available functions/classes
+Restrictions
+Examples
+```
+
+The reference must reflect the actual runtime.
+
+---
+
+# 5.2 IntelliSense
+
+Monaco IntelliSense must understand the supported Node.js APIs.
+
+Examples:
+
+```js
+const fs = require("fs");
+fs.readFile(...)
+```
+
+or:
+
+```js
+import path from "path";
+path.join(...)
+```
+
+should provide useful editor assistance.
+
+Do not provide autocomplete for APIs that will be blocked at execution time.
+
+---
+
+# 6. Import System
+
+Expand imports in both environments.
+
+Support:
+
+```text
+CommonJS require()
+ES module import
+dynamic import()
+virtual filesystem modules
+allowed Node.js APIs
+URL imports where explicitly enabled
+path-based imports
+```
+
+---
+
+# 6.1 CommonJS
+
+Support:
+
+```js
+const something = require("module");
+```
+
+subject to the environment's allowlist.
+
+---
+
+# 6.2 ES Modules
+
+Support:
+
+```js
+import something from "module";
+```
+
+and:
+
+```js
+import { something } from "module";
+```
+
+where compatible with the tool compiler.
+
+---
+
+# 6.3 Dynamic Import
+
+Support:
+
+```js
+const module = await import("module");
+```
+
+subject to the same security policy.
+
+---
+
+# 6.4 Virtual FS Imports
+
+Allow tools to import files from their virtual filesystem.
+
+Examples:
+
+```js
+import config from "./config.js";
+```
+
+or:
+
+```js
+const helper = require("./helper.js");
+```
+
+The resolver must resolve these inside the tool's VFS/workspace.
+
+---
+
+# 6.5 URL Imports
+
+Support URL/module imports only when explicitly allowed.
+
+Example:
+
+```js
+const module = await import("https://example.com/module.js");
+```
+
+This must be:
+
+* network-policy controlled
+* size limited
+* timeout limited
+* validated
+* isolated
+* cached appropriately if caching is supported
+
+Do not allow arbitrary URL imports to become a security escape.
+
+---
+
+# 6.6 Import Extensions
+
+Support common JavaScript module formats as practical:
+
+```text
+.js
+.mjs
+.json
+```
+
+and virtual filesystem modules that the runtime explicitly supports.
+
+---
+
+# 6.7 Import Resolver
+
+Create a single centralized resolver:
+
+```text
+Tool import
+    ↓
+Import Resolver
+    ├── Virtual FS
+    ├── Allowed Node API
+    ├── Allowed URL
+    └── Approved package/module
+```
+
+Do not implement independent incompatible `require()` and `import()` resolvers.
+
+---
+
+# 7. JS-Function Environment Capability Expansion
+
+The `js-function` environment must also receive the safe common APIs from v1.0.6.
+
+It should support:
+
+```text
+fetch
+XMLHttpRequest
+alert
+prompt
+Math
+Object
+Array
+String
+JSON
+Date
+Promise
+Map
+Set
+URL
+URLSearchParams
+console
+```
+
+and other explicitly safe standard APIs.
+
+---
+
+# 7.1 JS-Function Network Restrictions
+
+Because `js-function` now gets network APIs, apply the same safety controls:
+
+```text
+host policy
+protocol policy
+timeout
+response size
+request count
+```
+
+Do not automatically give it full unrestricted internet access.
+
+---
+
+# 7.2 JS-Function Imports
+
+Expand imports carefully.
+
+At minimum support the common standard/runtime modules that NexTool explicitly exposes.
+
+Virtual filesystem imports may also be supported if the tool environment provides a VFS-backed workspace.
+
+Do not silently expose unrestricted Node.js module access to `js-function`.
+
+The distinction must remain:
+
+```text
+js-function
+→ lightweight restricted runtime
+
+nodejs
+→ larger but still sandboxed Node.js runtime
+```
+
+---
+
+# 8. Tool Environment Capability Matrix
+
+Add a capability matrix to the Tool IDE and documentation.
+
+Example:
+
+| Capability               | js-function             | nodejs            |
+| ------------------------ | ----------------------- | ----------------- |
+| JavaScript standard APIs | Yes                     | Yes               |
+| `fetch`                  | Yes                     | Yes               |
+| XMLHttpRequest           | Yes                     | Yes               |
+| async alert              | Yes                     | Yes               |
+| async prompt             | Yes                     | Yes               |
+| Virtual FS               | Supported subset        | Full VFS API      |
+| `require()`              | Restricted              | Yes, restricted   |
+| ES `import`              | Restricted              | Yes               |
+| URL imports              | Policy-controlled       | Policy-controlled |
+| Node APIs                | Restricted subset       | Expanded safe set |
+| `fs`                     | Virtual only if enabled | Virtual only      |
+| `http`                   | Runtime wrapper         | Controlled        |
+| `https`                  | Runtime wrapper         | Controlled        |
+| `child_process`          | No                      | Restricted        |
+| Host filesystem          | No                      | No                |
+
+Keep the actual matrix synchronized with implementation.
+
+---
+
+# 9. Tool Auto-Execution Approval
+
+Add a new per-tool configuration:
+
+```text
+Auto-Execute Tools
+```
+
+This must be configurable for every tool.
+
+---
+
+# 9.1 Default
+
+The default must be:
+
+```text
+Auto-Execute Tools = false
+```
+
+This means a newly created tool requires user approval before execution unless a global setting overrides it.
+
+---
+
+# 9.2 Per-Tool Configuration
+
+Add to ToolDefinition/tool configuration:
+
+```json
+{
+  "autoExecute": false
+}
+```
+
+Use the actual project naming conventions if different.
+
+The configuration must persist with the tool.
+
+---
+
+# 9.3 Global Setting
+
+Add a global setting:
+
+```text
+Auto-Execute Tools
+```
+
+Default:
+
+```text
+false
+```
+
+Global behavior:
+
+```text
+global autoExecute = true
+    ↓
+overrides per-tool autoExecute
+    ↓
+tools execute automatically
+```
+
+If global is false/unset:
+
+```text
+use individual tool configuration
+```
+
+---
+
+# 9.4 Configuration Precedence
+
+Define one clear precedence model:
+
+```text
+Global Setting
+    ↓
+Per-Task configuration where explicitly supported
+    ↓
+Per-Tool configuration
+```
+
+The final resolved execution policy must be visible to the runtime.
+
+Do not allow different frontend/backend interpretations.
+
+---
+
+# 9.5 Approval Required Flow
+
+When:
+
+```text
+autoExecute = false
+```
+
+and a tool is about to execute:
+
+```text
+Planner
+ ↓
+CoreModule selects tool
+ ↓
+Approval Required
+ ↓
+WAIT
+```
+
+Do not continue automatically to the next dependent or sequential tool.
+
+---
+
+# 9.6 Approval UI
+
+Show a real approval request to the user.
+
+Display:
+
+```text
+Tool
+Purpose
+Parameters
+Current task
+Current subgoal
+Risk/status where applicable
+```
+
+Actions:
+
+```text
+Allow
+Deny
+```
+
+The approval request should be represented as a runtime event.
+
+---
+
+# 9.7 Approval Timeout
+
+Maximum approval waiting time:
+
+```text
+5 minutes
+```
+
+If the user does not respond within five minutes:
+
+```text
+approval timeout
+```
+
+The task must stop rather than silently execute.
+
+---
+
+# 9.8 Explicit Deny
+
+If the user chooses:
+
+```text
+Deny
+```
+
+do not execute the tool.
+
+Record:
+
+```text
+tool.approval.denied
+```
+
+The denied tool must be skipped.
+
+---
+
+# 9.9 Optional User Feedback After Denial
+
+After denial, optionally allow the user to provide feedback.
+
+Example:
+
+```text
+Why was this tool denied? (optional)
+```
+
+Do not force the user to write feedback.
+
+If feedback is provided:
+
+```text
+User feedback
+ ↓
+feedback event
+ ↓
+runtime context
+```
+
+The feedback may influence the next planning step.
+
+---
+
+# 9.10 Denied Tool Behavior
+
+For an explicit user denial:
+
+```text
+Tool NOT executed
+ ↓
+Record denial
+ ↓
+Optional feedback event
+ ↓
+Mark tool as skipped/rejected by user
+ ↓
+Continue according to task plan
+```
+
+Do not execute it later automatically during the same approval request.
+
+---
+
+# 9.11 Approval Rejection vs Timeout
+
+Differentiate:
+
+### Explicit Deny
+
+The user actively denied execution.
+
+```text
+→ skip this tool
+→ continue according to the task plan
+```
+
+### Approval Timeout
+
+No decision within five minutes.
+
+```text
+→ stop task
+```
+
+### Runtime/Safety Rejection
+
+The system rejects execution because of a security/policy/runtime problem.
+
+```text
+→ stop task
+```
+
+This distinction must be visible in task events.
+
+---
+
+# 9.12 Dependency Behavior
+
+If a denied tool is required for a later step:
+
+the Planner/Observer must recognize that dependency is unavailable.
+
+Do not blindly continue as though the tool executed successfully.
+
+For independent steps, continue where possible.
+
+For dependent steps, replan or terminate according to the task state.
+
+---
+
+# 9.13 Approval in Parallel Execution
+
+If multiple independent tools require approval simultaneously:
+
+```text
+Tool A → approval
+Tool B → approval
+Tool C → auto-execute
+```
+
+support the configured parallel approval/runtime policy.
+
+Do not automatically execute a blocked tool simply because another tool was approved.
+
+---
+
+# 9.14 Approval Events
+
+Add events such as:
+
+```text
+tool.approval.required
+tool.approval.allowed
+tool.approval.denied
+tool.approval.timeout
+tool.execution.blocked
+```
+
+These must appear in the Task Preview, Events page, history, and realtime stream where appropriate.
+
+---
+
+# 10. Multiple Live Events
+
+Currently Live Mode processes only one relevant event at a time.
+
+Add a configuration:
+
+```text
+Allow Multiple Events at Same Time
+```
+
+Also expose a user-friendly label:
+
+```text
+Read & Act All Events
+```
+
+The two labels should refer to the same underlying configuration if both are shown.
+
+---
+
+# 10.1 Default
+
+Preserve current behavior by default:
+
+```text
+false
+```
+
+When false:
+
+```text
+listen to one event
+process it
+act
+continue
+```
+
+Other simultaneous events may be skipped/ignored according to the existing behavior.
+
+Do not force the runtime to process every event.
+
+---
+
+# 10.2 Multiple Event Mode
+
+When:
+
+```text
+Allow Multiple Events at Same Time = true
+```
+
+Live Mode must listen for all events arriving while it is active.
+
+Events must be stored in a queue.
+
+Example:
+
+```text
+Event A
+Event B
+Event C
+Event D
+```
+
+becomes:
+
+```text
+Event Queue
+[ A ][ B ][ C ][ D ]
+```
+
+---
+
+# 10.3 Sequential Event Processing
+
+Even though events are accepted concurrently, process them one-by-one.
+
+Example:
+
+```text
+Queue:
+A → B → C
+
+Observer(A)
+ ↓
+Does action need to happen?
+ ↓
+Planner creates subgoal
+ ↓
+CoreModule
+ ↓
+Tools
+ ↓
+Finish A
+
+Observer(B)
+ ↓
+...
+Finish B
+
+Observer(C)
+ ↓
+...
+```
+
+Do not process multiple event-driven action plans simultaneously unless explicitly designed later.
+
+---
+
+# 10.4 Event Queue Ordering
+
+Preserve deterministic ordering.
+
+Use:
+
+```text
+priority
+timestamp
+sequence number
+```
+
+where appropriate.
+
+Emergency/high-priority events should be processed before lower-priority queued events when the configured event policy allows it.
+
+Do not silently reorder events without recording the reason.
+
+---
+
+# 10.5 Event Queue Persistence
+
+The queue must be part of the task runtime state enough to survive normal UI refresh/reconnect.
+
+If persistence is implemented, store enough metadata to recover.
+
+Do not lose queued events merely because the frontend disconnects.
+
+---
+
+# 10.6 Event Observation
+
+For each queued event:
+
+```text
+Receive
+ ↓
+Observe
+ ↓
+Determine whether action is required
+ ↓
+If no action:
+mark processed
+ ↓
+Next event
+
+If action:
+create subgoal
+ ↓
+execute
+ ↓
+observe result
+ ↓
+complete event
+ ↓
+next event
+```
+
+---
+
+# 10.7 Events With No Action
+
+If an event does not require an action:
+
+```text
+observe
+record
+mark processed
+move to next event
+```
+
+Do not create unnecessary subgoals.
+
+---
+
+# 10.8 Event UI
+
+Show the event queue in Live Monitor and Task Preview when multiple-event mode is enabled.
+
+Example:
+
+```text
+Event Queue
+
+● server.crash      Processing
+○ user.feedback     Queued
+○ health.changed    Queued
+○ scheduled.tick    Queued
+```
+
+This must represent actual runtime state.
+
+---
+
+# 10.9 Event Queue Limits
+
+Protect the runtime with configurable limits:
+
+```text
+maximum queued events
+maximum event payload size
+maximum event processing time
+```
+
+If the queue reaches its limit, use a documented policy:
+
+```text
+drop
+coalesce
+defer
+stop task
+```
+
+Choose and implement a deterministic policy.
+
+Do not allow unbounded memory growth.
+
+---
+
+# 10.10 Interaction With User Feedback
+
+User feedback is itself an event.
+
+It must enter the same event model.
+
+If multiple-event mode is enabled:
+
+```text
+user feedback
+environment event
+scheduled event
+```
+
+can all enter the queue and be processed according to priority/ordering.
+
+---
+
+# 11. Pause / Suspend Live Tasks
+
+Add the ability to pause/suspend a running Live Mode task.
+
+This is separate from:
+
+```text
+Stop
+```
+
+---
+
+# 11.1 Pause vs Stop
+
+### Pause
+
+Preserve:
+
+```text
+task
+plan
+subgoal
+context
+memory references
+Live State
+event queue
+scheduler configuration
+execution history
+```
+
+and temporarily stop new autonomous actions.
+
+### Stop
+
+Terminates the task.
+
+Do not confuse the two states.
+
+---
+
+# 11.2 Pause UI
+
+Add:
+
+```text
+Pause Live
+```
+
+to active Live Mode tasks.
+
+When paused, replace/augment with:
+
+```text
+Resume Live
+```
+
+---
+
+# 11.3 Paused Status
+
+Add runtime state:
+
+```text
+paused
+```
+
+and show it consistently across:
+
+```text
+Task Preview
+Live Monitor
+Tasks
+Dashboard
+terminal/checklist
+```
+
+Example:
+
+```text
+● Paused
+```
+
+---
+
+# 11.4 Pause Behavior
+
+When paused:
+
+```text
+no new planner actions
+no new tool executions
+no new scheduled autonomous actions
+```
+
+The task state must remain intact.
+
+Events may either:
+
+```text
+queue
+```
+
+or follow an explicitly documented pause policy.
+
+Prefer retaining relevant events rather than silently losing them.
+
+---
+
+# 11.5 Pause Scheduler
+
+While paused, scheduled ticks must not trigger tool actions.
+
+The scheduler may continue tracking elapsed time, but autonomous processing must remain suspended.
+
+When resumed, recalculate the next appropriate scheduled tick.
+
+Do not execute a burst of missed ticks unless explicitly configured.
+
+---
+
+# 11.6 Pause During Tool Execution
+
+If a tool is already executing when Pause is requested:
+
+do not corrupt the execution state.
+
+Prefer:
+
+```text
+current atomic tool execution finishes
+ ↓
+task enters paused state
+ ↓
+no next action starts
+```
+
+If the tool supports safe cancellation, the runtime may cancel it, but this must be explicit and state-safe.
+
+Never mark an incomplete execution as completed.
+
+---
+
+# 11.7 Pause During Approval
+
+If the task is waiting for user approval and is paused:
+
+```text
+approval remains unresolved
+```
+
+or is safely suspended according to the runtime design.
+
+Do not automatically allow or deny the tool because of the pause.
+
+The five-minute approval timeout must remain well-defined and documented.
+
+---
+
+# 11.8 Resume
+
+When the user presses:
+
+```text
+Resume Live
+```
+
+the task should continue from its preserved state:
+
+```text
+paused
+ ↓
+restore state
+ ↓
+process queued events if applicable
+ ↓
+resume planner
+ ↓
+continue Live Mode
+```
+
+Do not restart the task from the beginning.
+
+---
+
+# 11.9 Pause Persistence
+
+Persist the paused state so UI refresh/reconnection does not turn a paused task back into running.
+
+A runtime restart should handle paused tasks safely according to the project's task persistence model.
+
+Document any limitations honestly.
+
+---
+
+# 12. Configuration UI
+
+Add the new controls to the correct configuration areas.
+
+### Tool configuration
+
+```text
+Auto-Execute Tools
+```
+
+default:
+
+```text
+false
+```
+
+### Global settings
+
+```text
+Auto-Execute Tools
+Allow Multiple Events at Same Time
+```
+
+default:
+
+```text
+false
+false
+```
+
+### Live Task configuration
+
+Allow task-level configuration where appropriate:
+
+```text
+multipleEvents
+pause/resume state
+```
+
+Respect the existing configuration precedence rules.
+
+---
+
+# 13. Task Configuration Schema
+
+Extend the task configuration with concepts such as:
+
+```json
+{
+  "autoExecuteTools": false,
+  "allowMultipleEvents": false
+}
+```
+
+Use the project's exact naming conventions consistently.
+
+Keep existing:
+
+```text
+parallelToolCalls
+maxParallelToolCalls
+```
+
+separate from:
+
+```text
+allowMultipleEvents
+```
+
+They solve different problems.
+
+---
+
+# 14. Distinguish Parallel Tools From Multiple Events
+
+Important:
+
+```text
+Parallel Tool Calls
+```
+
+means:
+
+> Execute independent tools from one planning/action cycle concurrently.
+
+Whereas:
+
+```text
+Multiple Events
+```
+
+means:
+
+> Accept multiple incoming live events, queue them, and process their event-driven work one-by-one.
+
+Do not merge these two concepts.
+
+Example:
+
+```text
+Event A
+ ↓
+Planner
+ ↓
+Tool A + Tool B in parallel
+ ↓
+Finish Event A
+
+Event B
+ ↓
+Planner
+ ↓
+Tool C
+```
+
+Both capabilities may be enabled simultaneously.
+
+---
+
+# 15. Runtime State Machine
+
+Extend runtime states to include:
+
+```text
+queued
+starting
+planning
+running
+waiting
+observing
+awaiting_approval
+paused
+completed
+failed
+cancelled
+stopped
+```
+
+Use the actual project's existing state model and add only the required states.
+
+---
+
+# 16. Task Preview
+
+Enhance Task Preview to show:
+
+```text
+Auto-Execute status
+Approval status
+Pending approval
+Event queue
+Paused state
+Resume action
+Current event
+Queued events
+```
+
+Do not overwhelm the page.
+
+Use collapsible sections where needed.
+
+---
+
+# 17. Tool IDE
+
+Add the following to the Tool IDE:
+
+### Environment capability panel
+
+Show:
+
+```text
+fetch
+XMLHttpRequest
+alert
+prompt
+Virtual FS
+require/import
+Node APIs
+child_process
+```
+
+with availability based on the selected environment.
+
+### Auto-Execute
+
+Show:
+
+```text
+Auto-Execute Tools
+```
+
+with default false for new tools.
+
+---
+
+# 18. Tool Documentation
+
+Update documentation for:
+
+```text
+js-function environment
+nodejs environment
+Virtual FS
+network APIs
+imports
+require
+child_process
+tool approval
+Auto-Execute Tools
+```
+
+Document exactly what is supported and what is blocked.
+
+---
+
+# 19. Security Documentation
+
+Create a dedicated section explaining:
+
+```text
+Host filesystem isolation
+Virtual filesystem
+Network restrictions
+Module allowlist
+Node.js API restrictions
+Child process restrictions
+Execution timeout
+Memory limits
+Output limits
+Import restrictions
+```
+
+Do not claim that the environment is secure beyond the mechanisms actually implemented.
+
+---
+
+# 20. Tests
+
+Add comprehensive tests.
+
+### Common APIs
+
+```text
+fetch
+XMLHttpRequest
+alert
+prompt
+Math
+Object
+JSON
+URL
+Promise
+```
+
+### Virtual FS
+
+```text
+create
+read
+write
+append
+rename
+copy
+delete
+list
+path normalization
+traversal rejection
+host filesystem rejection
+```
+
+### Node.js
+
+```text
+require
+import
+dynamic import
+virtual module import
+allowed Node module
+blocked Node module
+http
+https
+child_process restrictions
+```
+
+### Approval
+
+```text
+auto execute true
+auto execute false
+allow
+deny
+optional feedback
+timeout
+runtime rejection
+global override
+```
+
+### Multiple Events
+
+```text
+single-event mode
+multi-event mode
+queue
+ordering
+sequential processing
+no-action event
+action event
+queue limits
+```
+
+### Pause
+
+```text
+pause
+resume
+pause while waiting
+pause during tool
+scheduler behavior
+state persistence
+```
+
+---
+
+# 21. Realtime Events
+
+Add events for the new features.
+
+Examples:
+
+```text
+tool.approval.required
+tool.approval.allowed
+tool.approval.denied
+tool.approval.timeout
+tool.execution.blocked
+
+tool.user_prompt.requested
+tool.user_prompt.responded
+tool.user_alert
+
+live.event.queued
+live.event.processing
+live.event.processed
+
+task.paused
+task.resumed
+```
+
+Use the existing event architecture.
+
+Do not create a second event transport.
+
+---
+
+# 22. Documentation Update
+
+Update the combined documentation source after implementation.
+
+At minimum add/update:
+
+```text
+tools.md
+tool-development.md
+tool-runtime.md
+runtime.md
+events.md
+live-mode.md
+configuration.md
+api.md
+realtime.md
+troubleshooting.md
+project-structure.md
+```
+
+Document:
+
+* new environments
+* new APIs
+* VFS
+* imports
+* approval flow
+* multiple events
+* pause/resume
+* new task states
+* configuration precedence
+
+---
+
+# 23. Compatibility
+
+Existing tools must continue working.
+
+Existing:
+
+```text
+builtin
+virtual-env
+dynamic
+js-function
+```
+
+tools must not break because of the new runtime.
+
+Existing v1.0.4/v1.0.5 tool JSON exports should continue to import correctly.
+
+Tools without the new `autoExecute` field should receive the documented default:
+
+```text
+false
+```
+
+without invalidating the tool.
+
+---
+
+# 24. Final Acceptance Criteria
+
+v1.0.6 is complete when:
+
+```text
+✓ fetch works in both supported tool environments
+✓ XMLHttpRequest works
+✓ custom async alert works
+✓ custom async prompt works
+✓ standard JavaScript globals are available
+✓ js-function runtime has expanded safe capabilities
+✓ nodejs runtime has expanded Node APIs
+✓ Virtual FS is fully functional
+✓ fs resolves to Virtual FS
+✓ host filesystem cannot be accessed
+✓ path traversal is blocked
+✓ HTTP/HTTPS work under runtime policy
+✓ require() works under allowlist
+✓ ES import works under allowlist
+✓ dynamic import works
+✓ Virtual FS imports work
+✓ URL imports work when explicitly permitted
+✓ child_process is restricted to the safe execution environment
+✓ Node APIs are documented and reflected in IntelliSense
+✓ Auto-Execute Tools exists per tool
+✓ Auto-Execute defaults false
+✓ Global Auto-Execute override exists
+✓ Approval request UI works
+✓ Approval timeout is 5 minutes
+✓ Allow executes the tool
+✓ Deny skips the tool
+✓ Optional deny feedback becomes a feedback event
+✓ Approval timeout stops the task
+✓ Runtime/security rejection stops the task
+✓ Dependent steps respect denied tools
+✓ Multiple event configuration exists
+✓ Single-event mode remains default behavior
+✓ Multi-event mode queues incoming events
+✓ Events are processed one-by-one
+✓ Event queue is visible
+✓ Event queue limits exist
+✓ Pause Live exists
+✓ Resume Live exists
+✓ Paused state persists correctly
+✓ Scheduler respects pause
+✓ No new actions occur while paused
+✓ Existing runtime functionality remains intact
+✓ Documentation is updated
+✓ Tests pass
+✓ Typecheck passes
+✓ Build passes
+```
+
+---
+
+# 25. Final Implementation Instruction
+
+Implement **NexTool Q1 v1.0.6** directly on top of v1.0.5.
+
+This release is primarily about making NexTool's execution environment substantially more capable while keeping it controlled and isolated.
+
+The most important architectural boundaries are:
+
+```text
+Tool
+ ↓
+Execution Environment
+ ↓
+Sandbox / Virtual FS
+ ↓
+Controlled APIs
+```
+
+and:
+
+```text
+Live Events
+ ↓
+Event Queue
+ ↓
+Observer
+ ↓
+Planner
+ ↓
+Approval if required
+ ↓
+CoreModule
+ ↓
+Tool Runtime
+ ↓
+Observation
+ ↓
+Next Event
+```
+
+Do not bypass the existing Main → Observer → Planner → CoreModule → Tool Runtime architecture.
+
+Do not give tools direct access to the NexTool source filesystem.
+
+Do not expose unrestricted Node.js host access.
+
+Do not turn `child_process` into an unrestricted shell.
+
+Do not allow approval timeouts to silently execute tools.
+
+Do not lose events when multiple-event mode is enabled.
+
+Do not restart paused tasks from the beginning.
+
+Do not implement these as frontend-only simulations.
+
+Every new capability must function end-to-end through the real runtime, API, state, event stream, and UI.
+
+After implementation, run:
+
+```bash
+bun test
+bun run lint
+bun run build
+```
+
+and execute manual runtime smoke tests for:
+
+```text
+Tool API
+Virtual FS
+Imports
+Network APIs
+Approval
+Multiple Events
+Pause / Resume
+```
+
+Then update the project's documentation source so the documented v1.0.6 architecture matches the actual implementation.
+
+The final result must be a complete, working:
+
+```text
+NexTool Q1
+Version 1.0.6
+```

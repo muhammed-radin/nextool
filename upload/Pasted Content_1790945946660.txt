@@ -1,0 +1,2277 @@
+# NexTool Q1 — Version 1.0.8
+
+Upgrade the existing **NexTool Q1 v1.0.7** project to **v1.0.8**.
+
+This release focuses on:
+
+```text
+Tool runtime capabilities
+URL module imports
+Virtual Node.js command execution
+Network limits
+Virtual filesystem limits
+Execution limits
+Centralized configurable limits
+Removal of hard-coded configuration limits
+Responsive Task Console cleanup
+Documentation synchronization
+```
+
+Do not rebuild NexTool.
+
+Do not remove existing functionality.
+
+Preserve the existing architecture:
+
+```text
+Main
+ ↓
+Planner
+ ↓
+CoreModule
+ ↓
+Tool Runtime
+ ↓
+Observer
+ ↓
+Main
+```
+
+and the existing Goal Mode / Live Mode behavior.
+
+---
+
+# 1. Async `confirm()` in Both Tool Environments
+
+Add a NexTool-provided asynchronous:
+
+```js
+await confirm("Do you want to continue?");
+```
+
+function.
+
+It must be supported in:
+
+```text
+js-function
+nodejs
+```
+
+environments.
+
+---
+
+## 1.1 Return Type
+
+`confirm()` must always resolve to a boolean:
+
+```js
+const accepted = await confirm("Continue?");
+```
+
+Possible results:
+
+```text
+true
+false
+```
+
+Do not return strings such as `"yes"` or `"no"`.
+
+---
+
+# 1.2 User Interaction
+
+When a tool calls:
+
+```js
+await confirm("Delete the generated files?");
+```
+
+execution must pause at that point.
+
+Show a NexTool confirmation UI.
+
+Example:
+
+```text
+┌───────────────────────────────┐
+│ Tool Confirmation             │
+│                               │
+│ Delete the generated files?   │
+│                               │
+│ [ Cancel ]       [ Confirm ]  │
+└───────────────────────────────┘
+```
+
+The tool resumes only after the user responds.
+
+---
+
+# 1.3 Runtime Event
+
+Treat this as a runtime interaction event.
+
+Example:
+
+```text
+tool.confirm.requested
+tool.confirm.responded
+```
+
+The event should contain enough information to associate the response with:
+
+```text
+task
+execution
+tool
+confirmation request
+```
+
+---
+
+# 1.4 Cancellation / Timeout
+
+If the confirmation request is cancelled or its execution is terminated, do not leave the tool suspended forever.
+
+Resolve according to the existing runtime cancellation semantics, preferably:
+
+```text
+false
+```
+
+for a user-facing confirmation.
+
+Do not automatically treat an unresolved confirmation as:
+
+```text
+true
+```
+
+---
+
+# 1.5 Tool Preview
+
+Display confirmation requests in Task Preview / Live Monitor when they occur.
+
+Example:
+
+```text
+[waiting] Tool confirmation requested
+[waiting] Delete generated files?
+```
+
+After the user responds:
+
+```text
+[✓] Confirmation: allowed
+```
+
+or:
+
+```text
+[✓] Confirmation: denied
+```
+
+---
+
+# 2. URL `import()` in Both Environments
+
+Enable dynamic URL imports in:
+
+```text
+js-function
+nodejs
+```
+
+Example:
+
+```js
+const module = await import("https://example.com/module.js");
+```
+
+URL imports must be real functionality, not a mocked response.
+
+---
+
+# 2.1 URL Import Security
+
+URL imports must pass through the centralized NexTool network policy.
+
+Do not bypass:
+
+```text
+allowed protocols
+allowed hosts
+timeout
+response size
+redirect limits
+request limits
+```
+
+The URL import must use the same network-policy enforcement layer as `fetch` and other network operations.
+
+---
+
+# 2.2 Supported URL Schemes
+
+By default support:
+
+```text
+https://
+http://
+```
+
+only if the network policy allows them.
+
+Reject unsupported protocols.
+
+Examples:
+
+```text
+file://
+data://
+node://
+```
+
+must not become hidden ways to access local or host resources unless explicitly supported by the runtime.
+
+---
+
+# 2.3 Module Response
+
+The downloaded resource must be interpreted as a JavaScript module.
+
+Example:
+
+```js
+const utils = await import("https://example.com/utils.js");
+
+return await utils.process(params.value);
+```
+
+Support:
+
+```text
+default export
+named exports
+multiple exports
+```
+
+where compatible with the module loader.
+
+---
+
+# 2.4 URL Import Isolation
+
+Downloaded modules execute under the same sandbox/environment restrictions as the importing tool.
+
+A URL module must NOT gain unrestricted:
+
+```text
+filesystem
+process
+host environment
+child processes
+secrets
+```
+
+access.
+
+The imported module inherits the current tool runtime security boundary.
+
+---
+
+# 2.5 URL Import Limits
+
+Apply:
+
+```text
+network timeout
+maximum response size
+maximum redirects
+maximum network requests per execution
+```
+
+from the central configuration system described later.
+
+---
+
+# 2.6 URL Import Cache
+
+If caching is implemented, cache according to the existing runtime policy.
+
+Do not make cache behavior bypass network-policy changes.
+
+For example, if a URL is currently blocked, a stale cached module must not automatically bypass the configured restriction.
+
+---
+
+# 3. Expand Virtual Node.js `child_process`
+
+The Node.js tool environment must support substantially more commands inside the **Virtual FS**.
+
+The goal is to allow realistic development workflows inside the isolated virtual environment.
+
+For example, a tool should be able to create a project such as:
+
+```text
+MERN application
+```
+
+inside the Virtual FS.
+
+It must NOT create or modify a real project on the NexTool host filesystem.
+
+---
+
+# 3.1 Existing Commands Must Remain
+
+Do not remove the currently supported commands.
+
+Preserve:
+
+```text
+ls
+cat
+head
+tail
+echo
+printf
+pwd
+wc
+grep
+sort
+uniq
+date
+mkdir
+touch
+rm
+cp
+mv
+basename
+dirname
+env
+true
+false
+```
+
+Existing behavior must continue to work.
+
+---
+
+# 3.2 Add More Shell Commands
+
+Add support for useful commands such as:
+
+```text
+clear
+cd
+find
+tree
+du
+df
+cut
+tr
+sed
+awk
+xargs
+tee
+yes
+sleep
+which
+whoami
+uname
+realpath
+readlink
+basename
+dirname
+```
+
+Only expose commands that can safely operate within the Virtual FS/runtime.
+
+---
+
+# 3.3 Node
+
+Support:
+
+```bash
+node
+```
+
+inside the Virtual FS environment.
+
+Example:
+
+```bash
+node app.js
+```
+
+The JavaScript process must execute inside the NexTool sandbox.
+
+It must inherit:
+
+```text
+Virtual FS
+network policy
+execution limits
+environment restrictions
+memory limits
+process limits
+```
+
+It must NOT become an unrestricted host Node.js process.
+
+---
+
+# 3.4 npm
+
+Support:
+
+```bash
+npm
+```
+
+for Virtual FS development workflows.
+
+Example:
+
+```bash
+npm init
+npm install
+npm run dev
+npm run build
+npm test
+```
+
+where supported by the runtime.
+
+---
+
+# 3.5 npm Security
+
+`npm` must operate inside an isolated package/project environment.
+
+It must not:
+
+```text
+modify NexTool source
+write to host filesystem
+modify host node_modules
+modify NexTool package.json
+execute unrestricted host scripts
+```
+
+---
+
+# 3.6 Package Installation
+
+When:
+
+```bash
+npm install express
+```
+
+is executed, packages must be installed into the tool's isolated Virtual FS workspace.
+
+Example:
+
+```text
+/workspace/
+├── package.json
+├── package-lock.json
+└── node_modules/
+    └── express/
+```
+
+Do not install packages into the actual NexTool application's `node_modules`.
+
+---
+
+# 3.7 npm Scripts
+
+Be careful with:
+
+```json
+{
+  "scripts": {
+    "build": "...",
+    "dev": "...",
+    "postinstall": "..."
+  }
+}
+```
+
+npm scripts execute code.
+
+Therefore npm scripts must inherit the same sandbox restrictions as any other child process.
+
+Do not let:
+
+```bash
+npm install
+```
+
+become an unrestricted arbitrary host-code execution mechanism.
+
+---
+
+# 3.8 `cd`
+
+Support:
+
+```bash
+cd /workspace
+cd project
+cd ..
+```
+
+The current working directory belongs to the virtual environment.
+
+Never allow:
+
+```bash
+cd /real/host/path
+```
+
+to escape the VFS.
+
+---
+
+# 3.9 Shell State
+
+A command session should maintain its current working directory.
+
+Example:
+
+```text
+$ cd project
+$ pwd
+/workspace/project
+
+$ ls
+package.json
+src
+
+$ cd src
+$ pwd
+/workspace/project/src
+```
+
+Do not reset the working directory after every command within the same logical shell session.
+
+---
+
+# 3.10 `clear`
+
+Support:
+
+```bash
+clear
+```
+
+as a terminal/UI command.
+
+It should clear the virtual terminal output rather than affect the host terminal.
+
+---
+
+# 3.11 Project Creation
+
+The environment should support workflows such as:
+
+```bash
+mkdir my-app
+cd my-app
+npm init
+mkdir src
+touch src/index.js
+npm install express
+node src/index.js
+```
+
+and similar development operations.
+
+---
+
+# 3.12 MERN Example
+
+The environment should be capable of creating a project structure such as:
+
+```text
+my-mern-app/
+├── package.json
+├── server/
+│   ├── package.json
+│   └── src/
+│       └── index.js
+├── client/
+│   ├── package.json
+│   └── src/
+└── README.md
+```
+
+inside the Virtual FS.
+
+This is an example of capability, not a requirement to provide a special MERN generator.
+
+---
+
+# 3.13 Command Policy
+
+Create one centralized command policy.
+
+Example:
+
+```text
+Command
+ ↓
+Command Resolver
+ ↓
+Allowlist
+ ↓
+Virtual Runtime
+ ↓
+VFS
+```
+
+Do not implement security independently inside every command.
+
+---
+
+# 3.14 Block Host Commands
+
+Commands that could directly control or escape the host must remain blocked unless implemented through a safe virtualized runtime.
+
+Examples of dangerous categories:
+
+```text
+host filesystem manipulation
+privileged operations
+host process management
+container/runtime control
+network tunneling
+credential access
+arbitrary shell escape
+```
+
+---
+
+# 3.15 Child Process Limits
+
+Every child process must inherit execution limits from the central configuration.
+
+Apply:
+
+```text
+timeout
+memory
+output
+process count
+source/code limits where applicable
+filesystem limits
+network limits
+```
+
+---
+
+# 4. Network Policy Configuration
+
+Replace the current fixed network-policy limits with centralized configuration.
+
+Current baseline:
+
+```text
+Protocols:
+http / https
+
+Timeout:
+10000ms
+
+Response:
+≤ 1 MiB
+
+Redirects:
+≤ 3
+
+Requests:
+≤ 10 per execution
+
+URL imports:
+disabled
+```
+
+The new v1.0.8 configuration must support:
+
+```text
+Timeout:
+default = 1 minute
+maximum = 1 hour
+
+Response maximum:
+default = 5 MiB
+
+Redirect maximum:
+default = 56
+
+Requests per execution:
+default = 56
+
+URL imports:
+enabled
+```
+
+---
+
+# 4.1 Network Timeout
+
+New default:
+
+```text
+60000ms
+```
+
+Maximum:
+
+```text
+3600000ms
+```
+
+Users can configure the value in Settings.
+
+---
+
+# 4.2 Network Response Size
+
+New maximum/default configuration:
+
+```text
+5 MiB
+```
+
+Make it configurable through the central configuration-limit JSON.
+
+Do not hard-code the value in the network implementation.
+
+---
+
+# 4.3 Redirect Limit
+
+Default:
+
+```text
+56
+```
+
+Make configurable.
+
+---
+
+# 4.4 Requests Per Execution
+
+Default:
+
+```text
+56
+```
+
+Make configurable.
+
+This includes requests made by:
+
+```text
+fetch
+XMLHttpRequest
+URL import
+http
+https
+```
+
+where appropriate.
+
+---
+
+# 4.5 URL Imports
+
+URL imports are now supported.
+
+Default:
+
+```text
+enabled
+```
+
+Expose this in Settings.
+
+The user should be able to disable URL imports without changing source code.
+
+---
+
+# 4.6 Protocol Configuration
+
+Allow configuration for:
+
+```text
+http
+https
+```
+
+Do not assume every deployment should have identical network access.
+
+---
+
+# 5. Virtual Filesystem Configuration
+
+Current baseline:
+
+```text
+Directories:
+workspace
+input
+output
+tmp
+data
+/workspace
+
+File max:
+512 KiB
+
+Total max:
+8 MiB
+
+Maximum entries:
+500
+
+Maximum depth:
+24
+```
+
+Update defaults to:
+
+```text
+File max:
+2 MiB
+
+Total max:
+700 MiB
+
+Maximum entries:
+4000
+
+Maximum depth:
+56
+```
+
+Every value must be configurable.
+
+---
+
+# 5.1 VFS Limits
+
+Create centralized settings for:
+
+```text
+maximum file size
+maximum total filesystem size
+maximum entry count
+maximum directory depth
+```
+
+---
+
+# 5.2 Dynamic Enforcement
+
+The Virtual FS must read its limits from the centralized runtime configuration.
+
+Do NOT do:
+
+```ts
+const MAX_FILE_SIZE = 2 * 1024 * 1024;
+```
+
+inside the filesystem implementation.
+
+Instead resolve the current configuration.
+
+---
+
+# 5.3 Runtime Changes
+
+If the user changes a limit in Settings:
+
+new executions must use the new limit.
+
+Do not require source-code modification or application rebuild.
+
+---
+
+# 5.4 Existing Files
+
+If a user reduces the configured limit below an already-existing file size:
+
+do not silently corrupt/delete the existing file.
+
+New operations that violate the limit should fail clearly.
+
+---
+
+# 6. Execution Limits
+
+Current baseline:
+
+```text
+timeout:
+10000ms
+
+sync cap:
+4000ms
+
+heap sentinel:
+256 MiB
+
+source:
+64000 chars
+
+result:
+64 KiB
+
+logs:
+100
+```
+
+Make all of these configurable.
+
+New maximum values:
+
+```text
+Execution timeout:
+maximum 1 hour
+
+Sync cap:
+maximum 30 minutes
+
+Heap sentinel:
+maximum 728 MiB
+
+Source:
+maximum 200000 characters
+
+Logs:
+maximum 1000 lines
+```
+
+---
+
+# 6.1 Execution Timeout
+
+Default may remain:
+
+```text
+10000ms
+```
+
+unless the runtime configuration explicitly defines another default.
+
+Maximum:
+
+```text
+3600000ms
+```
+
+---
+
+# 6.2 Sync Execution Cap
+
+Maximum:
+
+```text
+30 minutes
+```
+
+```text
+1800000ms
+```
+
+This protects synchronous operations while still supporting long-running workloads.
+
+---
+
+# 6.3 Heap Sentinel
+
+Default:
+
+```text
+256 MiB
+```
+
+Maximum:
+
+```text
+728 MiB
+```
+
+Do not pretend this is a hard operating-system memory limit if it is only a sentinel/monitor.
+
+Document exactly what the setting means.
+
+---
+
+# 6.4 Source Size
+
+Default:
+
+```text
+64000 characters
+```
+
+Maximum:
+
+```text
+200000 characters
+```
+
+Use the configured value for:
+
+```text
+js-function source
+```
+
+and other tool source validation where applicable.
+
+---
+
+# 6.5 Result Size
+
+Keep the existing result limit configurable.
+
+Do not hard-code:
+
+```text
+64 KiB
+```
+
+in the runtime.
+
+Create:
+
+```text
+resultMaxBytes
+```
+
+or equivalent.
+
+Define:
+
+```text
+default
+minimum
+maximum
+type
+unit
+```
+
+in the centralized configuration-limit file.
+
+---
+
+# 6.6 Log Limit
+
+Default:
+
+```text
+100
+```
+
+Maximum:
+
+```text
+1000
+```
+
+The existing runtime currently caps captured logs at 100 lines; this must become dynamic.
+
+---
+
+# 7. Central Configuration Limits JSON
+
+This is the most important architectural change in v1.0.8.
+
+Create **one authoritative configuration-limit JSON file**.
+
+Its purpose is:
+
+> Define the allowed range, default, type, unit, nullability, and other metadata for every configurable NexTool setting.
+
+A self-hosted NexTool installation should be able to customize configuration limits by editing this single JSON file instead of modifying source code.
+
+---
+
+# 7.1 Single Source of Truth
+
+Create something conceptually like:
+
+```text
+config/
+└── configuration-limits.json
+```
+
+Use the project's existing configuration directory conventions if one already exists.
+
+Do not create multiple competing limit files.
+
+---
+
+# 7.2 Example Structure
+
+Use a structured schema similar to:
+
+```json
+{
+  "version": 1,
+
+  "network": {
+    "timeoutMs": {
+      "type": "integer",
+      "nullable": false,
+      "default": 60000,
+      "min": 100,
+      "max": 3600000,
+      "unit": "ms"
+    },
+
+    "maxResponseBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 5242880,
+      "min": 1024,
+      "max": 734003200,
+      "unit": "bytes"
+    },
+
+    "maxRedirects": {
+      "type": "integer",
+      "nullable": false,
+      "default": 56,
+      "min": 0,
+      "max": 56,
+      "unit": "count"
+    },
+
+    "maxRequestsPerExecution": {
+      "type": "integer",
+      "nullable": false,
+      "default": 56,
+      "min": 1,
+      "max": 56,
+      "unit": "count"
+    },
+
+    "allowUrlImports": {
+      "type": "boolean",
+      "nullable": false,
+      "default": true
+    }
+  }
+}
+```
+
+This is an architectural example. Use the actual application's configuration naming conventions.
+
+---
+
+# 7.3 Every Config Property
+
+The configuration-limit JSON must cover **all configurable properties**, not only v1.0.8 additions.
+
+Each property should define metadata such as:
+
+```text
+type
+nullable
+default
+min
+max
+unit
+description
+```
+
+Optional metadata may include:
+
+```text
+step
+enum
+category
+deprecated
+requiresRestart
+```
+
+---
+
+# 7.4 Nullable Settings
+
+Some settings may legitimately be unlimited/disabled.
+
+Support:
+
+```json
+{
+  "nullable": true
+}
+```
+
+For example, where appropriate:
+
+```text
+null = no explicit limit
+```
+
+However, never interpret `null` as unlimited automatically.
+
+Each nullable property must define/document exactly what `null` means.
+
+---
+
+# 7.5 Type Safety
+
+Supported configuration types should include:
+
+```text
+integer
+number
+boolean
+string
+enum
+```
+
+Add arrays/objects only when actually required.
+
+---
+
+# 7.6 Runtime Loader
+
+Create a central configuration-limit loader.
+
+Conceptually:
+
+```text
+configuration-limits.json
+        ↓
+Limit Loader
+        ↓
+Validated Limit Schema
+        ↓
+Settings Resolver
+        ↓
+Runtime
+```
+
+Every subsystem should consume the resolved configuration.
+
+---
+
+# 7.7 Startup Validation
+
+When NexTool starts:
+
+```text
+load configuration-limits.json
+ ↓
+parse JSON
+ ↓
+validate schema
+ ↓
+validate default/min/max relationships
+ ↓
+build runtime configuration
+```
+
+If the JSON is invalid:
+
+```text
+fail clearly
+```
+
+Do not silently use random hard-coded values.
+
+---
+
+# 7.8 Validate Limit Relationships
+
+For every numeric property:
+
+```text
+min <= default <= max
+```
+
+must hold.
+
+If:
+
+```text
+default > max
+```
+
+startup/config loading must report a clear configuration error.
+
+---
+
+# 7.9 Self-Hosting Customization
+
+The key requirement:
+
+A self-hosted NexTool administrator should be able to modify:
+
+```text
+configuration-limits.json
+```
+
+to customize the maximum allowed values.
+
+For example, if a deployment needs:
+
+```text
+tool timeout maximum = 1 day
+```
+
+the administrator should be able to change the configuration-limit JSON rather than edit TypeScript source code.
+
+However:
+
+**Do not assume the application's current one-hour maximum must remain permanently hard-coded.**
+
+The v1.0.8 architecture should make the JSON authoritative.
+
+The supplied initial configuration should contain the requested one-hour maximum:
+
+```text
+3600000ms
+```
+
+but the architecture must allow a self-hosted administrator to raise it through the single limits file.
+
+---
+
+# 7.10 Important Security Boundary
+
+The configuration-limit JSON controls the application's configured limits.
+
+It must NOT automatically grant host-level privileges.
+
+For example:
+
+```text
+max timeout = 1 day
+```
+
+does not mean:
+
+```text
+unrestricted host process
+```
+
+and:
+
+```text
+max VFS size = 700 MiB
+```
+
+does not mean:
+
+```text
+host filesystem access
+```
+
+The security boundaries remain enforced.
+
+---
+
+# 8. Settings Must Load Limits First
+
+The Settings system must load the centralized limit definition before rendering/editing configuration values.
+
+Flow:
+
+```text
+configuration-limits.json
+        ↓
+Settings Limit Schema
+        ↓
+Current Settings
+        ↓
+Settings UI
+```
+
+---
+
+# 8.1 Settings UI Metadata
+
+Use the JSON metadata to dynamically determine:
+
+```text
+input type
+minimum
+maximum
+default
+nullable state
+step
+unit
+description
+```
+
+Do not duplicate these values manually in React components.
+
+---
+
+# 8.2 Example
+
+If:
+
+```json
+"maxSourceChars": {
+  "type": "integer",
+  "default": 64000,
+  "min": 1000,
+  "max": 200000,
+  "unit": "chars"
+}
+```
+
+the Settings UI should automatically know:
+
+```text
+Input type = number
+Default = 64000
+Min = 1000
+Max = 200000
+Unit = chars
+```
+
+---
+
+# 8.3 Frontend Validation
+
+Frontend validation must derive from the centralized limits.
+
+Do not hard-code:
+
+```text
+max=200000
+```
+
+inside the component.
+
+---
+
+# 8.4 Backend Validation
+
+Backend validation must independently use the same limits.
+
+Never trust the frontend.
+
+---
+
+# 8.5 Runtime Validation
+
+Runtime enforcement must also use the same resolved limits.
+
+Therefore:
+
+```text
+Frontend
+Backend
+Runtime
+```
+
+must all agree.
+
+---
+
+# 9. Remove Hard-Coded Configuration Limits
+
+Perform a project-wide audit for hard-coded configuration properties.
+
+Search for patterns such as:
+
+```text
+10000
+4000
+64000
+256 MiB
+100
+512 KiB
+8 MiB
+500
+24
+1 MiB
+3 redirects
+10 requests
+```
+
+and similar constants where they represent configurable settings.
+
+Do not blindly replace unrelated mathematical constants.
+
+Only replace configuration/limit constants.
+
+---
+
+# 9.1 High-Priority Areas
+
+Specifically audit:
+
+```text
+Task settings
+Dashboard
+Task Console
+Tools page
+Tool Create/Edit
+Tool Runtime
+Network policy
+Virtual FS
+Child Process
+Execution limits
+Models
+Training
+Benchmark
+Live Mode
+Scheduler
+Settings
+API validation
+```
+
+---
+
+# 9.2 Task Settings
+
+The task system currently clamps task configuration values against global settings.
+
+Make those limits dynamically resolved from the centralized configuration system.
+
+Examples:
+
+```text
+maxIterations
+timeout
+parallel tools
+max parallel tools
+reasoning level
+event limits
+approval limits
+```
+
+where applicable.
+
+---
+
+# 9.3 Dashboard
+
+Audit dashboard statistics/configuration displays.
+
+Do not show stale hard-coded limits.
+
+If the dashboard displays:
+
+```text
+Max timeout
+Max iterations
+Max tools
+```
+
+retrieve the actual configured values.
+
+---
+
+# 9.4 Task Console
+
+Audit:
+
+```text
+input limits
+tool limits
+task configuration
+timeout controls
+parallel controls
+reasoning controls
+live settings
+```
+
+Everything configurable must use the central limit metadata.
+
+---
+
+# 9.5 Tools Create/Edit
+
+Audit:
+
+```text
+source length
+timeout
+logs
+result size
+network
+VFS
+execution settings
+```
+
+The editor must use the actual configuration-limit definitions.
+
+---
+
+# 10. Configuration Registry API
+
+Expose the resolved configuration-limit metadata to the frontend through a safe API.
+
+Example concept:
+
+```text
+GET /api/config/limits
+```
+
+Use the project's existing route conventions if different.
+
+Do not expose sensitive environment variables or secrets through this endpoint.
+
+Only expose configuration metadata that the UI needs.
+
+---
+
+# 10.1 Settings API
+
+The existing Settings API must validate incoming settings against the loaded limits.
+
+Example:
+
+```text
+requested value
+ ↓
+type validation
+ ↓
+nullable validation
+ ↓
+min/max validation
+ ↓
+normalized value
+ ↓
+persist
+```
+
+---
+
+# 11. Configuration Versioning
+
+The limits file should have a version:
+
+```json
+{
+  "version": 1
+}
+```
+
+This allows future migrations.
+
+If the schema changes in a later NexTool release, implement a migration/validation mechanism rather than silently interpreting an incompatible file.
+
+---
+
+# 12. Runtime Configuration Reload
+
+Where practical, support reloading configuration after the limits file changes.
+
+At minimum:
+
+```text
+application restart
+```
+
+must reliably load the modified limits file.
+
+If hot reload is supported, ensure it is safe.
+
+Do not require source-code modification or rebuild.
+
+---
+
+# 13. Configuration Documentation
+
+Create/update configuration documentation to explain:
+
+```text
+configuration-limits.json
+```
+
+Include:
+
+```text
+purpose
+schema
+types
+nullable
+default
+min
+max
+units
+startup validation
+self-host customization
+runtime behavior
+security boundaries
+```
+
+Provide examples.
+
+---
+
+# 14. Child Process + Central Limits
+
+The child-process system must use the same central configuration.
+
+Do not create:
+
+```text
+childProcessMaxTimeout
+networkTimeout
+toolTimeout
+nodeTimeout
+```
+
+as unrelated hard-coded values unless they are intentionally separate configuration properties.
+
+Clearly document which timeout governs which operation.
+
+---
+
+# 15. URL Imports + Central Limits
+
+URL imports must use:
+
+```text
+network.timeoutMs
+network.maxResponseBytes
+network.maxRedirects
+network.maxRequestsPerExecution
+network.allowUrlImports
+```
+
+or the equivalent canonical property names.
+
+Do not introduce another independent URL-import configuration system.
+
+---
+
+# 16. Virtual FS + Central Limits
+
+The VFS must use:
+
+```text
+vfs.maxFileBytes
+vfs.maxTotalBytes
+vfs.maxEntries
+vfs.maxDepth
+```
+
+or equivalent canonical properties.
+
+The VFS implementation must resolve these dynamically.
+
+---
+
+# 17. Execution + Central Limits
+
+The execution runtime must use:
+
+```text
+execution.timeoutMs
+execution.syncTimeoutMs
+execution.heapSentinelBytes
+execution.maxSourceChars
+execution.maxResultBytes
+execution.maxLogs
+```
+
+or equivalent canonical properties.
+
+Do not hard-code the limits in `js-runner.ts`.
+
+The existing `js-function` runner currently has these limits embedded in its documented/runtime behavior, so this audit must include that implementation.
+
+---
+
+# 18. Preserve Existing Safety Boundaries
+
+The increased limits must not remove sandbox isolation.
+
+Even with:
+
+```text
+1 hour timeout
+728 MiB heap sentinel
+200K source
+700 MiB VFS
+```
+
+the tool must remain isolated.
+
+Never allow:
+
+```text
+host FS access
+host process control
+secret access
+sandbox escape
+```
+
+just because a limit increased.
+
+---
+
+# 19. Task Console Bottom Blank Space
+
+There is currently a large blank area below the footer on the Task Console page while scrolling.
+
+Remove the unnecessary blank space.
+
+Audit:
+
+```text
+min-height
+height
+padding-bottom
+margin-bottom
+flex growth
+footer spacing
+viewport calculations
+absolute/fixed elements
+```
+
+Do not simply hide overflow on the page.
+
+The page should naturally end after the footer.
+
+---
+
+# 19.1 Responsive Requirement
+
+Verify the fix at:
+
+```text
+mobile
+tablet
+desktop
+large desktop
+```
+
+The page must not create a large artificial scroll region.
+
+---
+
+# 20. Tests
+
+Add/update tests for all new functionality.
+
+## Confirm
+
+```text
+js-function confirm()
+nodejs confirm()
+returns true
+returns false
+waits for user
+cancellation
+task association
+```
+
+## URL Import
+
+```text
+js-function URL import
+nodejs URL import
+default export
+named export
+network policy
+timeout
+response size
+redirect limit
+request limit
+blocked protocol
+```
+
+## Child Process
+
+Test all existing commands remain available:
+
+```text
+ls
+cat
+head
+tail
+echo
+printf
+pwd
+wc
+grep
+sort
+uniq
+date
+mkdir
+touch
+rm
+cp
+mv
+basename
+dirname
+env
+true
+false
+```
+
+and new commands:
+
+```text
+clear
+cd
+find
+tree
+cut
+tr
+sed
+awk
+tee
+sleep
+which
+whoami
+uname
+```
+
+and:
+
+```text
+node
+npm
+```
+
+where supported.
+
+---
+
+# 21. Virtual MERN Workflow Test
+
+Create an integration test demonstrating that a Node.js tool can safely perform a realistic project workflow inside Virtual FS.
+
+For example:
+
+```bash
+mkdir app
+cd app
+npm init
+mkdir server
+touch server/index.js
+npm install express
+node server/index.js
+```
+
+The exact test may use a minimal package/application.
+
+Verify:
+
+```text
+files are created inside VFS
+node executes inside sandbox
+npm installs into VFS
+host filesystem remains unchanged
+NexTool source remains unchanged
+```
+
+---
+
+# 22. Configuration-Limit Tests
+
+Test that:
+
+```text
+min <= default <= max
+```
+
+is validated.
+
+Test:
+
+```text
+invalid JSON
+invalid type
+invalid min
+invalid max
+default > max
+default < min
+invalid nullable configuration
+```
+
+must fail clearly.
+
+---
+
+# 23. Dynamic Limit Test
+
+Change one limit in the centralized JSON.
+
+Example:
+
+```text
+maxSourceChars
+```
+
+Restart/reload NexTool.
+
+Verify:
+
+```text
+Settings UI uses new value
+Backend accepts new value
+Runtime enforces new value
+Tool editor reflects new value
+```
+
+No source-code changes should be necessary.
+
+---
+
+# 24. Hard-Coded Limit Audit
+
+Before completing v1.0.8:
+
+perform a repository-wide audit for configurable constants.
+
+For every discovered hard-coded configurable limit:
+
+```text
+identify
+classify
+move to central configuration
+replace runtime usage
+replace frontend usage
+replace API validation
+update documentation
+```
+
+Do not leave duplicate configuration definitions.
+
+---
+
+# 25. Documentation Update
+
+Update all relevant documentation.
+
+At minimum:
+
+```text
+Tool Development
+Tools
+Configuration
+Runtime
+Virtual FS
+Network Policy
+Child Process
+Live Mode
+Task Configuration
+API
+Architecture
+Troubleshooting
+```
+
+Document the new configuration-limit architecture.
+
+Include the default values:
+
+### Network
+
+```text
+timeout: 60 seconds
+response: 5 MiB
+redirects: 56
+requests/execution: 56
+URL imports: enabled
+```
+
+### Virtual FS
+
+```text
+file: 2 MiB
+total: 700 MiB
+entries: 4000
+depth: 56
+```
+
+### Execution
+
+```text
+timeout: 10 seconds
+sync cap: 4 seconds
+heap sentinel: 256 MiB
+source: 64,000 chars
+result: existing configured default
+logs: 100
+```
+
+and maximum values:
+
+```text
+timeout: 1 hour
+sync cap: 30 minutes
+heap sentinel: 728 MiB
+source: 200,000 chars
+logs: 1000
+```
+
+Clearly distinguish **default** from **maximum allowed by the shipped configuration**.
+
+---
+
+# 26. Final Acceptance Criteria
+
+v1.0.8 is complete when:
+
+```text
+✓ async confirm() works in js-function
+✓ async confirm() works in nodejs
+✓ confirm() returns boolean
+✓ confirmation pauses/resumes tool execution
+✓ confirmation events are recorded
+
+✓ URL import() works in js-function
+✓ URL import() works in nodejs
+✓ URL imports obey network policy
+✓ URL imports inherit sandbox restrictions
+
+✓ Existing child-process commands remain supported
+✓ clear is supported
+✓ cd is supported
+✓ node is supported
+✓ npm is supported
+✓ commands operate inside Virtual FS
+✓ npm packages install inside Virtual FS
+✓ Node programs execute inside Virtual FS
+✓ realistic MERN project structure can be created inside VFS
+✓ host filesystem remains inaccessible
+
+✓ Network timeout default = 60 seconds
+✓ Network timeout maximum = 1 hour
+✓ Network response default = 5 MiB
+✓ Redirect default = 56
+✓ Requests/execution default = 56
+✓ URL imports configurable
+✓ Network settings are dynamic
+
+✓ VFS file default = 2 MiB
+✓ VFS total default = 700 MiB
+✓ VFS entries default = 4000
+✓ VFS depth default = 56
+✓ all VFS limits are dynamic
+
+✓ Execution timeout is configurable
+✓ Sync cap is configurable
+✓ Heap sentinel is configurable
+✓ Source size is configurable
+✓ Result size is configurable
+✓ Log count is configurable
+✓ execution maximums are enforced
+
+✓ One authoritative configuration-limits JSON exists
+✓ Every configurable property has metadata
+✓ type is defined
+✓ default is defined
+✓ min is defined where applicable
+✓ max is defined where applicable
+✓ nullable is defined where applicable
+✓ unit is defined where applicable
+✓ Settings loads limits from JSON
+✓ Backend loads the same limits
+✓ Runtime loads the same limits
+✓ Frontend validation uses the same limits
+✓ no duplicate hard-coded configuration limits remain
+
+✓ Self-hosted user can modify limits through one JSON file
+✓ source code does not need modification for limit customization
+✓ invalid configuration fails clearly
+✓ security boundaries remain enforced
+
+✓ Task Console bottom blank space is removed
+✓ mobile layout remains correct
+✓ desktop layout remains correct
+
+✓ Documentation updated
+✓ Tests pass
+✓ Typecheck passes
+✓ Build passes
+```
+
+---
+
+# 27. Final Implementation Instruction
+
+Implement **NexTool Q1 v1.0.8** completely.
+
+The central architectural principle of this release is:
+
+```text
+                configuration-limits.json
+                         │
+                         ▼
+                ┌─────────────────┐
+                │ Limit Validator │
+                └────────┬────────┘
+                         │
+                         ▼
+                Runtime Configuration
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+       Settings       Backend        Runtime
+                                      │
+                    ┌─────────────────┼────────────────┐
+                    ▼                ▼                ▼
+                 Network            VFS         Execution
+                    │                                 │
+                    └─────────────┬───────────────────┘
+                                  ▼
+                              Tool Runtime
+```
+
+Every configurable limit must ultimately originate from this centralized configuration system.
+
+Do not create a new hard-coded limit in one subsystem to solve a problem.
+
+Do not duplicate the same setting across multiple JSON files.
+
+Do not make the frontend the authority.
+
+Do not make the backend and runtime use different limits.
+
+Do not weaken the sandbox because the limits are increased.
+
+The result should allow a self-hosted NexTool administrator to customize the platform's operational limits by editing **one configuration-limit JSON file**, while the actual application source remains unchanged.
+
+After implementation run:
+
+```bash
+bun test
+bun run lint
+bun run build
+```
+
+Then manually verify:
+
+```text
+1. confirm() in both environments
+2. URL import() in both environments
+3. npm/node inside VFS
+4. MERN-style project creation inside VFS
+5. network timeout > 10 seconds
+6. VFS > 8 MiB
+7. execution limits
+8. change one limit in JSON
+9. restart NexTool
+10. verify Settings + backend + runtime all use the changed value
+11. Task Console has no artificial bottom whitespace
+```
+
+Do not consider v1.0.8 complete until the centralized configuration system is actually authoritative throughout the application.

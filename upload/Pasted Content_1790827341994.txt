@@ -1,0 +1,3044 @@
+# NexTool Q1 — v1.0.0
+
+## Master Development Prompt
+
+Build **NexTool Q1 v1.0.0**, a specialized AI **task-processing, decision, planning, observation, automation, and tool-execution system**.
+
+NexTool is **not an LLM, chatbot, conversational AI, or general-purpose text generator**.
+
+Its purpose is to receive a task, understand the objective and current state, plan actions, select and parameterize tools, execute asynchronous tools, observe the results, update state, create new subgoals when necessary, and continue until the objective is completed.
+
+The system must be designed as a real executable architecture, not a UI simulation or hardcoded demo.
+
+---
+
+# 1. Product Identity
+
+**Name:** NexTool
+**Release:** Q1
+**Version:** 1.0.0
+**Type:** Specialized AI task-processing and automation system
+
+Core principle:
+
+```text
+UNDERSTAND
+    ↓
+PLAN
+    ↓
+SELECT TOOL
+    ↓
+GENERATE PARAMETERS
+    ↓
+EXECUTE
+    ↓
+OBSERVE
+    ↓
+UPDATE STATE
+    ↓
+REPLAN
+    ↓
+COMPLETE
+```
+
+For continuous tasks:
+
+```text
+ENVIRONMENT
+    ↓
+EVENTS / STATE CHANGES
+    ↓
+OBSERVER
+    ↓
+PLANNER
+    ↓
+COREMODULE
+    ↓
+ASYNC TOOLS
+    ↓
+ENVIRONMENT
+    └──────────────→ OBSERVER
+```
+
+NexTool must be capable of handling:
+
+* automation
+* server operations
+* monitoring
+* robotics
+* drones
+* games
+* software operations
+* workflow execution
+* scheduled tasks
+* event-driven actions
+* tool-based decision making
+* multi-step tasks
+* dynamic subgoals
+* user feedback
+* persistent memory
+* live state
+* context and history
+
+---
+
+# 2. Core Architecture
+
+The system contains two major intelligence layers:
+
+```text
+NexTool Main
+│
+├── Planner
+├── Observer
+├── State Manager
+├── Context Manager
+├── Memory Manager
+├── History Manager
+├── Goal Controller
+├── Live Controller
+├── Event Manager
+├── Tool Runtime
+└── CoreModule
+       ├── Intent Understanding
+       ├── Tool Matching
+       ├── Parameter Generation
+       └── Confidence
+```
+
+## Main
+
+The **Main** system is the orchestration layer.
+
+Main is responsible for:
+
+* receiving requests
+* understanding the overall objective
+* maintaining task state
+* creating and updating plans
+* creating subgoals
+* invoking CoreModule
+* invoking tools
+* waiting for asynchronous results
+* observing tool outputs
+* updating state
+* determining whether the goal is complete
+* handling failures
+* continuing execution
+* stopping execution
+* managing Goal Mode
+* managing Live Mode
+* processing events
+* processing user feedback
+
+Main should initially be implemented primarily with deterministic TypeScript/JavaScript orchestration logic.
+
+Do not create another unnecessarily large neural model for Main.
+
+---
+
+# 3. CoreModule
+
+CoreModule is the specialized neural component responsible for connecting a task requirement with available tools.
+
+CoreModule is **not merely a classifier**.
+
+It must support:
+
+1. understanding the current requested action
+2. selecting the appropriate tool
+3. understanding the tool schema
+4. extracting parameters directly from the task
+5. constructing parameters when values must be generated
+6. detecting missing parameters
+7. identifying ambiguity
+8. deciding when no available tool is suitable
+9. estimating confidence
+10. returning structured output
+
+CoreModule must work with dynamically provided tools.
+
+Do not hardcode a fixed set of tool IDs/classes inside the model.
+
+---
+
+# 4. Natural Language Understanding
+
+NexTool must understand intent rather than requiring exact string matches.
+
+For example:
+
+```text
+moniter the server
+```
+
+should be understood as:
+
+```text
+monitor the server
+```
+
+Likewise:
+
+```text
+infrom me
+```
+
+should be understood as:
+
+```text
+inform me
+```
+
+The model should support:
+
+* spelling mistakes
+* minor grammar mistakes
+* alternative wording
+* synonyms
+* different sentence structures
+* short commands
+* long descriptions
+* natural language variations
+* contextual references
+
+Do not rely on exact keyword matching as the primary intelligence mechanism.
+
+---
+
+# 5. Tool System
+
+NexTool must support dynamically registered tools.
+
+Every tool must expose a structured definition containing at minimum:
+
+```json
+{
+  "name": "server.health",
+  "description": "Checks the health status of a server.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "serverId": {
+        "type": "string",
+        "required": true
+      }
+    }
+  }
+}
+```
+
+Tool definitions may additionally contain metadata describing whether a parameter is:
+
+* extractive
+* constructive
+* optional
+* required
+* enum
+* numeric
+* string
+* boolean
+* object
+* array
+
+Example:
+
+```json
+{
+  "name": "image.generate",
+  "description": "Generate an image from a textual description.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "required": true,
+        "generation": "constructive"
+      },
+      "size": {
+        "type": "string",
+        "required": false
+      },
+      "style": {
+        "type": "string",
+        "required": false,
+        "generation": "constructive"
+      }
+    }
+  }
+}
+```
+
+---
+
+# 6. Extractive Parameters
+
+CoreModule must be able to directly extract values from the request.
+
+Example:
+
+User:
+
+```text
+Check the weather in Kochi
+```
+
+Tool:
+
+```text
+weather.get
+```
+
+Parameters:
+
+```json
+{
+  "location": "Kochi"
+}
+```
+
+No unnecessary generation should occur when the information already exists in the request.
+
+---
+
+# 7. Constructive Parameters
+
+CoreModule must also be able to construct parameters when a tool needs generated content.
+
+Example:
+
+User:
+
+```text
+Create an image of a car on a city street at night
+```
+
+CoreModule may produce:
+
+```json
+{
+  "tool": "image.generate",
+  "params": {
+    "prompt": "A cinematic and highly detailed modern car parked on a city street at night, illuminated by street lamps, realistic urban architecture, atmospheric lighting, natural reflections on the road, realistic photography",
+    "size": "1024x1024",
+    "style": "photorealistic"
+  },
+  "confidence": 0.97
+}
+```
+
+The generated value must be based on:
+
+* user intent
+* tool description
+* parameter schema
+* context
+* available state
+* previous observations
+
+Do not simply copy the original sentence into every constructive parameter.
+
+---
+
+# 8. CoreModule Output
+
+CoreModule must return machine-readable output.
+
+Base format:
+
+```json
+{
+  "status": "tool_call",
+  "tool": "server.health",
+  "params": {
+    "serverId": "api-01"
+  },
+  "confidence": 0.96
+}
+```
+
+Supported states should include concepts such as:
+
+```text
+tool_call
+no_tool
+clarification_required
+cannot_execute
+stop
+```
+
+The exact implementation may evolve, but the output must remain deterministic, structured, and easy for Main to process.
+
+---
+
+# 9. Tool Runtime
+
+Separate tool reasoning from actual tool execution.
+
+Architecture:
+
+```text
+CoreModule
+     ↓
+Tool Call
+     ↓
+Tool Runtime
+     ↓
+External Function
+```
+
+Tools must be asynchronous.
+
+Every execution must return structured state such as:
+
+```json
+{
+  "executionId": "exec_001",
+  "status": "completed",
+  "result": {},
+  "error": null
+}
+```
+
+Supported execution states:
+
+```text
+pending
+running
+completed
+failed
+timeout
+cancelled
+```
+
+A tool failure must become observable state.
+
+A failed tool must not automatically crash the entire NexTool runtime.
+
+---
+
+# 10. Parallel Tool Execution
+
+Independent operations may execute in parallel.
+
+Example:
+
+```text
+Check CPU
+Check memory
+Check disk
+```
+
+These can execute concurrently.
+
+But dependent operations must wait for the required result.
+
+Example:
+
+```text
+Check server
+     ↓
+If unhealthy
+     ↓
+Restart server
+```
+
+Restart must wait for the health result.
+
+Use asynchronous execution and dependency-aware scheduling.
+
+---
+
+# 11. Goal Mode
+
+Goal Mode is the default mode.
+
+Default configuration:
+
+```json
+{
+  "mode": "goal"
+}
+```
+
+The system must never automatically switch itself into Live Mode.
+
+Goal Mode performs finite task execution:
+
+```text
+REQUEST
+ ↓
+PLAN
+ ↓
+EXECUTE
+ ↓
+WAIT
+ ↓
+OBSERVE
+ ↓
+UPDATE
+ ↓
+CHECK GOAL
+ ↓
+COMPLETE?
+ ├── YES → FINAL RESULT
+ └── NO  → REPLAN
+```
+
+The task must terminate when:
+
+* the goal is achieved
+* the system determines the goal cannot be achieved
+* a required clarification is impossible
+* a configured safety/limit condition is reached
+* the user explicitly stops the task
+
+---
+
+# 12. Dynamic Subgoals
+
+Main must be able to create subgoals dynamically from observations.
+
+Example:
+
+User:
+
+```text
+Monitor the server, notify me if it becomes unhealthy, and try to restore it.
+```
+
+Possible execution:
+
+```text
+Root Goal:
+Monitor and restore server
+
+Subgoal:
+Check server health
+
+Observation:
+API unhealthy
+
+New Subgoal:
+Diagnose API
+
+Observation:
+Service process stopped
+
+New Subgoal:
+Restart service
+
+Observation:
+Service restarted
+
+New Subgoal:
+Verify health
+
+Observation:
+Healthy
+
+New Subgoal:
+Notify user
+```
+
+Subgoals must not require all possible steps to be predetermined.
+
+Observations may create new actions.
+
+---
+
+# 13. Goal Completion
+
+Goal completion must be based on actual state, not merely on successful tool execution.
+
+For example:
+
+```text
+restart.server → completed
+```
+
+does NOT necessarily mean:
+
+```text
+server recovered → true
+```
+
+NexTool must verify the desired state when required.
+
+Example:
+
+```text
+Restart server
+     ↓
+Observe server
+     ↓
+Health check
+     ↓
+Healthy?
+     ├── YES → goal complete
+     └── NO  → continue diagnosis/recovery
+```
+
+---
+
+# 14. Live Mode
+
+Live Mode must only be enabled explicitly.
+
+Example:
+
+```json
+{
+  "mode": "live"
+}
+```
+
+Live Mode is intended for continuous tasks.
+
+It is not simply an infinite loop.
+
+It is a combination of:
+
+* scheduled execution
+* event-driven execution
+* observation
+* reaction
+* replanning
+* user feedback
+* continuous state management
+
+Example:
+
+```text
+Task:
+Monitor server health continuously.
+
+Interval:
+1 hour
+```
+
+NexTool checks every hour.
+
+However:
+
+```text
+00:00 → scheduled check
+01:00 → scheduled check
+02:00 → scheduled check
+```
+
+If the server crashes at:
+
+```text
+02:27
+```
+
+an event should wake NexTool immediately.
+
+It must not wait until:
+
+```text
+03:00
+```
+
+---
+
+# 15. Live Mode Event System
+
+Events can include:
+
+* scheduled interval
+* server crash
+* health change
+* tool completion
+* tool failure
+* external system event
+* environment state change
+* user message
+* user correction
+* user feedback
+* emergency notification
+
+Architecture:
+
+```text
+Event Source
+     ↓
+Event Manager
+     ↓
+Observer
+     ↓
+Planner
+     ↓
+CoreModule
+     ↓
+Tools
+     ↓
+Environment
+     ↓
+Observer
+```
+
+Multiple event sources must be supported.
+
+---
+
+# 16. Live Mode User Feedback
+
+A user must be able to correct NexTool.
+
+Example:
+
+```text
+NexTool:
+Restarting service A.
+```
+
+User:
+
+```text
+Incorrect decision.
+Service B is the actual failing service.
+```
+
+This becomes a feedback event.
+
+The runtime should:
+
+1. receive the event
+2. record it
+3. update current state/context
+4. adapt the current plan
+5. revise the active subgoal if necessary
+6. continue execution
+
+User feedback must not be ignored simply because a task is already running.
+
+---
+
+# 17. Live Mode Context
+
+Live Mode should not repeatedly process the entire world state unnecessarily.
+
+The model should use:
+
+```text
+Previous Context
++
+Changes / Delta
++
+New Observation
++
+Relevant Memory
++
+Relevant History
+```
+
+Example:
+
+```json
+{
+  "previousContext": {},
+  "delta": {},
+  "observation": {},
+  "memory": {},
+  "history": []
+}
+```
+
+The system must be capable of identifying what actually changed.
+
+---
+
+# 18. Persistent Memory
+
+Persistent Memory stores long-term information.
+
+Examples:
+
+```text
+Preferred server
+Known device IDs
+User preferences
+Past successful strategies
+Important configuration
+Long-term task information
+```
+
+Memory must be separated from live environment state.
+
+---
+
+# 19. Live State
+
+Live State represents the current environment and task state.
+
+Examples:
+
+```text
+serverStatus = unhealthy
+temperature = 74
+battery = 31%
+currentTask = recovery
+activeSubgoal = restart_service
+```
+
+Live State may change frequently.
+
+Persistent Memory should not be treated as the same thing as Live State.
+
+---
+
+# 20. Memory + Adaptation
+
+Live Mode supports two concepts:
+
+### A. Remember
+
+Store useful information for future execution.
+
+### B. Adapt
+
+Use new observations and feedback to alter future decisions.
+
+Version 1.0.0 does not require automatic modification of neural network weights during runtime.
+
+Adaptation may happen through:
+
+* state updates
+* memory updates
+* context updates
+* history
+* strategy adjustments
+* feedback records
+* future training datasets
+
+---
+
+# 21. Reasoning Level
+
+Every request may specify a reasoning level from:
+
+```text
+1 → 6
+```
+
+Conceptual behavior:
+
+```text
+1 = ultra-fast
+2 = very fast
+3 = fast
+4 = balanced
+5 = deep
+6 = maximum reasoning
+```
+
+Do not create six separate models merely because the UI contains six levels.
+
+Reasoning level may control:
+
+* planning depth
+* number of candidate tools
+* verification passes
+* confidence thresholds
+* number of retries
+* parameter refinement
+* observation depth
+* subgoal analysis
+* result validation
+* re-evaluation passes
+
+The implementation should benchmark latency versus quality.
+
+---
+
+# 22. Main Request Schema
+
+Design a structured request format.
+
+Example:
+
+```json
+{
+  "request": "Monitor the production server and recover it if unhealthy.",
+  "mode": "goal",
+  "reasoningLevel": 4,
+  "tools": [],
+  "toolbox": {},
+  "memory": {},
+  "context": {},
+  "history": {},
+  "sessionId": "session_001"
+}
+```
+
+The final schema should support:
+
+* name
+* mode
+* reasoning level
+* tools enabled
+* tool box
+* learn from
+* memory
+* context
+* history
+* sessionId
+* speed
+* maximum subtool calls
+* safety limits
+* live interval
+* event configuration
+* other runtime configuration
+
+Configuration must be supplied per request where appropriate.
+
+---
+
+# 23. Example Configuration
+
+Example structure:
+
+```json
+{
+  "name": "server-monitor",
+  "mode": "live",
+  "reasoningLevel": 4,
+  "speed": "balanced",
+
+  "tools": {
+    "enabled": [
+      "server.health",
+      "server.restart",
+      "notification.email"
+    ]
+  },
+
+  "toolbox": {},
+
+  "learnFrom": {
+    "feedback": true,
+    "results": true
+  },
+
+  "useMemory": true,
+
+  "memory": {},
+
+  "context": {},
+
+  "history": {},
+
+  "sessionId": "server-session-001",
+
+  "autoExecuteSubtools": true,
+
+  "maxSubtoolCalls": 20,
+
+  "safetyLimit": 100
+}
+```
+
+Do not assume this exact example is the final public API; use it as the basis for the architecture.
+
+---
+
+# 24. Tool Schema Requirements
+
+Tool schemas must be expressive enough for CoreModule to understand tools it has never seen before.
+
+Schema information should include:
+
+```text
+tool name
+description
+purpose
+parameters
+types
+required values
+optional values
+enum values
+constraints
+constructive/extractive behavior
+dependencies
+execution properties
+```
+
+NexTool should support unseen or newly registered tools without retraining the entire system for every individual tool.
+
+---
+
+# 25. Neural Architecture
+
+Use **TensorFlow.js**.
+
+Node.js backend should support:
+
+```text
+@tensorflow/tfjs-node
+```
+
+Browser compatibility should remain possible where practical.
+
+The model should be custom and lightweight.
+
+Do not build a giant LLM.
+
+Initial architecture should be benchmark-driven.
+
+Possible baseline:
+
+```text
+Input Representation
+        ↓
+Shared Encoder
+        ↓
+Hidden Layer
+        ↓
+Hidden Layer
+        ↓
+Hidden Layer
+        ↓
+Hidden Layer
+        ↓
+Multiple Heads
+ ├── Tool Matching
+ ├── Parameter Generation
+ └── Confidence
+```
+
+Baseline candidate:
+
+```text
+4 hidden layers
+256 units
+GELU or ReLU
+```
+
+Benchmark alternatives:
+
+```text
+Tiny:
+2 × 128
+
+Small:
+3 × 256
+
+Baseline:
+4 × 256
+
+Medium:
+6 × 256
+
+Large:
+6 × 512
+```
+
+These are benchmark candidates, not fixed requirements.
+
+Choose the smallest architecture that provides sufficient performance.
+
+Do not invent a final parameter count before the input/output representation is finalized.
+
+---
+
+# 26. Model Input Representation
+
+The model must represent:
+
+* user request
+* task goal
+* tool description
+* tool schema
+* context
+* relevant memory
+* history
+* current state
+* previous action
+* observation
+
+The model should support comparison between:
+
+```text
+Request Representation
+        +
+Tool Representation
+```
+
+rather than relying exclusively on a fixed tool-class output layer.
+
+---
+
+# 27. Tool Matching
+
+CoreModule should compare the requested operation with the available tool descriptions.
+
+Example:
+
+```text
+Request:
+Send me an email when the server fails.
+
+Tools:
+
+notification.email
+sms.send
+server.health
+server.restart
+```
+
+The model should identify:
+
+```text
+server.health
+notification.email
+```
+
+as relevant depending on the current execution step.
+
+It should not simply return one hardcoded class for the entire system.
+
+---
+
+# 28. Parameter Generation Architecture
+
+Parameter generation should support both:
+
+```text
+Extractive
+```
+
+and:
+
+```text
+Constructive
+```
+
+For example:
+
+```text
+Extractive:
+location = "Kochi"
+
+Constructive:
+prompt = generated image description
+```
+
+Parameter generation must remain schema aware.
+
+The output must be validated before tool execution.
+
+---
+
+# 29. Confidence
+
+CoreModule should provide confidence.
+
+Example:
+
+```json
+{
+  "confidence": 0.93
+}
+```
+
+Confidence can influence:
+
+* whether another reasoning pass is needed
+* whether additional candidate tools are considered
+* whether clarification is required
+* whether verification is performed
+* whether an action is allowed under configured limits
+
+Do not assume confidence is automatically calibrated.
+
+Evaluate it empirically.
+
+---
+
+# 30. Dataset System
+
+Use:
+
+```text
+Parquet = primary large-scale dataset format
+JSON = human-friendly interchange format
+```
+
+Recommended structure:
+
+```text
+datasets/
+├── raw/
+│   └── *.json
+│
+├── train/
+│   └── *.parquet
+│
+├── validation/
+│   └── *.parquet
+│
+└── test/
+    └── *.parquet
+```
+
+Support:
+
+* JSON import
+* JSON export
+* Parquet import
+* Parquet export
+
+Dataset versions should exist.
+
+Example:
+
+```text
+v0.1
+v0.2
+v1.0.0
+```
+
+---
+
+# 31. Training Dataset Categories
+
+The dataset must contain examples for:
+
+### Tool Selection
+
+Which tool should be used?
+
+### Tool Rejection
+
+No tool is suitable.
+
+### Parameter Extraction
+
+Extract values directly.
+
+### Parameter Construction
+
+Generate rich parameters.
+
+### Multiple Candidate Tools
+
+Choose among several valid candidates.
+
+### Ambiguous Input
+
+Determine when clarification is necessary.
+
+### Missing Parameters
+
+Detect missing required values.
+
+### Schema Compliance
+
+Produce valid tool parameters.
+
+### Multi-Step Tasks
+
+Understand that a task requires multiple operations.
+
+### Tool Failures
+
+Recover after failed execution.
+
+### Retry Behavior
+
+Retry or choose an alternative when appropriate.
+
+### Context Dependence
+
+Use previous information.
+
+### Memory Dependence
+
+Use persistent knowledge.
+
+### History Dependence
+
+Use previous actions/results.
+
+### Dynamic Tools
+
+Handle unseen tool descriptions.
+
+### Typos
+
+Understand imperfect input.
+
+### Natural Language Variation
+
+Different expressions of the same intent.
+
+### Long Tasks
+
+Multi-step execution.
+
+### Short Commands
+
+Single-step execution.
+
+### Structured Input
+
+JSON/state-based tasks.
+
+### Automation
+
+Server, software, workflow actions.
+
+### Robotics
+
+Movement and environment interaction.
+
+### Games
+
+Action selection.
+
+### Monitoring
+
+State observation and response.
+
+---
+
+# 32. Dataset Split
+
+Use separate:
+
+```text
+train
+validation
+test
+```
+
+A basic starting split may be:
+
+```text
+80% train
+10% validation
+10% test
+```
+
+But the test dataset must be designed to evaluate generalization.
+
+Do not simply duplicate training examples with different wording.
+
+The test set should contain:
+
+* unseen phrasing
+* unseen combinations
+* unseen tool descriptions
+* new parameter values
+* new task structures
+* new tool combinations
+* harder multi-step situations
+
+---
+
+# 33. Dataset Quality
+
+Each training example should be validated.
+
+Check:
+
+* schema validity
+* missing required fields
+* invalid labels
+* duplicate examples
+* conflicting labels
+* malformed JSON
+* invalid parameter types
+* contradictory outputs
+
+Training data should be versioned.
+
+---
+
+# 34. Model Format
+
+Support native TensorFlow.js models:
+
+```text
+model.json
+*.bin
+```
+
+Also define an official NexTool package:
+
+```text
+core-v1.0.0.nextool
+```
+
+The `.nextool` package may contain:
+
+```text
+architecture
+weights
+tokenizer
+vocabulary
+preprocessing configuration
+model metadata
+CoreModule configuration
+version
+compatibility information
+```
+
+The runtime must support loading:
+
+```text
+TensorFlow.js directory model
+```
+
+and:
+
+```text
+.nextool package
+```
+
+---
+
+# 35. Runtime Loader
+
+Model loader:
+
+```text
+NexTool Model Loader
+       ├── TensorFlow.js loader
+       └── .nextool loader
+```
+
+The loader must validate:
+
+* model version
+* architecture compatibility
+* TensorFlow.js compatibility
+* metadata
+* required preprocessing
+* model integrity
+
+---
+
+# 36. Training and Evaluation
+
+Provide a training pipeline.
+
+Required capabilities:
+
+```text
+load dataset
+preprocess
+train
+validate
+evaluate
+save model
+export .nextool
+benchmark
+```
+
+Evaluation metrics should include:
+
+### Tool Selection Accuracy
+
+Did the model select the correct tool?
+
+### Parameter Accuracy
+
+Are generated parameters correct?
+
+### Schema Validity
+
+Do parameters match the tool schema?
+
+### Confidence Calibration
+
+Does confidence correspond reasonably to correctness?
+
+### Goal Completion
+
+Did the overall system achieve the requested goal?
+
+### Step Efficiency
+
+How many actions were needed?
+
+### Tool Call Efficiency
+
+How many unnecessary tools were executed?
+
+### Latency
+
+Time from request to decision.
+
+### Runtime Latency
+
+Time from tool selection to action.
+
+### Memory Usage
+
+Runtime memory consumption.
+
+### Model Size
+
+Disk/storage size.
+
+### Generalization
+
+Performance on unseen tools and unseen tasks.
+
+---
+
+# 37. Error Handling
+
+Handle:
+
+* invalid request
+* missing tools
+* malformed tool schema
+* invalid parameters
+* tool timeout
+* tool failure
+* unavailable service
+* model load failure
+* model inference failure
+* event failure
+* memory failure
+* state inconsistency
+* execution cancellation
+
+Errors should produce structured runtime state.
+
+Example:
+
+```json
+{
+  "status": "failed",
+  "stage": "tool_execution",
+  "tool": "server.restart",
+  "error": {
+    "code": "TIMEOUT",
+    "message": "Tool execution timed out."
+  }
+}
+```
+
+---
+
+# 38. Safety and Execution Limits
+
+Implement runtime limits such as:
+
+```text
+max iterations
+max tool calls
+max subtool calls
+execution timeout
+task timeout
+memory limits
+reasoning limits
+```
+
+Actions must respect configured limits.
+
+Do not allow accidental infinite execution in Goal Mode.
+
+Live Mode may continue indefinitely only because the user explicitly configured Live Mode.
+
+---
+
+# 39. Main State Model
+
+Main should maintain structured state.
+
+Suggested state:
+
+```text
+request
+goal
+mode
+plan
+currentStep
+activeSubgoal
+previousActions
+pendingToolCalls
+completedToolCalls
+observations
+context
+memoryReferences
+relevantHistory
+iterationCount
+toolCallCount
+events
+terminationStatus
+errorState
+finalResult
+```
+
+State must be serializable.
+
+---
+
+# 40. Context Manager
+
+Context should contain relevant task information.
+
+It may include:
+
+```text
+current goal
+current subgoal
+previous actions
+recent observations
+tool outputs
+environment changes
+user feedback
+relevant history
+memory references
+```
+
+Context must not grow without control.
+
+Implement mechanisms to avoid unnecessary state expansion.
+
+---
+
+# 41. History Manager
+
+History records previous execution information.
+
+Example:
+
+```json
+{
+  "timestamp": "...",
+  "action": "server.restart",
+  "params": {},
+  "result": {},
+  "status": "completed"
+}
+```
+
+History must support:
+
+* current task
+* previous sessions where enabled
+* important decisions
+* tool execution history
+* user corrections
+
+---
+
+# 42. Event Manager
+
+The Event Manager must support:
+
+```text
+scheduled events
+external events
+environment events
+tool events
+user events
+feedback events
+```
+
+Example:
+
+```json
+{
+  "type": "server.crash",
+  "timestamp": "...",
+  "payload": {
+    "serverId": "prod-01"
+  }
+}
+```
+
+Events may wake a sleeping Live Mode runtime.
+
+---
+
+# 43. Scheduling
+
+Live Mode interval scheduling must be configurable.
+
+Example:
+
+```json
+{
+  "interval": {
+    "enabled": true,
+    "milliseconds": 3600000
+  }
+}
+```
+
+The implementation may use a proper scheduler rather than a simple blocking timer.
+
+---
+
+# 44. Event Priority
+
+Events should support prioritization.
+
+Example:
+
+```text
+Emergency event
+    >
+User correction
+    >
+Environment change
+    >
+Tool result
+    >
+Scheduled tick
+```
+
+Do not hardcode this exact ordering if a better configurable architecture is appropriate, but the system must be able to react differently to urgent events.
+
+---
+
+# 45. Cancellation
+
+The user must be able to stop:
+
+* Goal Mode task
+* Live Mode task
+* active tool execution
+* scheduled execution
+* queued subgoals
+
+Cancellation must produce a valid state.
+
+---
+
+# 46. API Layer
+
+Implement a clean runtime API.
+
+Suggested conceptual endpoints:
+
+```text
+POST /api/task
+POST /api/task/:id/stop
+GET  /api/task/:id
+GET  /api/task/:id/events
+POST /api/task/:id/event
+POST /api/task/:id/feedback
+
+GET  /api/tools
+POST /api/tools/register
+
+GET  /api/memory
+GET  /api/state
+GET  /api/context
+GET  /api/history
+
+GET  /api/models
+POST /api/models/load
+
+GET  /api/datasets
+POST /api/datasets/import
+POST /api/datasets/export
+```
+
+Exact routing can be redesigned, but equivalent functionality must exist.
+
+---
+
+# 47. Real-Time Runtime Events
+
+The frontend must receive real runtime events.
+
+Prefer:
+
+```text
+WebSocket
+```
+
+or:
+
+```text
+Server-Sent Events
+```
+
+for live execution visualization.
+
+Do not implement Live Mode visualization by fake animation.
+
+The UI must represent actual runtime events.
+
+---
+
+# 48. Next.js Console
+
+Build the entire project using:
+
+```text
+Next.js
+TypeScript
+Tailwind CSS
+Aceternity UI
+Motion where appropriate
+Lucide icons
+```
+
+Use Aceternity UI for the visual system.
+
+The frontend must be:
+
+* responsive
+* polished
+* modern
+* developer oriented
+* beautiful
+* fast
+* accessible
+* production-oriented
+
+Do not make it look like ChatGPT.
+
+The visual identity should feel like:
+
+```text
+AI Operations Console
++
+Developer Control Center
++
+Automation Runtime Monitor
+```
+
+---
+
+# 49. Console Navigation
+
+Provide dedicated screens for:
+
+```text
+Dashboard
+Task Console
+Task Preview
+Live Monitor
+Tools
+Memory
+Live State
+Context
+Events
+History
+Models
+Datasets
+Settings
+```
+
+Use a consistent application shell.
+
+---
+
+# 50. Dashboard
+
+The dashboard should show real system information.
+
+Example cards:
+
+```text
+Runtime Status
+Model Status
+Active Tasks
+Live Tasks
+Tool Calls
+Success Rate
+Average Latency
+Memory Usage
+```
+
+Do not fabricate values.
+
+Use actual runtime data when available.
+
+---
+
+# 51. Task Console
+
+Task Console is the main task creation interface.
+
+Include:
+
+```text
+Task Prompt
+Mode
+Reasoning Level
+Tool Selection
+Memory
+Context
+History
+Execution Limits
+Run Task
+```
+
+Mode:
+
+```text
+Goal
+Live
+```
+
+Default:
+
+```text
+Goal
+```
+
+The user must explicitly choose Live Mode.
+
+---
+
+# 52. Task Preview
+
+Create a dedicated **Task Preview screen**.
+
+Do not squeeze complete task execution information into the dashboard.
+
+Task Preview must show:
+
+### Task
+
+The original request.
+
+### Mode
+
+Goal or Live.
+
+### Reasoning Level
+
+1–6.
+
+### Current Goal
+
+The active root goal.
+
+### Current Subgoal
+
+The current dynamic objective.
+
+### Plan
+
+Current execution plan.
+
+### Timeline
+
+Real task progression.
+
+### Tools
+
+Calls and results.
+
+### State
+
+Current runtime state.
+
+### Context
+
+Relevant context.
+
+### Memory
+
+Relevant memory.
+
+### Events
+
+Recent runtime events.
+
+### Controls
+
+```text
+Stop Task
+Send Event
+Send Feedback
+```
+
+---
+
+# 53. Terminal
+
+The Task Preview / Live Mode interface must contain an Aceternity-style terminal component for actual runtime output.
+
+Example:
+
+```text
+[09:00:00] observer → scheduled tick
+[09:00:01] planner → analyzing state
+[09:00:01] core → server.health
+[09:00:02] tool → executing server.health
+[09:00:03] tool → completed
+[09:00:03] observer → API unhealthy
+[09:00:04] planner → subgoal created: recover API
+[09:00:04] core → server.restart
+[09:00:05] tool → executing
+[09:00:08] tool → completed
+[09:00:08] observer → API healthy
+[09:00:08] planner → goal completed
+```
+
+The terminal must be connected to real runtime event streams.
+
+Do not generate fake timestamps or fake events.
+
+---
+
+# 54. Live Monitor
+
+Live Monitor should focus on currently running Live Mode tasks.
+
+Display:
+
+```text
+Live Status
+Current Task
+Interval
+Event Listener
+Last Observation
+Next Scheduled Tick
+Event Count
+Action Count
+Current Subgoal
+Runtime Status
+```
+
+Provide:
+
+```text
+Stop Live
+```
+
+---
+
+# 55. Live Event Stream
+
+The UI should clearly distinguish:
+
+```text
+scheduled tick
+environment event
+user feedback
+planner decision
+CoreModule decision
+tool execution
+tool result
+observation
+state update
+subgoal creation
+goal completion
+error
+```
+
+This helps developers understand the runtime.
+
+---
+
+# 56. Tools Screen
+
+Show the tool registry.
+
+Each tool should expose:
+
+```text
+Name
+Description
+Schema
+Parameters
+Required fields
+Optional fields
+Generation type
+Status
+Call count
+Success count
+Failure count
+Average execution time
+```
+
+Allow tool registration if supported by the runtime API.
+
+---
+
+# 57. Memory Screen
+
+Separate:
+
+```text
+Persistent Memory
+```
+
+and:
+
+```text
+Live State
+```
+
+Persistent Memory:
+
+```text
+long-term information
+```
+
+Live State:
+
+```text
+current environment
+current task
+current values
+```
+
+Do not merge these visually into one undifferentiated store.
+
+---
+
+# 58. Context Screen
+
+Show context composition:
+
+```text
+Previous Context
++
+Changes / Delta
++
+New Observation
++
+Relevant Memory
++
+Relevant History
+```
+
+This should make Live Mode's state update process understandable.
+
+---
+
+# 59. Events Screen
+
+Display event stream/history.
+
+Example:
+
+```text
+09:00 scheduled tick
+09:17 server health changed
+09:17 emergency event
+09:18 planner started
+09:18 tool call started
+09:19 tool completed
+09:19 user feedback received
+```
+
+Provide event details.
+
+---
+
+# 60. Feedback Interface
+
+The UI should let the user mark a decision as incorrect.
+
+Example interaction:
+
+```text
+Decision:
+Restart service A
+
+[Incorrect Decision]
+```
+
+Then:
+
+```text
+Correct action:
+Restart service B
+```
+
+Submitting this creates a feedback event.
+
+The feedback must enter the actual runtime pipeline.
+
+---
+
+# 61. Models Screen
+
+Display:
+
+```text
+Model Name
+Version
+Format
+Parameter Count
+Model Size
+Backend
+TensorFlow.js Compatibility
+Inference Latency
+Dataset Version
+Training Status
+Runtime Status
+```
+
+Support loading:
+
+```text
+model.json + .bin
+```
+
+and:
+
+```text
+.nextool
+```
+
+---
+
+# 62. Datasets Screen
+
+Display:
+
+```text
+Dataset Version
+Train Size
+Validation Size
+Test Size
+Format
+Last Updated
+```
+
+Support:
+
+```text
+JSON import
+JSON export
+Parquet import
+Parquet export
+```
+
+Future-ready interface for:
+
+```text
+training
+validation
+evaluation
+dataset versioning
+```
+
+---
+
+# 63. Settings Screen
+
+Allow configuration of:
+
+```text
+Default Mode
+Default Reasoning Level
+Execution Limits
+Tool Runtime
+Event Runtime
+Memory
+History
+Model
+Logging
+Real-Time Transport
+```
+
+Do not silently change Goal Mode to Live Mode.
+
+---
+
+# 64. Design System
+
+Use Aceternity UI components appropriately.
+
+The interface should feel:
+
+```text
+technical
+minimal
+precise
+modern
+premium
+operational
+```
+
+Avoid:
+
+```text
+chat bubbles
+generic AI assistant UI
+excessive gradients
+unnecessary decoration
+social-media style layouts
+fake AI animations
+```
+
+Use cards, panels, tabs, command-style interfaces, terminals, timelines, data displays, status indicators, and technical visualizations where appropriate.
+
+---
+
+# 65. Responsive Design
+
+The console must work on:
+
+```text
+mobile
+tablet
+desktop
+large desktop
+```
+
+Mobile should not simply shrink the desktop layout.
+
+Important task-monitoring information must remain accessible on small displays.
+
+---
+
+# 66. Real Runtime, Not Prototype Simulation
+
+Do not fake:
+
+* task execution
+* tool results
+* planner output
+* model decisions
+* event timestamps
+* state changes
+* terminal output
+* success metrics
+
+The frontend must represent real backend/runtime data.
+
+When functionality is not yet implemented, display an explicit empty or unavailable state rather than fabricated data.
+
+---
+
+# 67. Developer Experience
+
+Provide clear:
+
+```text
+TypeScript types
+interfaces
+schema definitions
+runtime logs
+error messages
+validation
+configuration
+environment variables
+```
+
+Make components modular.
+
+Avoid giant monolithic files.
+
+---
+
+# 68. Suggested Project Structure
+
+Use a structure approximately like:
+
+```text
+NexTool/
+│
+├── app/
+│   ├── dashboard/
+│   ├── task/
+│   ├── task-preview/
+│   ├── live/
+│   ├── tools/
+│   ├── memory/
+│   ├── state/
+│   ├── context/
+│   ├── events/
+│   ├── history/
+│   ├── models/
+│   ├── datasets/
+│   └── settings/
+│
+├── src/
+│   ├── main/
+│   │   ├── NexTool.ts
+│   │   ├── planner.ts
+│   │   ├── observer.ts
+│   │   ├── loop.ts
+│   │   ├── state.ts
+│   │   ├── goal.ts
+│   │   └── termination.ts
+│   │
+│   ├── core/
+│   │   ├── CoreModule.ts
+│   │   ├── encoder.ts
+│   │   ├── toolMatcher.ts
+│   │   ├── parameterHead.ts
+│   │   └── confidenceHead.ts
+│   │
+│   ├── tools/
+│   │   ├── registry.ts
+│   │   ├── schema.ts
+│   │   ├── executor.ts
+│   │   └── asyncRuntime.ts
+│   │
+│   ├── memory/
+│   │   ├── memory.ts
+│   │   └── retrieval.ts
+│   │
+│   ├── context/
+│   │   └── context.ts
+│   │
+│   ├── history/
+│   │   └── history.ts
+│   │
+│   ├── events/
+│   │   ├── eventManager.ts
+│   │   └── scheduler.ts
+│   │
+│   ├── preprocessing/
+│   │   ├── tokenizer.ts
+│   │   ├── vectorizer.ts
+│   │   └── datasetLoader.ts
+│   │
+│   ├── training/
+│   │   ├── train.ts
+│   │   ├── evaluate.ts
+│   │   └── benchmarks.ts
+│   │
+│   └── models/
+│       ├── loader.ts
+│       └── nextoolFormat.ts
+│
+├── datasets/
+├── models/
+├── tests/
+└── package.json
+```
+
+The structure may be improved during implementation.
+
+---
+
+# 69. Testing
+
+Provide tests for:
+
+### CoreModule
+
+* tool selection
+* parameter extraction
+* parameter construction
+* confidence
+* ambiguity
+* missing parameters
+
+### Main
+
+* planning
+* subgoal creation
+* termination
+* replanning
+* error recovery
+
+### Runtime
+
+* async execution
+* parallel tools
+* dependency handling
+* cancellation
+* timeout
+* retry
+
+### Live Mode
+
+* scheduled events
+* event interruption
+* user feedback
+* state delta
+* continuous execution
+
+### Memory
+
+* save
+* retrieve
+* update
+* separation from Live State
+
+### API
+
+* requests
+* events
+* feedback
+* tools
+* model loading
+
+### Frontend
+
+* dashboard
+* Task Console
+* Task Preview
+* Live Monitor
+* tool registry
+* event rendering
+* feedback
+
+---
+
+# 70. Example Goal Mode
+
+Input:
+
+```text
+Create an image of a red sports car on a rainy street.
+```
+
+Runtime:
+
+```text
+Main
+ ↓
+Understand Goal
+ ↓
+Planner
+ ↓
+CoreModule
+ ↓
+Select image.generate
+ ↓
+Construct prompt
+ ↓
+Tool Runtime
+ ↓
+Async Image Generation
+ ↓
+Result
+ ↓
+Observer
+ ↓
+Goal completed
+```
+
+Possible CoreModule output:
+
+```json
+{
+  "status": "tool_call",
+  "tool": "image.generate",
+  "params": {
+    "prompt": "A realistic red sports car driving through a rain-soaked city street at night...",
+    "size": "1024x1024",
+    "style": "photorealistic"
+  },
+  "confidence": 0.97
+}
+```
+
+---
+
+# 71. Example Live Mode
+
+User request:
+
+```text
+Monitor my production API continuously and recover it if it becomes unhealthy.
+```
+
+Configuration:
+
+```json
+{
+  "mode": "live",
+  "interval": "1h"
+}
+```
+
+Runtime:
+
+```text
+09:00
+Scheduled observation
+
+09:00
+API healthy
+
+10:00
+Scheduled observation
+
+10:00
+API healthy
+
+10:27
+Environment event:
+API crashed
+
+10:27
+Observer receives event
+
+10:27
+Planner creates recovery subgoal
+
+10:27
+CoreModule selects server.health
+
+10:28
+Tool result:
+API unhealthy
+
+10:28
+Planner creates restart subgoal
+
+10:28
+CoreModule selects server.restart
+
+10:29
+Tool completed
+
+10:29
+Observer verifies server
+
+10:29
+API healthy
+
+10:29
+Recovery subgoal completed
+
+10:29
+Root Live task continues
+
+11:00
+Scheduled observation
+```
+
+---
+
+# 72. Example User Correction
+
+Runtime:
+
+```text
+CoreModule → service.restart
+```
+
+User:
+
+```text
+Incorrect decision.
+Restart service B instead.
+```
+
+System:
+
+```text
+Event Manager
+ ↓
+Feedback Event
+ ↓
+Observer
+ ↓
+Context Update
+ ↓
+Planner
+ ↓
+CoreModule
+ ↓
+serviceB.restart
+```
+
+The correction becomes part of runtime state and may optionally be recorded for later training.
+
+---
+
+# 73. Performance Goals
+
+NexTool must prioritize:
+
+```text
+low latency
+low memory usage
+small model size
+high tool-selection accuracy
+high parameter validity
+efficient execution
+minimal unnecessary tool calls
+```
+
+Do not maximize model parameters without evidence.
+
+The target is:
+
+```text
+smallest effective specialized model
+```
+
+not:
+
+```text
+largest possible model
+```
+
+---
+
+# 74. Benchmarking
+
+Create automated benchmarks comparing architecture variants.
+
+Measure:
+
+```text
+model size
+parameter count
+inference time
+tool selection accuracy
+parameter accuracy
+schema validity
+confidence calibration
+goal completion
+average tool calls
+average steps
+memory usage
+```
+
+Produce benchmark reports.
+
+---
+
+# 75. Versioning
+
+Use semantic versioning.
+
+Current release:
+
+```text
+1.0.0
+```
+
+Recommended metadata:
+
+```json
+{
+  "name": "NexTool",
+  "release": "Q1",
+  "version": "1.0.0"
+}
+```
+
+Model versions, dataset versions, runtime versions, and API versions should be tracked independently when appropriate.
+
+---
+
+# 76. Logging
+
+Structured logs should exist for:
+
+```text
+request
+planner
+observer
+CoreModule
+tool selection
+parameter generation
+tool execution
+result
+state update
+memory
+events
+errors
+termination
+```
+
+Example:
+
+```text
+[INFO] planner: new subgoal created
+[INFO] core: selected server.health
+[INFO] runtime: executing tool
+[INFO] runtime: tool completed
+[INFO] observer: state changed
+```
+
+---
+
+# 77. Observability
+
+The system should expose enough information to debug:
+
+```text
+why a tool was selected
+what parameters were generated
+what confidence was produced
+what tool returned
+what observation changed
+why a subgoal was created
+why execution stopped
+```
+
+The system should return structured internal metadata for developers.
+
+Do not expose private chain-of-thought style reasoning.
+
+Expose concise operational explanations instead.
+
+Example:
+
+```json
+{
+  "reason": "The server is unhealthy and the registered restart tool matches the recovery objective."
+}
+```
+
+---
+
+# 78. Final Result
+
+When Goal Mode completes, return a structured result.
+
+Example:
+
+```json
+{
+  "status": "completed",
+  "goal": "Recover production server",
+  "result": {
+    "server": "prod-01",
+    "health": "healthy"
+  },
+  "steps": 5,
+  "toolCalls": 4,
+  "durationMs": 3821
+}
+```
+
+For Live Mode, the runtime should remain active until explicitly stopped or disabled.
+
+---
+
+# 79. Important Architectural Rules
+
+Follow these rules strictly:
+
+### Rule 1
+
+NexTool is not a chatbot.
+
+### Rule 2
+
+NexTool is not an LLM.
+
+### Rule 3
+
+Do not replace the architecture with a generic agent framework.
+
+### Rule 4
+
+Do not hardcode the tool list into the model.
+
+### Rule 5
+
+Tools are asynchronous.
+
+### Rule 6
+
+Independent tools may execute in parallel.
+
+### Rule 7
+
+Dependent actions wait for results.
+
+### Rule 8
+
+Goal Mode is the default.
+
+### Rule 9
+
+Live Mode requires explicit user configuration.
+
+### Rule 10
+
+Live Mode must support scheduled and event-driven execution.
+
+### Rule 11
+
+Emergency events may interrupt interval waiting.
+
+### Rule 12
+
+User corrections must be accepted as runtime events.
+
+### Rule 13
+
+Persistent Memory and Live State are separate concepts.
+
+### Rule 14
+
+Context should use previous context + delta + new observation where appropriate.
+
+### Rule 15
+
+CoreModule must support both parameter extraction and parameter construction.
+
+### Rule 16
+
+Do not fabricate runtime results in the UI.
+
+### Rule 17
+
+Use real event streams for live execution visualization.
+
+### Rule 18
+
+Use TensorFlow.js for the neural CoreModule.
+
+### Rule 19
+
+Support both `.nextool` and native TensorFlow.js models.
+
+### Rule 20
+
+Parquet is the primary large dataset format; JSON is the interchange/debug format.
+
+### Rule 21
+
+Use benchmark results rather than assumptions to select the final model architecture.
+
+### Rule 22
+
+Build the frontend as a real Next.js application.
+
+### Rule 23
+
+Use Aceternity UI for the console.
+
+### Rule 24
+
+The Task Preview must be a dedicated screen.
+
+### Rule 25
+
+Live Mode output must use a terminal-style runtime view.
+
+---
+
+# 80. Q1 v1.0.0 Definition of Done
+
+NexTool Q1 v1.0.0 is considered complete when the system can:
+
+```text
+✓ receive a task
+✓ understand the goal
+✓ maintain structured state
+✓ plan execution
+✓ create dynamic subgoals
+✓ inspect available tools
+✓ select suitable tools
+✓ extract parameters
+✓ construct parameters
+✓ validate parameters
+✓ execute asynchronous tools
+✓ execute independent tools in parallel
+✓ observe results
+✓ recover from failures
+✓ verify goal completion
+✓ support Goal Mode
+✓ support explicit Live Mode
+✓ support scheduled Live Mode execution
+✓ support event-triggered execution
+✓ interrupt scheduled waiting with events
+✓ process user corrections
+✓ maintain Persistent Memory
+✓ maintain Live State
+✓ maintain Context
+✓ maintain History
+✓ use TensorFlow.js CoreModule
+✓ train and evaluate datasets
+✓ support JSON and Parquet datasets
+✓ save TensorFlow.js models
+✓ load TensorFlow.js models
+✓ export/load .nextool models
+✓ expose runtime APIs
+✓ stream real runtime events
+✓ provide Next.js console
+✓ provide Task Console
+✓ provide Task Preview
+✓ provide Live Monitor
+✓ provide terminal runtime output
+✓ provide Tools screen
+✓ provide Memory screen
+✓ provide Live State screen
+✓ provide Context screen
+✓ provide Events screen
+✓ provide History screen
+✓ provide Models screen
+✓ provide Datasets screen
+✓ provide Settings
+✓ provide tests
+✓ provide benchmarks
+✓ provide structured logs
+```
+
+---
+
+# 81. Final System Vision
+
+The final NexTool system should behave like:
+
+```text
+                 ┌──────────────────┐
+                 │      USER        │
+                 └────────┬─────────┘
+                          │
+                          ▼
+                 ┌──────────────────┐
+                 │      MAIN        │
+                 │ Planner/Control  │
+                 └────────┬─────────┘
+                          │
+             ┌────────────┼────────────┐
+             │            │            │
+             ▼            ▼            ▼
+        Context        Memory       History
+             │            │            │
+             └────────────┼────────────┘
+                          │
+                          ▼
+                 ┌──────────────────┐
+                 │     OBSERVER     │
+                 └────────┬─────────┘
+                          │
+                          ▼
+                 ┌──────────────────┐
+                 │      PLAN        │
+                 └────────┬─────────┘
+                          │
+                          ▼
+                 ┌──────────────────┐
+                 │   CORE MODULE    │
+                 │ Tool + Params    │
+                 └────────┬─────────┘
+                          │
+                          ▼
+                 ┌──────────────────┐
+                 │   TOOL RUNTIME   │
+                 │ Async Execution  │
+                 └────────┬─────────┘
+                          │
+                          ▼
+                    ENVIRONMENT
+                          │
+                          ▼
+                 ┌──────────────────┐
+                 │     OBSERVER     │
+                 └────────┬─────────┘
+                          │
+                    State Changed?
+                       /      \
+                     YES       NO
+                      │         │
+                      ▼         ▼
+                   Replan    Wait/Event
+                      │         │
+                      └────┬────┘
+                           │
+                           ▼
+                       CONTINUE
+```
+
+NexTool Q1 v1.0.0 should ultimately feel like a **small, fast, specialized operational intelligence system** that can understand a task, reason about the current state, select and parameterize tools, execute actions asynchronously, observe reality, adapt its plan, and complete or continuously manage the requested objective.
+
+The implementation must prioritize **real execution, modularity, measurable performance, dynamic tools, event-driven operation, and a production-quality developer console** over artificial demonstrations or generic chatbot behavior.

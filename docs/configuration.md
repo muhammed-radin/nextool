@@ -1,0 +1,444 @@
+---
+title: Configuration
+category: Getting Started
+order: 3
+---
+
+# Configuration
+
+NexTool has three configuration surfaces:
+
+1. **Central configuration limits** — **v1.0.8**: `config/configuration-limits.json` is the
+   ONE authoritative file defining the type, default, min, max, unit and nullability of
+   every configurable limit in the application. A self-hosted administrator customizes
+   limits by editing this single JSON file — never TypeScript source (see
+   [Central configuration limits (v1.0.8)](#central-configuration-limits-v108)).
+2. **Global settings** — one JSON row in the `Setting` table (key `nextool`), editable in
+   the **Settings** view or via `GET/PUT /api/settings`, with a 10-second in-memory cache
+   (`settings.ts`). Defaults AND clamps derive from the central limits.
+3. **Per-task config** — a `TaskConfig` supplied at creation, clamped against the global
+   settings and the central limits (`nexool.ts` createTask, `loop.ts` mergeConfig).
+
+## Global settings (NexToolSetting)
+
+Defaults live in `src/lib/nexool/settings.ts` (`DEFAULT_SETTINGS`). Ranges below are the
+clamp ranges enforced by `updateSettings`.
+
+| Field | Type | Default | Min | Max | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| `defaultMode` | `'goal' \| 'live'` | `goal` | — | — | Mode used when a task does not specify one. Invalid values fall back to `goal`. |
+| `defaultReasoningLevel` | `1..6` | `4` | 1 | 6 | Default L1–L6 reasoning level. |
+| `maxSubtoolCalls` | number | `20` | 1 | 200 | Cap on tool calls per parallel group slice / subtool auto-execution. |
+| `safetyLimit` | number | `100` | 1 | 500 | Hard cap on total tool calls per task. |
+| `maxIterations` | number | `30` | 1 | 200 | Max main-loop iterations (Goal Mode). |
+| `taskTimeoutMs` | number (ms) | `120000` | 5000 | 3600000 | Wall-clock budget for a task (per live cycle in Live Mode). |
+| `toolTimeoutMs` | number (ms) | `10000` | 1000 | 3600000 | **v1.0.7**: default tool-execution timeout — 10 seconds, configurable up to **1 hour**. A tool's own `timeoutMs` overrides it per tool; the runtime caps everything at 3600000 ms. See [Tool execution timeout](#tool-execution-timeout-v107). |
+| `liveIntervalMs` | number (ms) | `60000` | 1000 | 3600000 | Scheduled tick interval for Live Mode. |
+| `parallelToolCalls` | boolean | `true` | — | — | v1.0.3: runtime default for concurrent execution of independent tool calls (task config overrides). |
+| `maxParallelToolCalls` | number | `4` | 1 | 8 | v1.0.3: hard cap on concurrently executing tool calls (waves handle the rest). |
+| `autoExecuteTools` | boolean | `false` | — | — | v1.0.6: global auto-execution override. `true` → every tool in every task executes without approval (overrides per-task and per-tool settings). `false` (default) → the per-task config and per-tool `autoExecute` flags decide. |
+| `allowMultipleEvents` | boolean | `false` | — | — | v1.0.6: multi-event live processing ("Read & Act All Events"). `true` → events arriving while busy/paused/waiting are queued (max 50) and processed one-by-one (priority → arrival). `false` (default) = v1.0.5 single-event behavior. |
+| `useMemory` | boolean | `true` | — | — | Whether the context bundle loads persistent memory entries. |
+| `logLevel` | `'info' \| 'debug' \| 'error'` | `info` | — | — | Coarse log level; invalid values revert to `info`. |
+| `realTimeTransport` | `'sse'` | `sse` | — | — | Locked to `sse`. A WebSocket adapter is **not installed** in this environment; the Settings UI shows it as locked with a note. |
+
+Non-numeric invalid inputs are replaced by the range minimum (`clampNum`); values are
+rounded to integers. Settings are served fresh via `GET /api/settings`
+(`getSettings(true)` bypasses the cache) and cached for 10 s elsewhere.
+
+### Reading and writing
+
+```bash
+curl http://localhost:3000/api/settings
+
+curl -X PUT http://localhost:3000/api/settings \
+  -H 'Content-Type: application/json' \
+  -d '{"maxIterations":50,"liveIntervalMs":20000}'
+```
+
+### Parallel tool calls (v1.0.3)
+
+Two fields control whether truly independent tool calls execute concurrently:
+
+| Field | Where | Default | Notes |
+| --- | --- | --- | --- |
+| `parallelToolCalls` | runtime settings + per-task config | `true` | When `false`, the parallel branch is skipped entirely — execution is strictly sequential. |
+| `maxParallelToolCalls` | runtime settings + per-task config | `4` | Integer 1–8 (clamped). Hard cap on concurrency — no unlimited parallelism. |
+
+Where to configure:
+
+- **Per task** — `config.parallelToolCalls` / `config.maxParallelToolCalls` in
+  `POST /api/tasks` (zod-validated: `maxParallelToolCalls` int 1–8). Task-level values
+  override the runtime defaults; unset fields fall back to the settings.
+- **Task Console UI** — "Parallel tool calls" toggle + "Max parallel calls" number
+  field in the *Execution limits* group (per task).
+- **Settings UI** — "Parallel tool calls by default" + "Max parallel calls" under the
+  runtime defaults (persisted via `PUT /api/settings`, which accepts both fields).
+
+Example task config:
+
+```json
+{"mode":"goal","enabledTools":["server.health","server.restart"],"parallelToolCalls":true,"maxParallelToolCalls":4}
+```
+
+The tool-selection rule is defense in depth (v1.0.4): the Task Console blocks the submit
+with *"Select at least one tool before running the task."* when nothing is selected and
+always sends `config.enabledTools: [...selectedTools]`; `taskConfigSchema.enabledTools`
+is `.min(1)`; and `POST /api/tasks` re-checks the merged config (`TOOLS_REQUIRED`).
+
+Semantics live in [Planner](planner.md) (group batching) and
+[Tool Runtime](../tools/tool-runtime.md) (`executeParallelBatch`: waves, caps, failure
+isolation).
+
+### Tool auto-execution approval (v1.0.6)
+
+One precedence model decides whether a task-driven tool execution runs immediately or
+waits for an Allow/Deny decision (`resolveAutoExecute` in `src/lib/nexool/approval.ts`;
+see [Tool Runtime](../tools/tool-runtime.md#the-approval-gate-v106)):
+
+```
+Global setting autoExecuteTools (default false)
+  ↓ true  → every tool executes automatically (overrides everything)
+  ↓ false → task config autoExecuteTools
+            ↓ true  → tools in this task execute automatically
+            ↓ false → tool definition autoExecute (default false)
+                      ↓ false → APPROVAL REQUIRED → task waits in awaiting_approval
+```
+
+Where to configure:
+
+- **Global** — Settings switch **"Auto-Execute Tools"** (or `PUT /api/settings` with
+  `autoExecuteTools`).
+- **Per task** — `config.autoExecuteTools` in `POST /api/tasks`; the Task Console
+  renders the per-task **Auto-Execute Tools** toggle.
+- **Per tool** — the `autoExecute` field on the ToolDefinition (default `false`),
+  edited via the Tool IDE **Auto-Execute Tools** switch (General section),
+  `POST /api/tools/js`, or `PUT /api/tools/{name}`. Persists with the tool and
+  round-trips export/import; tools without the field default to approval-required
+  without invalidating anything.
+
+While an approval is pending the task status is `awaiting_approval`; the decision UIs
+are the pending-approval cards in Task Preview / Live Monitor (`GET/POST /api/approvals`).
+A 5-minute timeout **stops the task** — nothing ever silently executes.
+
+### Multi-event live processing (v1.0.6)
+
+The global setting `allowMultipleEvents` (Settings: **"Allow Multiple Events at Same
+Time"**; user-facing label elsewhere: **"Read & Act All Events"**) and the per-task
+`config.allowMultipleEvents` toggle enable the live event queue: events arriving while
+a live task is busy/paused/waiting are queued (max 50, 16 KiB payload cap, lowest
+priority dropped first when full) and processed one-by-one ordered by priority then
+arrival. Default `false` preserves the v1.0.5 single-event behavior. See
+[Live Mode](../modes/live-mode.md#multi-event-mode--read--act-all-events-v106).
+
+## Per-task config (TaskConfig)
+
+Sent as `config` in `POST /api/tasks` (or `body.config`). `mode` is used **exactly as
+provided** — it defaults to `settings.defaultMode` but is never auto-switched to `live`.
+
+| Field | Type | Default source | Clamp / notes |
+| --- | --- | --- | --- |
+| `name` | string? | — | Optional display name. |
+| `mode` | `'goal' \| 'live'` | `settings.defaultMode` | Other values are deleted at creation; Live Mode is explicit opt-in. |
+| `reasoningLevel` | `1..6` | `settings.defaultReasoningLevel` | 1–6. |
+| `enabledTools` | string[] | — | **v1.0.4: required, non-empty at creation** — `POST /api/tasks` rejects a missing or empty list (400 `TOOLS_REQUIRED`; the zod schema also rejects `[]` with `INVALID_REQUEST`). Otherwise an allow-list of enabled tool names. |
+| `useMemory` | boolean | `settings.useMemory` | Enables memory in the context bundle. |
+| `learnFrom` | `{feedback?, results?}` | both `true` | `feedback: true` stores user feedback into memory (key `feedback_<taskId>`). |
+| `autoExecuteSubtools` | boolean | `true` | Enables parallel group execution. |
+| `maxSubtoolCalls` | number | `settings.maxSubtoolCalls` | 1–200, additionally capped by `safetyLimit`. |
+| `safetyLimit` | number | `settings.safetyLimit` | 1–500. |
+| `maxIterations` | number | `settings.maxIterations` | 1–200. |
+| `taskTimeoutMs` | number | `settings.taskTimeoutMs` | 5000–3600000. |
+| `toolTimeoutMs` | number | `settings.toolTimeoutMs` | v1.0.7: 1000–3600000 (task-level default; a tool's own `timeoutMs` still overrides it). |
+| `liveIntervalMs` | number | `settings.liveIntervalMs` | 1000–3600000. |
+| `parallelToolCalls` | boolean | `settings.parallelToolCalls` | v1.0.3: `false` forces strictly sequential execution. |
+| `maxParallelToolCalls` | number | `settings.maxParallelToolCalls` | v1.0.3: clamped 1–8 at merge time. |
+| `autoExecuteTools` | boolean | `false` | v1.0.6: per-task auto-execution override (see the precedence model above; the global setting, when `true`, still wins). |
+| `allowMultipleEvents` | boolean | `settings.allowMultipleEvents` (default `false`) | v1.0.6: enables the multi-event live queue for this task ("Read & Act All Events"). |
+| `sessionId` | string? | — | Free-form session correlation. |
+| `context` | object? | — | Arbitrary initial context. |
+
+If `maxSubtoolCalls > safetyLimit`, creation clamps it down to `safetyLimit`.
+`maxParallelToolCalls` is clamped to 1–8 when the config is merged at loop start
+(`loop.ts` `mergeConfig`) — beyond the cap, calls run in later waves, never wider.
+
+## Where limits bite (runtime behavior)
+
+- **Goal Mode** loop: stops with `limit_reached` when `iterationCount ≥ maxIterations` or
+  `toolCallCount ≥ safetyLimit`; stops with `TIMEOUT` when the task exceeds
+  `taskTimeoutMs`.
+- **Live Mode**: each wake/scheduled cycle is bounded by `taskTimeoutMs` (per-cycle
+  deadline); the scheduled tick fires every `liveIntervalMs`.
+- **Tool executions**: default `toolTimeoutMs` = 10 s; a tool's own `timeoutMs`
+  overrides it; the executor hard-caps every value at **1 hour** (3600000 ms).
+  Failures get exactly one retry in Goal Mode. See the section below.
+
+## Central configuration limits (v1.0.8)
+
+**File:** `config/configuration-limits.json` — the single source of truth.
+
+**Loader:** `src/lib/nexool/config-limits.ts`:
+
+```text
+configuration-limits.json
+        ↓
+Limit Loader (fs read + mtime cache, ≤2 s revalidation)
+        ↓
+Limit Validator (schema, types, nullable, min ≤ default ≤ max)
+        ↓
+Typed Resolved Limits  ──→  Settings · Backend (schemas) · Runtime
+        ↓                                     ↓             ↓
+   Settings UI (GET /api/config/limits)   zod bounds   network/VFS/execution/childProcess
+```
+
+### Purpose
+
+- Every configurable property carries metadata: `type` (integer | number | boolean |
+  string | enum), `nullable`, `default`, `min`, `max`, `unit`, `description`, and optional
+  `step` / `enum` / `category`.
+- **Self-hosting:** change a limit by editing the JSON and restarting NexTool — no source
+  modification, no rebuild. The shipped file ships `execution.timeoutMs.max = 3600000`
+  (1 hour); an administrator may raise it there and every layer follows.
+- **Startup validation (§7.7/§7.8):** `min <= default <= max` is validated for every
+  numeric property. Invalid JSON, an invalid type, `default > max`, `default < min` or a
+  broken nullable configuration FAIL CLEARLY (`ConfigurationLimitsError` naming the
+  property) — the application never silently falls back to hard-coded values.
+- **Reload (§12):** the loader caches by mtime (re-checked at most every 2 s) and a
+  restart always re-reads the file. No rebuild is required.
+- **Security boundary (§7.10):** the limits file controls the application's configured
+  limits only. Raising a timeout or a VFS size never grants host filesystem, host process
+  or sandbox-escape privileges — those boundaries are not configurable.
+
+### Shipped values (defaults, and the maximum allowed by the SHIPPED configuration)
+
+### Network (network.*)
+
+| Property | Default | Shipped max | Unit | Meaning |
+| --- | --- | --- | --- | --- |
+| `timeoutMs` | 60000 | 3600000 | ms | Per-request timeout for fetch/XHR/http(s)/URL imports/npm (60 seconds). The per-execution request timeout follows the tool execution timeout. |
+| `maxResponseBytes` | 5242880 (5 MiB) | 734003200 | bytes | Maximum response body (fetch, XHR, http(s), URL-imported modules, npm tarballs). |
+| `maxRedirects` | 56 | 56 | count | Maximum redirect hops; every hop re-validated. |
+| `maxRequestsPerExecution` | 56 | 56 | count | Requests per tool execution — counts fetch, XHR, http(s), URL imports and npm registry/tarball downloads. |
+| `allowUrlImports` | true | — | boolean | Enable dynamic `import()` of http(s) URLs (v1.0.8). Set `false` to disable without code changes. |
+
+### Virtual FS (vfs.*)
+
+| Property | Default | Shipped max | Unit | Meaning |
+| --- | --- | --- | --- | --- |
+| `maxFileBytes` | 2097152 (2 MiB) | 734003200 | bytes | Maximum size of ONE file (also caps single reads/writes). Lowering it never corrupts or deletes existing files — new violating operations fail clearly. |
+| `maxTotalBytes` | 734003200 (700 MiB) | 734003200 | bytes | Maximum total workspace size per tool. |
+| `maxEntries` | 4000 | 50000 | count | Maximum stored entries (files + directories) per workspace. |
+| `maxDepth` | 56 | 128 | levels | Maximum directory nesting depth. |
+| `maxPathLength` | 512 | 4096 | chars | Maximum normalized virtual path length. |
+
+### Execution (execution.*)
+
+| Property | Default | Shipped max | Unit | Meaning |
+| --- | --- | --- | --- | --- |
+| `timeoutMs` | 10000 | 3600000 | ms | Tool execution timeout — the hard runtime ceiling (shipped 1 h). |
+| `syncTimeoutMs` | 4000 | 1800000 | ms | Synchronous (non-awaiting) execution cap inside the sandbox (30 min max). |
+| `heapSentinelBytes` | 268435456 (256 MiB) | 763363328 (728 MiB) | bytes | Heap-GROWTH sentinel for nodejs tools. This is a monitor, not an OS memory limit: it aborts the tool result when observed growth exceeds the value. |
+| `maxSourceChars` | 64000 | 200000 | chars | Maximum tool function source length (js-function and nodejs). |
+| `maxResultBytes` | 65536 (64 KiB) | 1048576 | bytes | Maximum serialized JSON result size. |
+| `maxLogs` | 100 | 1000 | lines | Maximum captured console log lines per execution. |
+| `maxLogLineChars` | 2000 | 8000 | chars | Maximum characters of one log line. |
+
+### Child process (childProcess.*)
+
+| Property | Default | Shipped max | Unit | Meaning |
+| --- | --- | --- | --- | --- |
+| `timeoutMs` | 8000 | 3600000 | ms | Default per-command ceiling; the effective tool execution timeout RAISES it (never shorter). |
+| `maxOutputBytes` | 65536 | 1048576 | bytes | Maximum combined stdout+stderr of one virtual command. |
+| `maxProcessesPerExecution` | 64 | 512 | count | Virtual command invocations per execution (raised from 4 in v1.0.8 for realistic multi-command workflows). |
+| `maxPipeStages` | 3 | 16 | count | Maximum pipe stages per command line. |
+| `maxArgs` | 32 | 512 | count | Maximum arguments per stage. |
+| `npmMaxPackages` | 25 | 200 | count | Packages (incl. transitive deps) per virtual npm install. |
+
+### Task (task.*)
+
+`maxIterations` 30 (1–200) · `maxSubtoolCalls` 20 (1–200) · `safetyLimit` 100 (1–500) ·
+`taskTimeoutMs` 120000 (5000–3600000 ms) · `toolTimeoutMs` 10000 (1000–3600000 ms) ·
+`liveIntervalMs` 60000 (1000–3600000 ms) · `maxParallelToolCalls` 4 (1–8) ·
+`eventQueueCap` 50 (1–500).
+
+These bound both the Settings defaults and per-task configuration values —
+`updateSettings` clamps with them, the zod schemas validate with them and
+`loop.ts` merges task config with them.
+
+### Which timeout governs which operation (§14 — intentionally separate)
+
+| Timeout | Property | Governs |
+| --- | --- | --- |
+| Tool execution | `execution.timeoutMs` (default; tools may set their own `timeoutMs`) | The whole tool execution. |
+| Task | `task.taskTimeoutMs` | The whole task. |
+| Network request | `network.timeoutMs` | ONE network request (fetch/XHR/http(s)/URL import/npm). |
+| Child command | `childProcess.timeoutMs` | ONE virtual command; raised by the effective tool execution timeout. |
+| Approval | fixed 300000 ms (v1.0.6 §9) | User approval of a tool call — intentionally NOT configurable here. |
+| Prompt / confirm | fixed 120000 ms | Interactive prompt()/confirm() windows; confirm resolves **false** on expiry. |
+
+### Frontend / backend / runtime agreement (§8)
+
+- **Settings UI:** `GET /api/config/limits` exposes the resolved metadata; numeric inputs
+  derive min/max/default/unit from it — never duplicated in React components.
+- **Backend:** `settings.ts` clamps and `schemas.ts` zod bounds resolve the same limits.
+- **Runtime:** network, VFS, execution and child-process enforcement resolve the same
+  limits live (getter per operation, no cached stale snapshot).
+- The Task Console's execution-limits fields read the same metadata
+  (`task.*` properties).
+
+### CLI
+
+```bash
+bun run cli config limits     # print the resolved limits
+bun run cli config validate   # validate configuration-limits.json
+```
+
+## Tool execution timeout (v1.0.7)
+
+The tool execution timeout is fully configurable with a stable default and a hard
+runtime ceiling:
+
+- **Default: 10 seconds** (`10000` ms) — unchanged behavior for unconfigured tools.
+- **Maximum: 1 hour** (`3600000` ms) — **no configuration may exceed one hour.**
+- Values above the maximum are **rejected** by API validation (zod schemas return 400)
+  and **clamped** by the runtime (defense in depth for hand-edited rows).
+
+Precedence (highest wins, the runtime maximum always applies):
+
+```
+Global/default timeout   Settings.toolTimeoutMs (default 10000 ms)
+        ↓ overridden by
+Tool-specific timeout    ToolDefinition.timeoutMs (Tool IDE "Execution timeout (ms)")
+        ↓ bounded by
+Runtime-enforced maximum 3600000 ms — never bypassable
+```
+
+Where to configure:
+
+- **Settings view** → *Execution limits* → "Tool timeout (ms)" numeric input plus a
+  preset select (10 s / 30 s / 1 min / 5 min / 30 min / 1 hour). The caption shows
+  "Default: 10 seconds (10000) · Maximum: 1 hour (3600000)".
+- **Tool IDE** → *Execution Environment* → "Execution timeout (ms)" — empty means the
+  global default; valid range 1000–3600000.
+- **CLI** → `nextool tool test <name> --timeout <ms>`.
+- **API** → `PUT /api/settings` (`toolTimeoutMs`), `POST /api/tools/js` +
+  `PUT /api/tools/{name}` (`timeoutMs`), `POST /api/tasks` (`config.toolTimeoutMs`).
+
+### Timeout propagation
+
+The **effective** timeout (tool-specific → task/global default, capped at 1 h) flows
+through the whole execution chain, so child operations never inherit a shorter
+hard-coded limit:
+
+```
+Task → Main → CoreModule → Tool Runtime (executor watchdog)
+                              ├─ Network layer      policyFetch / XHR / virtual http(s)
+                              │                      (NetworkAccounting.requestTimeoutMs)
+                              ├─ Sandbox deadline   js-runner / node-runner watchdogs
+                              └─ child_process       virtual commands (ceiling = effective
+                                                      timeout; default 8 s when unset)
+```
+
+A network request inside a tool is therefore **not** forcibly terminated after 10 s
+when the effective tool timeout is longer — `10000` ms exists in exactly one place:
+the documented policy default in `sandbox-net.ts`.
+
+### Timeout errors
+
+When a timeout occurs the error reports the **actual configured timeout** — never a
+hard-coded `10000ms`:
+
+```
+TOOL_FAILURE [tool_execution]:
+Tool "server.health" timed out after 300000ms.
+```
+
+The structured `ToolTimeoutError` carries `tool`, `operation`,
+`effectiveTimeoutMs`, `elapsedMs` and `reason`; `tool.timeout` events include the
+effective timeout in their payload.
+
+### Separate timeouts (do not confuse them)
+
+| Timeout | Default | Configurable? | Scope |
+| --- | --- | --- | --- |
+| Tool execution timeout | 10 s | yes — up to 1 h (this section) | one tool call |
+| Network/request timeout | follows the effective tool timeout (policy default 10 s) | indirectly — via the tool timeout | one HTTP request inside a tool |
+| Approval timeout | **5 minutes** (v1.0.6, unchanged) | no | waiting for a user approval decision |
+| Prompt timeout | 120 s (v1.0.6, unchanged) | no | `prompt()` interactivity |
+| Task timeout | `taskTimeoutMs` 120 s | yes (5 s–1 h) | the whole task / live cycle |
+
+## Application data reset (v1.0.7)
+
+**Settings → Danger zone → "Reset Application Data"** performs a controlled,
+backend-executed reset of RUNTIME data. It requires a confirmation dialog **and**
+typing the exact phrase `RESET`; the destructive button stays disabled until the
+phrase matches. It is also available as `POST /api/settings/reset` with body
+`{ "confirm": "RESET" }` (anything else → 400 `CONFIRMATION_REQUIRED`) and via the
+CLI `nextool maintenance reset --confirm RESET`.
+
+**What the reset clears** (runtime data only):
+
+cached/generated data (incl. generated images) · persistent memory · statistics ·
+stored events · task histories (tasks, execution history, live-state history) ·
+runtime state (incl. tool Virtual FS workspaces) · session/runtime caches.
+
+**What the reset NEVER deletes** (protected resources — enforced by an explicit
+allowlist in `maintenance.ts`; the endpoint cannot touch anything else):
+
+- Tools — definitions, handler config, function source
+- Models — registrations, manifests, artifacts
+- Datasets — records, examples, files
+- Training jobs + benchmark runs (training artifacts and model/dataset provenance)
+- Settings (including the timeout configuration)
+
+The reset is a controlled transaction, **not** `DELETE FROM` on the whole database
+and not a storage-directory wipe. Events `system.reset.started` / `system.reset.completed`
+/ `system.reset.failed` are emitted; the old event history is intentionally cleared
+by the reset, leaving only the minimal `system.reset.completed` audit record.
+Failures are reported per the §3.7 contract — the reset never claims success when a
+store could not be cleared. After a successful reset the UI refreshes to the new
+empty runtime state.
+
+## Model/dataset maintenance cleanup (v1.0.7)
+
+**Settings → Maintenance** exposes two real operations (also available via
+`GET|POST /api/maintenance/cleanup`, `GET /api/maintenance/validate` and the CLI
+`nextool maintenance validate | cleanup [--apply]`):
+
+- **Validate dependencies** — checks the active model (built-in `llm-core`), model
+  manifest/artifact integrity, required datasets and every model/dataset reference
+  (training jobs, benchmark runs). Missing resources are **reported as clear errors**;
+  nothing is ever silently recreated.
+- **Model/dataset cleanup** — dependency-aware, **idempotent** cleanup. A resource is
+  a cleanup candidate **only** when dependency analysis proves it has no inbound
+  references (training jobs, benchmark runs) and it is not the active model
+  (`status: "active"`). Models/datasets are never removed merely for being old,
+  duplicate-named or lower-versioned. The report lists protected / candidates /
+  removed / failed resources plus broken-reference warnings — always traceable.
+  A dry run ("Analyze") never deletes; the second cleanup run removes nothing new.
+
+Dependency rules (v1.0.7):
+
+```
+Model   → protected when referenced by a training job, referenced by a benchmark
+          run, or status "active" (current model); otherwise orphan candidate
+Dataset → protected when referenced by a training job or a benchmark run;
+          otherwise orphan candidate (DatasetRecord imports are versioned — same
+          name does NOT mean duplicate)
+```
+
+For confirmed orphans the database record is removed and, because orphans have no
+inbound references by definition, no broken references remain. User downloads in
+`exports/` are never touched.
+
+## Environment variables
+
+Only `DATABASE_URL` is read (Prisma SQLite connection). There are no other application
+env vars; the image-generation and LLM credentials are resolved by `z-ai-web-dev-sdk`
+from its own sandbox configuration, not from project files.
+
+## Related pages
+
+- [Runtime](../architecture/runtime.md) — lifecycle, limits and cancellation semantics.
+- [Scheduler](../architecture/scheduler.md) — how `liveIntervalMs` and event wakes interact.
+- [API](../api/api.md) — `/api/settings` endpoint details.

@@ -1,0 +1,199 @@
+---
+title: Security
+category: Architecture
+order: 8
+---
+
+# Security — sandbox boundaries and honest limitations
+
+This page is the security reference for the tool runtime (v1.0.6). The design goal:
+tools are useful application code, but they can never reach the NexTool host
+filesystem, the host system, or the network without passing one audited policy layer.
+Everything below is implemented in `src/lib/nexool/tools/*` and enforced at execution
+time — the capability payload served by `GET /api/tools/environments` is generated
+from the same constants, so the documentation, the IDE and the runtime cannot drift.
+
+## Host filesystem isolation
+
+- `js-function` tools run in a contextified `node:vm` sandbox that is never given
+  `require`, `process`, `Buffer` or any filesystem object. There is no path from tool
+  code to the host fs — not through globals, not through imports.
+- `nodejs` tools run in the same kind of sandbox; `require('fs')` resolves to the
+  **Virtual File System** (below), not the host `fs`. `process` is a blocked module
+  ("process manipulation is never allowed"), so `process.cwd()`, `process.env` and
+  friends are unreachable.
+- The static module allowlist (`buffer`, `crypto`, `events`, `path`, `querystring`,
+  `string_decoder`, `url`, `util`, `assert`, `zlib`) contains no I/O module; `path`
+  works on strings only.
+
+## Virtual filesystem (VFS)
+
+The VFS (`tools/vfs.ts`, `tools/sandbox-fs.ts`) is a real, per-tool filesystem backed
+by the SQLite `VirtualFile` table — **never** the host fs:
+
+- **Isolation** — one workspace per tool (scoped by the tool name), scaffold
+  `/input /output /tmp /data /workspace`. Tools cannot see each other's files.
+- **Path safety** — every path is decoded before validation (encoded traversal
+  `%2e%2e` is caught), normalized, and rejected on: `..` beyond the virtual root,
+  `file:` URLs, backslash paths, NUL bytes, malformed percent-encoding. There are no
+  symlinks in the VFS. Escape attempts fail with
+  `VirtualFSAccessError: Access to the NexTool host filesystem is not permitted.`
+  — never a silent redirect.
+- **Limits** — 512 KiB per file (read and write), 8 MiB per workspace, 500 entries,
+  path ≤ 512 chars, depth ≤ 24 (`VFS_LIMITS`, enforced on every operation).
+- **Lifecycle** — persistent per tool with write-through persistence; concurrent
+  executions of one tool are last-write-wins. Tool IDE tests run in an ephemeral
+  scratch workspace wiped after the run.
+
+## Network restrictions
+
+One networking layer — `policyFetch` (`tools/sandbox-net.ts`) — serves `fetch`,
+`XMLHttpRequest` and the virtual `http`/`https` modules in both environments. The
+policy (`NETWORK_POLICY`):
+
+| Restriction | Value | Error code |
+| --- | --- | --- |
+| Protocol | `http:` / `https:` only | `PROTOCOL_BLOCKED` |
+| Host | localhost (+`.localhost`, `.local`, `.internal`), loopback, link-local (incl. `169.254.x.x` cloud metadata), private ranges (10/8, 127/8, 172.16/12, 192.168/16, CGNAT 100.64/10), multicast/reserved, `host.docker.internal` | `HOST_BLOCKED` |
+| Request timeout | 10 000 ms | `TIMEOUT` |
+| Response size | 1 048 576 bytes (1 MiB) — body read incrementally and aborted past the cap | `RESPONSE_TOO_LARGE` |
+| Redirects | max 3 — every hop re-validated against protocol + host policy | `REDIRECT_LIMIT` |
+| Requests per execution | max 10 | `REQUEST_LIMIT` |
+| URL imports | disabled (`urlImportsEnabled: false`) — the single flag that would allow `import('https://…')`, capped at 256 KiB when enabled | `URL_IMPORTS_DISABLED` |
+
+There is no second fetch path: the runtime's own code paths do not bypass
+`policyFetch`, and raw sockets (`net`, `dgram`) are blocked modules.
+
+## Module allowlist + blocked list
+
+`nodejs` tools resolve modules through ONE centralized import resolver
+(`tools/import-resolver.ts`) with exactly three sources: the static allowlist, the
+context-provided virtual modules (`fs` → VFS, `os` → virtualized values, `timers`,
+`timers/promises`, `http`/`https` → the controlled client, `child_process` → the
+virtual command layer), and VFS files. Everything else fails with the
+`Module "x" is not available in the NexTool Node.js environment (…)` wording.
+
+Deliberately blocked (with reasons served by the API): `cluster`, `vm`,
+`worker_threads`, `net`, `dgram`, `dns`, `process`, `perf_hooks`, `inspector`,
+`module`, `async_hooks`. `js-function` tools are narrower still: only VFS modules
+resolve; every Node specifier is rejected.
+
+## Node.js API restrictions
+
+- No `process`, no `Buffer` outside the allowlisted `buffer` module, no globals beyond
+  the documented sandbox surface (`NODE_SANDBOX_GLOBALS`).
+- Timers exist but are bounded by the execution deadline (default 10 s watchdog — v1.0.7: the effective, configurable tool timeout up to 1 h; deferred only
+  while a `prompt()` legitimately waits).
+- `os` values are fixed sandbox constants (`platform()` → `'nextool-virtual'`,
+  `hostname()` → `'nextool-sandbox'`, `tmpdir()` → `'/tmp'`) — no host introspection.
+- Dynamic `import()` call sites are rewritten at compile time to the resolver shim —
+  there is no flag combination that produces a real dynamic import.
+
+## Child process restrictions
+
+`child_process` is a RESTRICTED VIRTUAL command layer
+(`tools/virtual-child-process.ts`) — **no real host process is ever spawned**:
+
+- Commands: `ls cat head tail echo printf pwd wc grep sort uniq date mkdir touch rm cp
+  mv basename dirname env true false` — executed virtually against the tool's VFS
+  workspace (working directory = the tool's `/workspace`).
+- Shell metacharacters (`;` `&&` `||` `` ` `` `$(` `>` `<` `&`) are rejected with exit
+  126; unknown commands exit 127; timeout 8 s (exit 124); output ≤ 64 KiB; ≤ 4
+  processes per execution; ≤ 3 pipe stages; ≤ 32 args.
+- API surface limited to `exec`, `execSync`, `execFile`, `spawn`, `spawnSync` — every
+  creation path enforces the identical policy. There is no hidden route around the
+  tokenizer.
+
+## Execution limits
+
+| Limit | js-function | nodejs |
+| --- | --- | --- |
+| Source length | ≤ 64 000 chars | ≤ 64 000 chars |
+| Sync execution | 4 s (vm timeout, enforced at invocation) | 4 s (vm timeout, enforced at invocation) |
+| Async watchdog | default 10 s (`TIMEOUT`) — v1.0.7: the effective tool timeout (≤ 1 h) | default 10 s (`TIMEOUT`) — v1.0.7: the effective tool timeout (≤ 1 h) |
+| Heap growth | — | 256 MiB sentinel (`MEMORY`) |
+| Result | ≤ 64 KiB serialized, depth ≤ 12 | ≤ 64 KiB serialized, depth ≤ 12 |
+| Logs | 100 lines × 2000 chars | 100 lines × 2000 chars |
+
+## Import restrictions
+
+- Static allowlist + virtual modules + VFS files only (`.js`, `.mjs`, `.json`); VFS
+  modules run CommonJS plus a conservative ESM transform — nothing else executes.
+- URL imports are disabled by default (see the network table).
+- There are no approved external packages today — unknown package specifiers are
+  honestly reported as unavailable.
+
+## Tool approval & approval timeout
+
+Every tool carries an `autoExecute` flag (default **false**). With the global
+`autoExecuteTools` and per-task `autoExecuteTools` overrides false, every task-driven
+execution waits for an explicit Allow/Deny decision: `tool.approval.required` →
+`awaiting_approval` → `tool.approval.allowed | .denied | .timeout`. The 5-minute
+timeout **stops the task** — a timeout never silently executes the tool, and denial
+feedback is recorded as a runtime event. This is the human-in-the-loop control for
+everything the sandbox cannot decide statically.
+
+## Protected resources: application reset & cleanup (v1.0.7)
+
+The **Reset Application Data** operation (`POST /api/settings/reset`, typed `RESET`
+phrase required) is implemented as an explicit deletion ALLOWLIST in
+`maintenance.ts` — there is no code path that can drop the database or a storage
+directory. Protected by construction: tools (definitions, handler config, function
+source), models (registrations, manifests, artifacts), datasets (records, examples,
+files), training jobs + benchmark runs (training artifacts / provenance) and
+settings. Only runtime data is cleared (tasks, events, history, memory,
+notifications, generated images, tool Virtual FS workspaces) and tool statistics are
+zeroed while the tools themselves stay. Tool usage statistics reset to zero — the
+tools do not.
+
+The dependency-aware cleanup removes ONLY resources proven unreferenced by the
+dependency graph (training jobs, benchmark runs, active status). The current model,
+required datasets and every referenced resource are protected; cleanup is idempotent;
+`exports/` downloads are never touched. `validateRuntimeDependencies` reports missing
+artifacts or broken references as errors instead of silently recreating anything.
+
+## Honest limitations
+
+- **In-process sandbox, not a container.** The `node:vm` sandboxes share the Node.js
+  process with the runtime. Defense is object-capability style (nothing dangerous is
+  handed to tool code), but a hypothetical vm escape would be out of scope for these
+  guarantees. Run the deployment in a container/OS boundary if your threat model
+  requires it.
+- **The heap sentinel cannot revoke memory.** The 256 MiB `MEMORY` guard aborts a
+  runaway tool's result, but memory it already allocated in the host process is only
+  reclaimed by the garbage collector (or a process restart).
+- **Paused tasks cannot survive a process restart.** Pause state lives in the in-memory
+  run handle; if the server dies while a task is paused, the task row stays `paused`
+  and cannot resume (Stop still works).
+- **VFS write-through is last-write-wins.** Concurrent executions of the same tool each
+  write their snapshot; there is no cross-execution transaction.
+- **Test-mode interactivity is simulated.** In Tool IDE test runs, `alert` resolves
+  immediately and `prompt` returns its default (or `null`) — real interactivity only
+  exists in production task executions.
+
+## See also
+
+- [Tool Development](../tools/tool-development.md) — the authoring-side contracts
+  (module tables, VFS guide, virtual child_process, network policy).
+- [Tool Runtime](../tools/tool-runtime.md) — the approval gate and execution pipeline.
+- [Runtime](runtime.md) — task states incl. `awaiting_approval` / `paused`.
+- [Configuration](../getting-started/configuration.md) — the approval precedence model.
+
+## Configuration limits and the security boundary (v1.0.8 §7.10/§18)
+
+`config/configuration-limits.json` controls the application's **configured limits** —
+and nothing else. Raising a limit never grants host-level privileges:
+
+- `max timeout = 1 day` (self-hosted) does **not** mean an unrestricted host process —
+  the tool still runs inside its sandbox with the same isolated surfaces.
+- `max VFS size = 700 MiB` does **not** mean host filesystem access — the Virtual FS
+  remains SQLite-backed and path-validated.
+- URL imports (enabled by default in v1.0.8) pass the full network policy — protocol,
+  host, timeout, response size, redirect and per-execution request caps — and imported
+  modules execute under the SAME sandbox boundary as the importing tool.
+- Virtual `node`/`npm` run inside the sandbox: `fs` is the VFS, `fetch` is the policy
+  layer, packages install into the tool's workspace `node_modules`, lifecycle scripts
+  are not auto-executed, and the host `node_modules`/source are unreachable.
+- The executor timeout watchdog is interaction-aware: while a tool waits for a user
+  answer (confirm/prompt) the watchdog defers and restores the full budget afterwards;
+  confirmations resolve `false` on cancellation/expiry — never `true`.
