@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.8** — release name: *"Central Configuration Limits, Tool Runtime Expansion (confirm/URL imports/node/npm) & Task Console Cleanup"* |
-| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2–v1.0.8 add tooling around it; trained classifier checkpoints carry their own versions) |
+| **Application version** | **1.0.91** — release name: *"In-Sandbox fetch() Self-Origin Fix (POST /api/tools/test restored) & Bulk Tool JSON Import"* |
+| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2–v1.0.91 add tooling around it; trained classifier checkpoints carry their own versions) |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 

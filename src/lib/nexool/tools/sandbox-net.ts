@@ -9,6 +9,12 @@
  *
  *  - protocol policy (http/https only)
  *  - host policy (deny localhost, link-local, private ranges, cloud metadata)
+ *  - v1.0.91 SELF-ORIGIN EXCEPTION: path-relative fetch URLs
+ *    (`/api/tools/test`) resolve against the NexTool application origin
+ *    (network.selfOriginAccess) and are exempt from the local-host block
+ *    ONLY — every other limit below still applies and all ABSOLUTE URLs
+ *    (including an absolute URL of the application origin itself) keep the
+ *    full host policy.
  *  - request timeout            (network.timeoutMs — default 60 s, max 1 h)
  *  - maximum response size      (network.maxResponseBytes — default 5 MiB)
  *  - maximum redirects          (network.maxRedirects — default 56, each hop re-validated)
@@ -33,6 +39,9 @@ export interface NetworkPolicy {
   maxRedirects: number;
   maxRequestsPerExecution: number;
   urlImportsEnabled: boolean;
+  /** v1.0.91 — relative fetch URLs resolve against the application origin
+   *  and requests to that exact origin skip ONLY the local-host block. */
+  selfOriginAccess: boolean;
 }
 
 /** v1.0.8 — the network policy is resolved LIVE from the central limits
@@ -50,6 +59,7 @@ export function getNetworkPolicy(): NetworkPolicy {
     maxRedirects: limits.maxRedirects,
     maxRequestsPerExecution: limits.maxRequestsPerExecution,
     urlImportsEnabled: limits.allowUrlImports,
+    selfOriginAccess: limits.selfOriginAccess,
   };
 }
 
@@ -64,6 +74,8 @@ export const NETWORK_POLICY = {
   maxRequestsPerExecution: 56,
   /** v1.0.8 §4.5 — URL imports are ENABLED by default (policy-gated). */
   urlImportsEnabled: true,
+  /** v1.0.91 — self-origin fetch (relative URLs → application origin). */
+  selfOriginAccess: true,
   /** v1.0.8 §15 — URL-import size is governed by network.maxResponseBytes.
    *  The separate 256 KiB limit from v1.0.6 was removed (single source). */
   urlImportMaxBytes: 5_242_880,
@@ -174,19 +186,106 @@ export function assertHostAllowed(url: URL): void {
   }
 }
 
-/** Validate + normalize a URL against the protocol/host policy. */
-export function parsePolicyUrl(input: string | URL, policy: NetworkPolicy = getNetworkPolicy()): URL {
+// ---------- v1.0.91 — self-origin (application) requests ----------
+
+/**
+ * The NexTool application origin, resolved from the environment. Tool
+ * functions may call the application itself (e.g. POST /api/tools/test) via
+ * RELATIVE fetch URLs; those resolve against THIS origin. `NEXTOOL_SELF_ORIGIN`
+ * overrides the default `http://127.0.0.1:$PORT` (used by tests and by
+ * self-hosted deployments that front the app with a local proxy).
+ */
+export function getSelfOrigin(): string {
+  const override = process.env.NEXTOOL_SELF_ORIGIN;
+  if (override && /^https?:\/\//i.test(override)) {
+    return override.replace(/\/+$/, '');
+  }
+  const port = process.env.PORT || '3000';
+  return `http://127.0.0.1:${port}`;
+}
+
+/** true → the URL points at the NexTool application origin (host AND port). */
+export function isSelfOrigin(url: URL): boolean {
+  try {
+    return url.origin === getSelfOrigin();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * true → the input is a path-only relative URL (`/api/tools/test`). A leading
+ * `//` is protocol-relative and resolves against an EXTERNAL host — it is NOT
+ * self-relative and goes through the normal external-host policy.
+ */
+export function isSelfRelativePath(input: string): boolean {
+  return input.startsWith('/') && !input.startsWith('//');
+}
+
+/**
+ * Shared URL resolver. `opts.selfRelative` marks an input that was a RELATIVE
+ * path resolved against the application origin — such requests skip ONLY the
+ * local-host block; every other policy rule (protocol allowlist, timeout,
+ * response size, redirects, per-execution request count) still applies.
+ * `opts.base` resolves relative inputs against an arbitrary (already
+ * validated) URL — used for redirect `Location` hops. ABSOLUTE inputs never
+ * get the exemption — the v1.0.6 SSRF guard stays intact (absolute
+ * loopback/private URLs remain HOST_BLOCKED exactly as before).
+ */
+function resolvePolicyUrl(raw: string, policy: NetworkPolicy, opts: { selfRelative?: boolean; base?: URL } = {}): URL {
   let url: URL;
   try {
-    url = input instanceof URL ? new URL(input.toString()) : new URL(String(input).trim());
+    if (opts.selfRelative) url = new URL(raw, getSelfOrigin());
+    else if (opts.base) url = new URL(raw, opts.base);
+    else url = new URL(raw);
   } catch {
-    throw new NetworkPolicyError('INVALID_URL', 'Invalid URL — fetch needs an absolute http(s) URL.');
+    throw new NetworkPolicyError('INVALID_URL', 'Invalid URL — fetch needs an absolute http(s) URL or a relative path when self-origin access is enabled.');
   }
   if (!policy.allowedProtocols.includes(url.protocol)) {
     throw new NetworkPolicyError('PROTOCOL_BLOCKED', `Protocol "${url.protocol.replace(':', '')}" is not allowed — the NexTool network policy permits http and https only.`);
   }
-  assertHostAllowed(url);
+  if (!(opts.selfRelative && isSelfOrigin(url))) {
+    assertHostAllowed(url);
+  }
   return url;
+}
+
+/**
+ * Validate + normalize a URL against the protocol/host policy.
+ *
+ * v1.0.91 — path-relative URLs (`/api/tools/test`) resolve against the NexTool
+ * application origin when network.selfOriginAccess is enabled, so a tool can
+ * call the application's own HTTP surface (tool-test endpoint, docs, …).
+ * All absolute URLs — including an absolute URL pointing at the application
+ * origin itself — are validated exactly as in v1.0.6-v1.0.9: local, private,
+ * link-local and metadata hosts stay HOST_BLOCKED.
+ */
+export function parsePolicyUrl(input: string | URL, policy: NetworkPolicy = getNetworkPolicy()): URL {
+  const raw = input instanceof URL ? input.toString() : String(input).trim();
+  if (!(input instanceof URL) && isSelfRelativePath(raw)) {
+    if (!policy.selfOriginAccess) {
+      throw new NetworkPolicyError('INVALID_URL', 'Relative fetch URLs are disabled by the network policy (network.selfOriginAccess) — use an absolute http(s) URL.');
+    }
+    return resolvePolicyUrl(raw, policy, { selfRelative: true });
+  }
+  return resolvePolicyUrl(raw, policy, {});
+}
+
+/**
+ * v1.0.91 — resolve a redirect `Location` against the previous hop URL.
+ *  - RELATIVE location on a self-origin request keeps the self-origin exemption;
+ *  - RELATIVE location on an EXTERNAL request resolves against that host;
+ *  - an ABSOLUTE location (any host) is validated like any absolute URL.
+ */
+export function parseRedirectUrl(location: string, base: URL, policy: NetworkPolicy = getNetworkPolicy()): URL {
+  const raw = String(location).trim();
+  if (isSelfRelativePath(raw)) {
+    if (policy.selfOriginAccess && isSelfOrigin(base)) {
+      return resolvePolicyUrl(raw, policy, { selfRelative: true });
+    }
+    return resolvePolicyUrl(raw, policy, { base });
+  }
+  return resolvePolicyUrl(raw, policy, {});
 }
 
 interface FetchOptions {
@@ -254,6 +353,9 @@ export async function policyFetch(
     // Manual redirect chain — every hop is re-validated by the policy (§1.3).
     let current = res;
     let redirects = 0;
+    // v1.0.91 — tracked request URL: the base for RELATIVE redirect locations
+    // (undici may leave Response.url empty for redirect:'manual' responses).
+    let requestUrl = url;
     while ([301, 302, 303, 307, 308].includes(current.status)) {
       const location = current.headers.get('location');
       if (!location) break;
@@ -261,14 +363,17 @@ export async function policyFetch(
       if (redirects > policy.maxRedirects) {
         throw new NetworkPolicyError('REDIRECT_LIMIT', `Network policy: more than ${policy.maxRedirects} redirects are not allowed.`);
       }
-      const next = new URL(location, current.url);
+      const next = new URL(location, requestUrl);
+      requestUrl = next;
       if (accounting) {
         accounting.requests += 1;
         if (accounting.requests > policy.maxRequestsPerExecution) {
           throw new NetworkPolicyError('REQUEST_LIMIT', `Network policy: at most ${policy.maxRequestsPerExecution} requests per tool execution are allowed.`);
         }
       }
-      const hopUrl = parsePolicyUrl(next);
+      // v1.0.91 — relative locations on a self-origin request keep the
+      // self-origin exemption; absolute locations validate like absolute URLs.
+      const hopUrl = parseRedirectUrl(location, requestUrl, policy);
       const res2 = await fetch(hopUrl.toString(), {
         method: current.status === 303 ? 'GET' : method,
         headers: options.headers,

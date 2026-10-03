@@ -341,6 +341,8 @@ export interface ToolEnvironmentInfo {
     maxRedirects: number;
     maxRequestsPerExecution: number;
     urlImportsEnabled: boolean;
+    /** v1.0.91 — relative fetch URLs resolve against the application origin. */
+    selfOriginAccess?: boolean;
   };
   /** v1.0.8 §5 — Virtual FS limits + workspace scaffold (live central limits). */
   vfs?: {

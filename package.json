@@ -1,7 +1,7 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.9",
-  "description": "NexTool Q1 v1.0.9 — Settings-configurable Network Policy request timeout, authoritative Task Preview execution statuses, central configuration limits, async tool confirmations, URL module imports, virtual node/npm command execution and configurable network/VFS/execution limits",
+  "version": "1.0.91",
+  "description": "NexTool Q1 v1.0.91 \u2014 in-sandbox fetch() self-origin fix with the restored POST /api/tools/test route, and bulk tool JSON import (single object or array, validate-all-before-register, conflict resolution, progress + summary)",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",

@@ -220,6 +220,7 @@ Typed Resolved Limits  ──→  Settings · Backend (schemas) · Runtime
 | `maxRedirects` | 56 | 56 | count | Maximum redirect hops; every hop re-validated. |
 | `maxRequestsPerExecution` | 56 | 56 | count | Requests per tool execution — counts fetch, XHR, http(s), URL imports and npm registry/tarball downloads. |
 | `allowUrlImports` | true | — | boolean | Enable dynamic `import()` of http(s) URLs (v1.0.8). Set `false` to disable without code changes. |
+| `selfOriginAccess` | true | — | boolean | Allow tool functions to call the NexTool application itself (v1.0.91): relative fetch URLs such as `/api/tools/test` resolve against the application origin; requests to that exact origin skip ONLY the local-host block — every other policy limit still applies and all other local/private hosts stay blocked. |
 
 ### Virtual FS (vfs.*)
 

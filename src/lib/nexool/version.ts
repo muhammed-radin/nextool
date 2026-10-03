@@ -4,11 +4,11 @@
  * and runtime branding. Documentation, UI badges and /api/system all read this.
  *
  * Version concepts are intentionally kept SEPARATE:
- * - Application Version: bumped per release (currently 1.0.9).
+ * - Application Version: bumped per release (currently 1.0.91).
  * - Model Version:       version of the CoreModule decision unit itself
- *                        (llm-core). It has NOT changed in v1.0.9 — the release
- *                        is a configuration-governance and status-reporting
- *                        release around it — so it stays 1.0.0. Trained
+ *                        (llm-core). It has NOT changed in v1.0.91 — the
+ *                        release is a tool-runtime fetch fix and a tool
+ *                        portability feature — so it stays 1.0.0. Trained
  *                        classifier checkpoints carry their own model version
  *                        in manifests.
  * - Dataset Version:     dynamic — version of the most recently updated
@@ -16,9 +16,9 @@
  */
 
 export const APP_NAME = 'NexTool Q1';
-export const APP_VERSION = '1.0.9';
+export const APP_VERSION = '1.0.91';
 export const RELEASE_NAME =
-  'Direct Network Policy Configuration (Settings → per-request timeout) & Authoritative Task Preview Execution Statuses';
+  'In-Sandbox fetch() Self-Origin Fix (POST /api/tools/test restored) & Bulk Tool JSON Import';
 
 export const CORE_MODULE_NAME = 'llm-core';
 /** CoreModule decision-unit version — unchanged since v1.0.0 (model did not change). */

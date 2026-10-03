@@ -92,11 +92,17 @@ data or dependency problems, and every message says which.
 | JSON syntax colors are all near-black (#002b36-ish) on the dark glass wells — keys/strings barely readable | The theme set `--json-tree-*` variables, but the installed `@uiw/react-json-view` (2.0.0-alpha.43) reads **only** `--w-rjv-*` custom properties, so everything fell back to the library's dark default | Fixed in v1.0.4 (`src/components/console/json-theme.ts` rewritten with the real `--w-rjv-*` tokens). If you reintroduce a theme, use only `--w-rjv-*` names; a `bun test` guard checks the namespace |
 | Single values/primitives show as plain text, not a tree | By design — primitives render as formatted text in the inset well (`json-tree.tsx`) | Not a bug |
 
-## Tool import problems (v1.0.4)
+## Tool import problems (v1.0.4, extended by v1.0.91)
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| "The file contains an array — import one tool at a time" | An *Export all tools* bundle was fed to **Import tool (JSON)** | Import one tool per file; export a single tool to get the right shape |
+| `REQUEST_FAILED: Invalid response from /api/tools/test (HTTP 405)` in the Tool IDE "Test" | The `/api/tools/test` route file was missing (again) after the v1.0.8 restore — requests fell through to `/api/tools/[name]` (GET/PUT/DELETE only) and Next.js answered 405 | **Fixed in v1.0.91**: the dedicated `POST /api/tools/test` route is restored (same regression the v1.0.5 fix notes in api.md). Update to v1.0.91; the route file must exist at `src/app/api/tools/test/route.ts` |
+| Tool function gets `INVALID_URL` for `fetch("/api/…")` | Relative fetch URLs resolve against the application origin only when `network.selfOriginAccess` is enabled (default `true` since v1.0.91) | Re-enable the flag in `config/configuration-limits.json`, or use an absolute `https://` URL |
+| "The file contains an array — import one tool at a time" (single importer) | An *Export all tools* bundle was fed to the legacy single-object parse path | Use **Import tools (JSON)…** (v1.0.91) — it accepts an array as a BULK import; a single object still imports as one tool |
+| "No tools found in this JSON file." | The file contains an empty JSON array `[]` | Expected honest behavior (v1.0.91): nothing was registered and no import API call was made |
+| "Invalid JSON file — …" | The file is not parseable JSON | Fix the syntax; nothing is imported (not even partially) |
+| Bulk preview shows `✕ tool — Missing description` etc. | Per-item validation of the array — every item must pass the SAME pipeline as a single import | Fix the items or import only the valid ones; invalid items are never registered |
+| "Duplicate tool name inside import file: `utility.test`" | Two valid items in one array share a name (v1.0.91 §2.9) | Resolve per row in the preview: later occurrences default to **Skip** or **Import as copy** — never two silent registrations |
 | "Not a tool definition — expected a single JSON object …" | The file is not a portable tool JSON (wrong export, hand-written file) | Export a tool from the Tools view to see the expected format (see [Tools](../tools/tools.md#tool-export--import-as-json-v104)) |
 | `"environment" must be "js-function" or "dynamic" … read-only registry tools` | The file carries `environment: "builtin"` or `"virtual-env"` | Built-in / virtual-env tools cannot be imported (they are read-only code); duplicate one into a `js-function` tool in the Tool IDE, then export that |
 | `"functionSource" is required for js-function tools` | Export source was edited by hand and lost the source | Re-export from a working registry; the function source travels **as text** |

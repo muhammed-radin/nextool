@@ -298,3 +298,129 @@ export function proposeCopyName(existing: Set<string>, original: string): string
   }
   return `${base}-${Date.now()}`;
 }
+
+// ==================== v1.0.91 — bulk import (single object OR array) ====================
+
+/**
+ * Parse the CONTENTS of an imported JSON file for the v1.0.91 importer, which
+ * accepts BOTH a single tool object AND an array of tool objects (the exact
+ * shape `Export all tools (JSON)` produces — a complete round trip).
+ *
+ *  - JSON object        → { kind: 'single', value }   (one tool; validated next)
+ *  - JSON array (n ≥ 1) → { kind: 'bulk', tools }     (bulk import; every item
+ *                        is validated independently — nothing registers unless
+ *                        the user confirms)
+ *  - JSON array []      → { kind: 'bulk-empty' }      (surfaced honestly, the
+ *                        import API is never called)
+ *  - parse failure      → { ok: false, error }        (nothing is imported)
+ *
+ * The `{ tools: [...] }` bundle wrapper stays export-only (unchanged contract).
+ * `parseToolImport` above keeps its single-tool semantics for compatibility.
+ */
+export type ParsedToolsImport =
+  | { ok: true; kind: 'single'; value: unknown }
+  | { ok: true; kind: 'bulk'; tools: unknown[] }
+  | { ok: true; kind: 'bulk-empty' }
+  | { ok: false; error: string };
+
+export function parseToolsImport(text: string): ParsedToolsImport {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    return { ok: false, error: `Invalid JSON file — ${err instanceof Error ? err.message : 'parse error'}` };
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.length === 0 ? { ok: true, kind: 'bulk-empty' } : { ok: true, kind: 'bulk', tools: parsed };
+  }
+  if (parsed !== null && typeof parsed === 'object' && Array.isArray((parsed as { tools?: unknown }).tools)) {
+    return { ok: false, error: 'The file looks like a multi-tool bundle — export a single tool or a plain JSON array of tools.' };
+  }
+  return { ok: true, kind: 'single', value: parsed };
+}
+
+/** One preview row of a bulk import (validation happens BEFORE registration). */
+export interface BulkImportItem {
+  /** 1-based position in the imported array (stable display order). */
+  index: number;
+  /** Best-effort name for the preview list, even when the item is invalid. */
+  name: string;
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  /** The normalized portable tool — set ONLY when valid. */
+  tool: PortableTool | null;
+}
+
+/** How the user wants ONE conflicting bulk item handled. */
+export type BulkConflictResolution = 'replace' | 'copy' | 'skip';
+
+export interface BulkImportPlan {
+  items: BulkImportItem[];
+  validCount: number;
+  invalidCount: number;
+  /** Valid items whose name already exists in the live registry. */
+  registryConflicts: { index: number; name: string }[];
+  /** Names appearing 2+ times among the VALID items of this same file. */
+  inFileDuplicates: { name: string; indices: number[] }[];
+}
+
+/** Best-effort display name for a raw import item (may be garbage). */
+function rawItemName(raw: unknown, index: number): string {
+  if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) {
+    const n = (raw as { name?: unknown }).name;
+    if (typeof n === 'string' && n.trim()) return n.trim();
+  }
+  return `item #${index + 1}`;
+}
+
+/**
+ * Validate EVERY item of a bulk import through the SAME pipeline as a
+ * single-tool import (validateImportedTool) — before anything is registered.
+ * Conflict/duplicate detection is computed here so the preview can show the
+ * full picture up front:
+ *
+ *   Parse → Detect object vs array → Validate ALL → Preview → Resolve
+ *   conflicts → User confirmation → Register
+ *
+ * An invalid item can therefore never become a registered tool by surprise.
+ */
+export function buildBulkImportPlan(raws: unknown[], existingNames: Iterable<string>): BulkImportPlan {
+  const existing = new Set(existingNames);
+  const items: BulkImportItem[] = raws.map((raw, i) => {
+    const result = validateImportedTool(raw);
+    return {
+      index: i + 1,
+      name: result.tool?.name ?? rawItemName(raw, i),
+      valid: result.ok && result.tool !== null,
+      errors: result.errors,
+      warnings: result.warnings,
+      tool: result.tool,
+    };
+  });
+
+  const registryConflicts = items
+    .filter((it) => it.valid && it.tool !== null && existing.has(it.tool.name))
+    .map((it) => ({ index: it.index, name: it.tool!.name }));
+
+  // Duplicate names INSIDE the same file (among valid items).
+  const byName = new Map<string, number[]>();
+  for (const it of items) {
+    if (it.valid && it.tool) {
+      const list = byName.get(it.tool.name) ?? [];
+      list.push(it.index);
+      byName.set(it.tool.name, list);
+    }
+  }
+  const inFileDuplicates = [...byName.entries()]
+    .filter(([, indices]) => indices.length > 1)
+    .map(([name, indices]) => ({ name, indices }));
+
+  return {
+    items,
+    validCount: items.filter((it) => it.valid).length,
+    invalidCount: items.filter((it) => !it.valid).length,
+    registryConflicts,
+    inFileDuplicates,
+  };
+}

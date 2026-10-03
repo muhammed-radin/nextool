@@ -136,15 +136,25 @@ digits, dots, hyphens and underscores are replaced with `_`):
 
 The `nexool` envelope is advisory metadata (read on import, not enforced).
 **Export all tools (JSON)** downloads `nextool-tools-<YYYY-MM-DD>.json` — an array of
-these single-tool objects. Bundle files are *export-only*: the importer accepts one
-tool at a time.
+these single-tool objects. Since **v1.0.91** that array is a complete round trip: feed
+it back to **Import tools (JSON)…** and every tool is validated and restored. The
+`{ "tools": [...] }` bundle wrapper stays *export-only*.
 
-### Import workflow
+### Import workflow (v1.0.4, extended by v1.0.91 — single object OR array)
 
-**Import tool (JSON)…** runs this pipeline — nothing is registered until you confirm:
+**Import tools (JSON)…** accepts BOTH a single tool object and a JSON array of tool
+objects (the exact shape of *Export all tools*). It runs this pipeline — nothing is
+registered until you confirm:
 
-1. **Parse** — must be valid JSON; arrays and `{ "tools": [...] }` bundles are rejected
-   with a pointed message ("import one tool at a time").
+1. **Parse** (`parseToolsImport`) — must be valid JSON; the file shape decides the flow:
+   - **JSON object** → single-tool import (the unchanged v1.0.4 behavior).
+   - **JSON array** → bulk import (v1.0.91).
+   - **Empty array `[]`** → the honest notice *"No tools found in this JSON file."* —
+     nothing is registered and no import API call is made.
+   - **Parse failure** → *"Invalid JSON file — …"* with the parser's reason; nothing
+     is imported (not even partially).
+   - The `{ "tools": [...] }` bundle wrapper is rejected with a pointed message
+     (export-only contract, unchanged).
 2. **Client-side validation** (human-readable errors, shown in a rejection dialog):
    - `name` — required, `namespace.action` regex (lowercase).
    - `description` — required (the CoreModule matches on it).
@@ -161,21 +171,48 @@ tool at a time.
      param array (the register-dialog format) is tolerated.
    - `dynamic` tools require `handlerKind` (`echo|delay|http_get|uuid`) and, when
      present, an object `handlerConfig`.
-3. **Preview dialog** — name, environment, category, schema param count, description
-   and the full function source, plus any warnings, before you choose **Register tool**.
-4. **Conflict handling** — if the name already exists a dialog offers
-   **Replace existing tool** (`PUT /api/tools/{name}` with the imported definition),
-   **Import as copy** (auto non-conflicting name `base.copy`, then `base.copy-2`,
-   `base.copy-3` …) or **Cancel** — never a silent overwrite.
-5. **Registration** via the existing endpoints: `POST /api/tools/js` for
+
+   For a bulk import **every array item goes through this exact same pipeline
+   independently** (`buildBulkImportPlan`) — there is no weaker bulk path.
+
+3. **Validation BEFORE registration** (v1.0.91) — the whole array is validated up
+   front; the import never registers the first few tools and then discovers a later
+   invalid one.
+4. **Preview** —
+   - *Single*: name, environment, category, schema param count, description and the
+     full function source, plus any warnings, before you choose **Register tool**.
+   - *Bulk*: the **Bulk Import Tools** dialog lists every item with `✓`/`✕`, its
+     environment/param count (or its first validation error), and the totals
+     ("12 tools detected — ✓ 10 valid · ✕ 2 invalid"). Duplicate names inside the
+     file are called out explicitly ("Duplicate tool name inside import file:
+     `utility.test`").
+5. **Conflict handling** — never a silent overwrite:
+   - *Single*: if the name already exists a dialog offers **Replace existing tool**
+     (`PUT /api/tools/{name}` with the imported definition), **Import as copy** (auto
+     non-conflicting name `base.copy`, then `base.copy-2`, `base.copy-3` …) or
+     **Cancel**.
+   - *Bulk*: every valid item whose name already exists in the registry gets a
+     per-row **Replace / Import as copy / Skip** decision in the preview; the safe
+     default is **Skip**. Later duplicates within the same file default to **Skip**
+     or **Import as copy**. Conflict resolution happens BEFORE any registration.
+6. **Registration** via the existing endpoints: `POST /api/tools/js` for
    `js-function`/`nodejs`, `POST /api/tools/register` for `dynamic`. The backend
    re-validates everything (zod + function-source syntax via the sandbox compiler) and
    surfaces `ALREADY_EXISTS` honestly if a race slipped past the conflict check.
    `autoExecute` (v1.0.6) round-trips: imported tools **without** the field default to
-   approval-required without invalidating anything else.
-6. The imported tool appears in the registry and is fully editable in the Tool IDE
-   (its function loads into the editor like any other function tool — a `nodejs` tool
-   opens with the Node.js environment, IntelliSense and References already wired).
+   approval-required without invalidating anything else. Invalid items are **never
+   registered** — the bulk confirmation button imports only the valid items
+   ("Import 10 valid tools"), so a file with 10 valid + 2 invalid entries imports the
+   10 and skips the 2 explicitly.
+7. **Progress** (v1.0.91) — a bulk import registers one tool at a time with a live
+   progress bar (`7 / 10`) and a per-item running status list; the UI never freezes.
+8. **Summary** (v1.0.91) — the run ends with **Import complete — Imported: 8 ·
+   Skipped: 1 · Failed: 1** plus per-item detail (imported names, skipped names with
+   the conflict/duplicate reason, failed names with the registry error).
+
+Imported tools appear in the registry and are fully editable in the Tool IDE (a
+function loads into the editor like any other function tool — a `nodejs` tool opens
+with the Node.js environment, IntelliSense and References already wired).
 
 ## Tool search & filter (v1.0.7)
 

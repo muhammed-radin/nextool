@@ -23,6 +23,8 @@ core), `tests/nextool-v103.test.ts` (v1.0.3 additions), `tests/nextool-v104.test
 `tests/nextool-v106.test.ts` (v1.0.6 additions — 53 tests) and
 `tests/nextool-v107.test.ts` (v1.0.7 additions — 41 tests).
 `tests/nextool-v108.test.ts` (v1.0.8 additions — 47 tests).
+`tests/nextool-v109.test.ts` (v1.0.9 additions — 19 tests).
+`tests/nextool-v1091.test.ts` (v1.0.91 additions — 30 tests).
 
 | Area | What is verified |
 | --- | --- |
@@ -65,6 +67,9 @@ core), `tests/nextool-v103.test.ts` (v1.0.3 additions), `tests/nextool-v104.test
 | **v1.0.8 URL imports** | js-function + nodejs `await import('https://…')` (stubbed fetch): default + named + multiple exports; blocked protocol rejected in both environments; response size capped by `network.maxResponseBytes`; requests counted in the per-execution accounting; a blocked policy never bypassed through the module cache (§2.6); URL modules cannot reach host fs/process (§2.4); integration against real `unpkg.com` (skips offline) |
 | **v1.0.8 virtual child_process** | ALL v1.0.6 commands preserved; new commands (cut/tr/sed/awk/tee/find/tree/du/df/which/whoami/uname/realpath/readlink/yes/clear); `cd` persists per-execution and cannot escape the VFS; host/dangerous commands blocked (127/126); `node` executes VFS programs inside the sandbox (fs→VFS, host fs blocked, execSync sync + honest async note); `npm init/install/ls` installs REAL (stubbed-registry) packages into VFS node_modules with host untouched; lifecycle scripts NOT auto-run (§3.7) but runnable explicitly; **§21 MERN workflow**: mkdir → cd → npm init → write src → npm install → node require('pkg') — all inside the VFS, host unchanged |
 | **v1.0.8 limits flow** | `DEFAULT_SETTINGS` derive from central limits; settings/task/function-source schema bounds follow the metadata; js-runner getters (`maxFunctionSourceChars`/`syncTimeoutMs`/`maxResultBytes`/`maxLogLines`) are live; execution timeout precedence still holds with the live ceiling; **§5.4** — a lowered `maxFileBytes` preserves pre-existing larger files while new violating writes fail clearly |
+| **v1.0.91 fetch self-origin** | `parsePolicyUrl("/api/tools/test")` resolves against the application origin (`getSelfOrigin`, `NEXTOOL_SELF_ORIGIN` override); `isSelfRelativePath` rejects `//host`; ABSOLUTE loopback/private URLs stay `HOST_BLOCKED` (SSRF guard untouched — even the app origin addressed absolutely); `selfOriginAccess: false` → honest `INVALID_URL`; `parseRedirectUrl` keeps the exemption for relative locations on self-origin requests, resolves relative locations on external hosts and blocks absolute loopback hops; `policyFetch` dispatches a relative POST with `Content-Type` + JSON body as POST (never rewritten to GET) while external `https://` requests keep their method/headers/body; **REAL loopback**: a js-function tool whose source `fetch("/api/tools/test", { method: "POST", … })` runs against a loopback server → HTTP 200, POST + JSON content-type observed server-side |
+| **v1.0.91 POST /api/tools/test route** | route-level tests import the restored handler: test-source mode returns the documented envelope (`mode/status/result/logs`); registered tool runs by name (`mode: "registered"`); unknown name → 404 `NOT_FOUND` (not 405); both/neither name+functionSource → 400 `INVALID_PARAMS`; a sandboxed source POSTing to the relative endpoint inside the route gets `status: 200` |
+| **v1.0.91 bulk import** | `parseToolsImport`: object → `single`, array → `bulk`, `[]` → honest `bulk-empty`, invalid JSON → clear `Invalid JSON file` error, `{tools:[…]}` bundle still rejected; legacy `parseToolImport` keeps its single-object contract; `buildBulkImportPlan` validates EVERY item through the same `validateImportedTool` pipeline (mixed validity → per-item reasons; non-object garbage never valid), detects duplicate names INSIDE the file (§2.9) and conflicts with existing registry names (§2.8); **export-all round trip** — `exportToolsJson` → JSON → parse → all items valid, names/source/metadata preserved; single-object import with metadata/autoExecute/timeoutMs unchanged |
 
 The `tests/` directory also contains shell scripts that verify the **sandbox
 infrastructure** (fake-`bun` harness around `db:push`, python-runtime
@@ -266,6 +271,25 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Cleanup (v1.0.7): Settings → Maintenance → Analyze shows protected/orphaned
   resources without deleting; Clean up removes only orphans; running it a second time
   removes nothing (idempotent).
+- Tool IDE test (v1.0.91): click **Test** on a registered tool and run a Tool IDE
+  test on unsaved source — both return the execution envelope with HTTP 200 (the
+  v1.0.91 route restoration removed the `HTTP 405` fallthrough).
+- In-sandbox self-call (v1.0.91): a js-function tool that does
+  `fetch("/api/tools/test", { method: "POST", headers: { "Content-Type":
+  "application/json" }, body: JSON.stringify({ functionSource: "…", params: {} }) })`
+  returns HTTP 200 with the test envelope; the same tool using an ABSOLUTE
+  `http://127.0.0.1:3000/…` URL still fails with `HOST_BLOCKED`.
+- Single import (v1.0.91): a single-tool JSON object imports exactly as v1.0.4 —
+  preview → (conflict dialog when the name exists) → Register.
+- Bulk import (v1.0.91): import an *Export all tools* array — the Bulk Import Tools
+  preview lists every item with ✓/✕; tools that already exist show
+  Replace/Import-as-copy/Skip per row (default Skip — never a silent overwrite);
+  confirming runs with a live progress bar and ends in the
+  Imported/Skipped/Failed summary; all imported tools appear in the registry and
+  re-export identically (round trip).
+- Empty/invalid bulk files (v1.0.91): `[]` shows "No tools found in this JSON file."
+  and registers nothing; a malformed file shows "Invalid JSON file — …" and
+  registers nothing.
 
 ## Known gaps (by design)
 

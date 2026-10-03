@@ -49,17 +49,19 @@ by the SQLite `VirtualFile` table — **never** the host fs:
 
 One networking layer — `policyFetch` (`tools/sandbox-net.ts`) — serves `fetch`,
 `XMLHttpRequest` and the virtual `http`/`https` modules in both environments. The
-policy (`NETWORK_POLICY`):
+policy (`getNetworkPolicy()`) is resolved LIVE from the central
+`config/configuration-limits.json` (shipped values):
 
-| Restriction | Value | Error code |
+| Restriction | Shipped value (live from the central limits) | Error code |
 | --- | --- | --- |
 | Protocol | `http:` / `https:` only | `PROTOCOL_BLOCKED` |
 | Host | localhost (+`.localhost`, `.local`, `.internal`), loopback, link-local (incl. `169.254.x.x` cloud metadata), private ranges (10/8, 127/8, 172.16/12, 192.168/16, CGNAT 100.64/10), multicast/reserved, `host.docker.internal` | `HOST_BLOCKED` |
-| Request timeout | 10 000 ms | `TIMEOUT` |
-| Response size | 1 048 576 bytes (1 MiB) — body read incrementally and aborted past the cap | `RESPONSE_TOO_LARGE` |
-| Redirects | max 3 — every hop re-validated against protocol + host policy | `REDIRECT_LIMIT` |
-| Requests per execution | max 10 | `REQUEST_LIMIT` |
-| URL imports | disabled (`urlImportsEnabled: false`) — the single flag that would allow `import('https://…')`, capped at 256 KiB when enabled | `URL_IMPORTS_DISABLED` |
+| Request timeout | `network.timeoutMs` — default 60 000 ms (the effective per-request timeout follows the owning tool's execution timeout; Settings-configurable since v1.0.9) | `NETWORK_TIMEOUT` |
+| Response size | `network.maxResponseBytes` — 5 MiB, body read incrementally and aborted past the cap | `RESPONSE_TOO_LARGE` |
+| Redirects | `network.maxRedirects` — max 56, every hop re-validated against protocol + host policy | `REDIRECT_LIMIT` |
+| Requests per execution | `network.maxRequestsPerExecution` — max 56 | `REQUEST_LIMIT` |
+| URL imports | enabled since v1.0.8 (`allowUrlImports: true`), capped at `network.maxResponseBytes` | `URL_IMPORTS_DISABLED` when off |
+| **Self-origin access (v1.0.91)** | path-relative fetch URLs (`/api/…`) resolve against the application origin (`network.selfOriginAccess: true`) and are exempt from the host block ONLY — all other limits still apply; ABSOLUTE URLs (even to the app origin itself) keep the full host policy | `INVALID_URL` when disabled |
 
 There is no second fetch path: the runtime's own code paths do not bypass
 `policyFetch`, and raw sockets (`net`, `dgram`) are blocked modules.
@@ -119,9 +121,17 @@ resolve; every Node specifier is rejected.
 
 - Static allowlist + virtual modules + VFS files only (`.js`, `.mjs`, `.json`); VFS
   modules run CommonJS plus a conservative ESM transform — nothing else executes.
-- URL imports are disabled by default (see the network table).
+- URL imports are enabled by default since v1.0.8 (`allowUrlImports`) and pass the full
+  network policy (see the network table).
 - There are no approved external packages today — unknown package specifiers are
   honestly reported as unavailable.
+- **Self-origin access (v1.0.91)**: tool functions can reach the application's own
+  HTTP surface ONLY via path-relative URLs (`/api/…`) resolved against the application
+  origin, gated by `network.selfOriginAccess`. The exemption covers the local-host
+  block ONLY — every other network limit still applies, and absolute URLs (including
+  an absolute URL of the application origin itself) stay subject to the unchanged SSRF
+  host block, so other local services (databases, metadata endpoints, sibling ports)
+  remain unreachable.
 
 ## Tool approval & approval timeout
 

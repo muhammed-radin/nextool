@@ -339,16 +339,19 @@ Delete a user tool. Built-ins are rejected with `READ_ONLY` (403) — disable th
 instead. Response: `{ "deleted": true, "name": "…" }`. Errors: `NOT_FOUND`, `READ_ONLY`.
 
 ### POST /api/tools/test
-Controlled test execution. **RESTORED in v1.0.5** — the v1.0.2 route file was missing,
-so Tool IDE "Test Tool" requests fell through to `/api/tools/[name]` and failed with
-405; the dedicated route is again the ONLY test path (and it never mutates editor or
-registry state). Request: exactly one of
+Controlled test execution. **RESTORED again in v1.0.91** — the route file went missing
+once more after the v1.0.8 backup restore, so Tool IDE "Test Tool" requests fell
+through to `/api/tools/[name]` (GET/PUT/DELETE only) and failed with HTTP 405
+(`REQUEST_FAILED: Invalid response from /api/tools/test (HTTP 405)`); the v1.0.5 fix
+had documented the same regression. The dedicated route is the ONLY test path (and it
+never mutates editor or registry state). Request: exactly one of
 `{ name, params? }` (registered tool — runs its real handler pipeline; js/nodejs tools
 run their saved source with `mode: "test"`), `{ functionSource, params?, environment? }
 (unsaved Tool IDE source, sandboxed — v1.0.5: pass `"environment": "nodejs"` to run it
 in the Node.js sandbox; default `js-function`), optional `timeoutMs` (v1.0.7 —
 effective execution timeout for the run, 1000–3600000; registered-tool mode uses the
-tool's own configured timeout by default). Response:
+tool's own configured timeout by default) and optional `networkTimeoutMs` (v1.0.9 —
+Network Policy request timeout for the run). Response:
 `{ mode: "test-source" | "registered", environment, status: "completed" | "failed" |
 "timeout", durationMs, result, error, params, logs: string[] }` — logs are captured
 for sandbox runs. Since v1.0.6, nodejs test runs execute against an **ephemeral scratch
@@ -356,7 +359,10 @@ VFS workspace** (wiped after the run), so `require("fs")` resolves to the Virtua
 files written during a test do not persist. Interactive functions are honest in test
 mode: `alert` resolves immediately, `prompt` returns its default (or `null`); tests
 never hang (see [Tool Development](../tools/tool-development.md)). Tests never mutate
-task state. Errors: `NOT_FOUND` (404), `INVALID_PARAMS` (bad environment hint),
+task state. Since v1.0.91, a tool function executing INSIDE the sandbox can call this
+endpoint itself: `fetch("/api/tools/test", { method: "POST" })` resolves the relative
+URL against the application origin (see [Tool Development](../tools/tool-development.md)).
+Errors: `NOT_FOUND` (404), `INVALID_PARAMS` (bad environment hint),
 `TEST_FAILED` (500).
 
 ```bash

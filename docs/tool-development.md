@@ -99,23 +99,58 @@ implementation of each — the same code serves both sandboxes (`sandbox-net.ts`
 
 `await fetch(url, init?)` is available in both environments. It is a real HTTP client,
 but every request passes through `policyFetch` (`src/lib/nexool/tools/sandbox-net.ts`),
-the single networking layer of the runtime:
+the single networking layer of the runtime. Every numeric limit below is resolved LIVE
+from the central `network.*` limits (config/configuration-limits.json — shipped:
+60 s timeout, 5 MiB response, 56 redirects, 56 requests per execution):
 
-| Policy | Value | Behavior when violated |
+| Policy | Value (live from the central limits) | Behavior when violated |
 | --- | --- | --- |
 | Protocols | `http` and `https` only | `PROTOCOL_BLOCKED` |
 | Hosts | localhost, link-local, private ranges (10/8, 127/8, 172.16/12, 192.168/16, 169.254/16, CGNAT), cloud metadata hosts are denied | `HOST_BLOCKED` |
-| Request timeout | 10 s | `TIMEOUT` |
-| Response size | 1 MiB cap (body read incrementally, aborted past the cap) | `RESPONSE_TOO_LARGE` |
-| Redirects | max 3 — **every hop is re-validated** against the same policy | `REDIRECT_LIMIT` |
-| Request count | max 10 per tool execution | `REQUEST_LIMIT` |
+| **Self-origin (v1.0.91)** | path-relative URLs (`/api/…`) resolve against the NexTool application origin and are exempt from the host block ONLY — see below | `INVALID_URL` when `network.selfOriginAccess` is `false` |
+| Request timeout | `network.timeoutMs` (default 60 s; effective value follows the owning tool's execution timeout, v1.0.9 Settings-configurable; per-request `timeoutMs` override allowed) | `NETWORK_TIMEOUT` (reports the CONFIGURED timeout) |
+| Response size | `network.maxResponseBytes` (default 5 MiB; body read incrementally, aborted past the cap) | `RESPONSE_TOO_LARGE` |
+| Redirects | `network.maxRedirects` (default 56) — **every hop is re-validated** against the same policy | `REDIRECT_LIMIT` |
+| Request count | `network.maxRequestsPerExecution` (default 56) per tool execution | `REQUEST_LIMIT` |
 
 Rejections throw a `NetworkPolicyError` whose stable `code` (`INVALID_URL`,
 `PROTOCOL_BLOCKED`, `HOST_BLOCKED`, `REQUEST_LIMIT`, `RESPONSE_TOO_LARGE`,
-`REDIRECT_LIMIT`, `TIMEOUT`, `NETWORK_ERROR`) is surfaced to tool authors — a tool can
-catch and branch on it. `GET/POST/PUT/PATCH/DELETE`, request `headers`/`body`, and the
-`Response` surface (`status`, `statusText`, `.json()`, `.text()`) work as usual. See the
-[network policy section](#network-policy-v106) below.
+`REDIRECT_LIMIT`, `NETWORK_TIMEOUT`, `NETWORK_ERROR`) is surfaced to tool authors — a
+tool can catch and branch on it. `GET/POST/PUT/PATCH/DELETE`, request `headers`/`body`,
+and the `Response` surface (`status`, `statusText`, `.json()`, `.text()`) work as
+usual. See the [network policy section](#network-policy-v106) below.
+
+#### Self-origin requests (v1.0.91) — calling the NexTool app itself
+
+A tool function can call the NexTool application's own HTTP surface — for example the
+tool-test endpoint — using a **path-relative URL**:
+
+```js
+const response = await fetch("/api/tools/test", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ functionSource: "…", params: {} }),
+});
+if (!response.ok) throw new Error(`HTTP ${response.status}`);
+const payload = await response.json();
+```
+
+How it works, and what stays restricted:
+
+- `"/api/tools/test"` is resolved against the **application origin**
+  (`http://127.0.0.1:$PORT`; `NEXTOOL_SELF_ORIGIN` overrides it for tests/proxies).
+- Requests to that exact origin skip ONLY the local-host block — the timeout,
+  response-size, redirect and per-execution request limits ALL still apply.
+- **Absolute URLs never get the exemption**: `fetch("http://127.0.0.1:3000/…")`,
+  `fetch("http://localhost/…")` and every other local/private host stay
+  `HOST_BLOCKED` exactly as before v1.0.91 — the SSRF guard is untouched.
+- A relative redirect `Location` on a self-origin request keeps the exemption; an
+  absolute redirect target is validated like any absolute URL.
+- The feature is policy-gated by the central `network.selfOriginAccess` flag
+  (default `true`); setting it to `false` makes relative fetch URLs fail with a
+  clear `INVALID_URL` again.
+- The virtual `http`/`https` modules and `XMLHttpRequest` resolve relative URLs
+  through the same layer.
 
 ### XMLHttpRequest — a real implementation
 

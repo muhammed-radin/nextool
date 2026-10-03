@@ -79,6 +79,8 @@ export interface ResolvedRuntimeLimits {
     maxRedirects: number;
     maxRequestsPerExecution: number;
     allowUrlImports: boolean;
+    /** v1.0.91 — relative fetch URLs resolve against the application origin. */
+    selfOriginAccess: boolean;
   };
   vfs: {
     maxFileBytes: number;
@@ -239,6 +241,7 @@ export function getResolvedLimits(): ResolvedRuntimeLimits {
       maxRedirects: num('network', 'maxRedirects'),
       maxRequestsPerExecution: num('network', 'maxRequestsPerExecution'),
       allowUrlImports: bool('network', 'allowUrlImports'),
+      selfOriginAccess: bool('network', 'selfOriginAccess'),
     },
     vfs: {
       maxFileBytes: num('vfs', 'maxFileBytes'),

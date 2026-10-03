@@ -103,6 +103,8 @@ export async function GET() {
       maxRedirects: network.maxRedirects,
       maxRequestsPerExecution: network.maxRequestsPerExecution,
       urlImportsEnabled: network.urlImportsEnabled,
+      // v1.0.91 — relative fetch URLs resolve against the application origin.
+      selfOriginAccess: network.selfOriginAccess,
     },
     // v1.0.8 §5 — Virtual FS workspace + live limits (2 MiB / 700 MiB / 4000 / 56 shipped)
     vfs: {

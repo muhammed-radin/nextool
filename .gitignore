@@ -47,8 +47,12 @@ local-*
 *.log
 dev.log
 dev.out.log
-test
-prompt
+# v1.0.91 FIX: these were bare "test"/"prompt" patterns which matched ANY path
+# named test — including src/app/api/tools/test/route.ts. That is exactly why
+# the POST /api/tools/test route silently vanished from git and every backup
+# (the recurring HTTP 405 root cause). Anchored to the repo root instead.
+/test/
+/prompt/
 
 server.log
 # Skills directory

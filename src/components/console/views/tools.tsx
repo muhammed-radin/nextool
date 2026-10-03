@@ -12,6 +12,17 @@
  *  - Import a tool JSON: parse → validate (structure/name/schema/function) →
  *    preview → conflict handling (replace / import as copy / cancel) →
  *    register through the REAL registry endpoints → editable in the Tool IDE.
+ *
+ * v1.0.91 — bulk import + fetch/test fixes:
+ *  - The importer accepts a SINGLE tool object AND a JSON ARRAY of tools
+ *    (the exact shape of "Export all tools (JSON)" — full round trip).
+ *  - Every array item is validated with the SAME pipeline as a single import
+ *    BEFORE anything registers; the preview shows ✓/✕ per item and invalid
+ *    entries can never become registered tools.
+ *  - Conflicts (existing registry tools + duplicate names INSIDE the file)
+ *    are resolved explicitly: Replace / Import as copy / Skip.
+ *  - Large imports run with progress feedback and end in a detailed summary
+ *    (Imported / Skipped / Failed).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -36,8 +47,8 @@ import {
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import type { ToolTestResult } from '@/lib/nexool/client';
 import {
-  exportToolJson, exportToolsJson, parseToolImport, proposeCopyName, toolExportFilename, validateImportedTool,
-  type PortableTool,
+  exportToolJson, exportToolsJson, parseToolsImport, proposeCopyName, toolExportFilename, validateImportedTool, buildBulkImportPlan,
+  type BulkConflictResolution, type BulkImportPlan, type PortableTool,
 } from '@/lib/nexool/tool-portable';
 import { APP_VERSION } from '@/lib/nexool/version';
 import { filterTools } from '@/lib/nexool/tool-search';
@@ -241,6 +252,20 @@ export default function ToolsView({
   const [importConflict, setImportConflict] = useState<{ tool: PortableTool; existing: ToolEntry } | null>(null);
   /** Import rejected — readable validation errors. */
   const [importErrors, setImportErrors] = useState<{ errors: string[]; warnings: string[] } | null>(null);
+  /** v1.0.91 §2.2 — honest informational notice (e.g. empty array file). */
+  const [importNotice, setImportNotice] = useState<{ title: string; message: string } | null>(null);
+
+  // ---- v1.0.91 §2.5-§2.12: bulk import (preview → resolve → progress → summary) ----
+  type BulkImportPhase = 'preview' | 'importing' | 'summary';
+  interface BulkImportResultRow { name: string; status: 'imported' | 'skipped' | 'failed'; note?: string }
+  const [bulkImport, setBulkImport] = useState<{
+    phase: BulkImportPhase;
+    plan: BulkImportPlan;
+    /** Explicit per-item conflict resolutions (item index → decision). */
+    resolutions: Record<number, BulkConflictResolution>;
+    progress: { current: number; total: number };
+    results: BulkImportResultRow[];
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -380,7 +405,7 @@ export default function ToolsView({
     toast.success('Tools exported', { description: `${tools.length} tool definition(s) exported.` });
   };
 
-  // ---------- v1.0.4 §13-16: import ----------
+  // ---------- v1.0.4 §13-16 + v1.0.91: import (single object OR array) ----------
 
   const onImportFile = async (file: File | undefined) => {
     if (!file) return;
@@ -391,53 +416,82 @@ export default function ToolsView({
       toast.error('Import failed', { description: 'The file could not be read.' });
       return;
     }
-    const parsed = parseToolImport(text);
+    // v1.0.91 — ONE parser for both shapes: object → single import (unchanged
+    // behavior), array → bulk import, [] → honest empty notice, parse failure
+    // → clear error with NOTHING imported.
+    const parsed = parseToolsImport(text);
     if (!parsed.ok) {
       setImportErrors({ errors: [parsed.error], warnings: [] });
       return;
     }
-    const result = validateImportedTool(parsed.value);
-    if (!result.ok || !result.tool) {
-      setImportErrors({ errors: result.errors, warnings: result.warnings });
+    if (parsed.kind === 'bulk-empty') {
+      setImportNotice({ title: 'No tools found in this JSON file.', message: 'The file contains an empty JSON array — there is nothing to import.' });
       return;
     }
-    const existing = (tools ?? []).find((t) => t.name === result.tool!.name);
-    if (existing) {
-      setImportConflict({ tool: result.tool, existing });
+    if (parsed.kind === 'single') {
+      const result = validateImportedTool(parsed.value);
+      if (!result.ok || !result.tool) {
+        setImportErrors({ errors: result.errors, warnings: result.warnings });
+        return;
+      }
+      const existing = (tools ?? []).find((t) => t.name === result.tool!.name);
+      if (existing) {
+        setImportConflict({ tool: result.tool, existing });
+      } else {
+        setImportPreview({ tool: result.tool, warnings: result.warnings });
+      }
+      return;
+    }
+    // Bulk — validate EVERY item up front (same pipeline as single import).
+    // Nothing is registered here; the user confirms after the preview.
+    const plan = buildBulkImportPlan(parsed.tools, (tools ?? []).map((t) => t.name));
+    setBulkImport({ phase: 'preview', plan, resolutions: {}, progress: { current: 0, total: 0 }, results: [] });
+  };
+
+  /**
+   * v1.0.91 — the shared registration call for a validated portable tool:
+   * function tools (js-function AND nodejs) go through POST /api/tools/js,
+   * dynamic handler tools through POST /api/tools/register — the REAL
+   * registry endpoints; there is no second storage system.
+   * v1.0.91 fidelity fix: metadata / autoExecute / timeoutMs now round-trip.
+   */
+  const registerPortableTool = async (tool: PortableTool) => {
+    if (tool.environment === 'js-function' || tool.environment === 'nodejs') {
+      await registerJsTool({
+        name: tool.name,
+        description: tool.description,
+        purpose: tool.purpose,
+        category: tool.category,
+        toolVersion: tool.toolVersion,
+        environment: tool.environment,
+        schema: tool.schema,
+        functionSource: tool.functionSource ?? '',
+        metadata: tool.metadata,
+        autoExecute: tool.autoExecute,
+        timeoutMs: tool.timeoutMs,
+        enabled: tool.enabled ?? true,
+      });
     } else {
-      setImportPreview({ tool: result.tool, warnings: result.warnings });
+      await registerTool({
+        definition: {
+          name: tool.name,
+          description: tool.description,
+          category: tool.category,
+          ...(tool.purpose ? { purpose: tool.purpose } : {}),
+          environment: 'dynamic',
+          schema: tool.schema,
+        },
+        handlerKind: tool.handlerKind as 'echo' | 'delay' | 'http_get' | 'uuid',
+        ...(tool.handlerConfig ? { handlerConfig: tool.handlerConfig } : {}),
+      });
     }
   };
 
-  /** §15 — register a validated import through the REAL registry endpoints. */
+  /** §15 — register a validated single import through the REAL registry endpoints. */
   const registerImported = async (tool: PortableTool, successDesc: string) => {
     setImportBusy(true);
     try {
-      if (tool.environment === 'js-function') {
-        await registerJsTool({
-          name: tool.name,
-          description: tool.description,
-          purpose: tool.purpose,
-          category: tool.category,
-          toolVersion: tool.toolVersion,
-          schema: tool.schema,
-          functionSource: tool.functionSource ?? '',
-          enabled: tool.enabled ?? true,
-        });
-      } else {
-        await registerTool({
-          definition: {
-            name: tool.name,
-            description: tool.description,
-            category: tool.category,
-            ...(tool.purpose ? { purpose: tool.purpose } : {}),
-            environment: 'dynamic',
-            schema: tool.schema,
-          },
-          handlerKind: tool.handlerKind as 'echo' | 'delay' | 'http_get' | 'uuid',
-          ...(tool.handlerConfig ? { handlerConfig: tool.handlerConfig } : {}),
-        });
-      }
+      await registerPortableTool(tool);
       toast.success('Tool imported', { description: successDesc });
       setImportPreview(null);
       setImportConflict(null);
@@ -454,13 +508,17 @@ export default function ToolsView({
   const replaceImported = async (conflict: { tool: PortableTool; existing: ToolEntry }) => {
     setImportBusy(true);
     try {
+      const isFn = conflict.tool.environment === 'js-function' || conflict.tool.environment === 'nodejs';
       await updateTool(conflict.existing.name, {
         description: conflict.tool.description,
         purpose: conflict.tool.purpose,
         category: conflict.tool.category,
         toolVersion: conflict.tool.toolVersion,
         schema: conflict.tool.schema,
-        functionSource: conflict.tool.environment === 'js-function' ? conflict.tool.functionSource : undefined,
+        functionSource: isFn ? conflict.tool.functionSource : undefined,
+        metadata: conflict.tool.metadata,
+        autoExecute: conflict.tool.autoExecute,
+        timeoutMs: conflict.tool.timeoutMs,
         enabled: conflict.tool.enabled ?? true,
       });
       toast.success('Tool replaced', { description: `${conflict.existing.name} now uses the imported definition.` });
@@ -477,6 +535,77 @@ export default function ToolsView({
   const importAsCopy = async (conflict: { tool: PortableTool; existing: ToolEntry }) => {
     const copyName = proposeCopyName(new Set((tools ?? []).map((t) => t.name)), conflict.tool.name);
     await registerImported({ ...conflict.tool, name: copyName }, `${copyName} registered as a copy of ${conflict.existing.name}.`);
+  };
+
+  // ---------- v1.0.91 §2.5-§2.12: bulk import execution ----------
+
+  /** The row's conflict decision — explicit choice, else the safe default. */
+  const bulkDecision = (plan: BulkImportPlan, resolutions: Record<number, BulkConflictResolution>, itemIndex: number): BulkConflictResolution | 'register' => {
+    const chosen = resolutions[itemIndex];
+    if (chosen) return chosen;
+    const dup = plan.inFileDuplicates.find((d) => d.indices.includes(itemIndex));
+    if (dup && dup.indices[0] !== itemIndex) return 'skip'; // later in-file duplicate
+    if (plan.registryConflicts.some((c) => c.index === itemIndex)) return 'skip'; // never silently overwrite
+    return 'register';
+  };
+
+  const startBulkImport = async () => {
+    if (!bulkImport || bulkImport.phase !== 'preview') return;
+    const { plan, resolutions } = bulkImport;
+    const queue = plan.items.filter((it) => it.valid);
+    if (queue.length === 0) return;
+    setBulkImport((s) => (s ? { ...s, phase: 'importing', progress: { current: 0, total: queue.length }, results: [] } : s));
+    // Names taken by the live registry — grows as copies pick fresh names.
+    const occupied = new Set((tools ?? []).map((t) => t.name));
+    const results: BulkImportResultRow[] = [];
+    let current = 0;
+    for (const item of queue) {
+      current += 1;
+      const tool = item.tool!;
+      const decision = bulkDecision(plan, resolutions, item.index);
+      const dup = plan.inFileDuplicates.find((d) => d.indices.includes(item.index));
+      const isLaterDup = dup !== undefined && dup.indices[0] !== item.index;
+      const regConflict = plan.registryConflicts.some((c) => c.index === item.index);
+      try {
+        if (decision === 'skip') {
+          results.push({
+            name: tool.name,
+            status: 'skipped',
+            note: isLaterDup ? 'duplicate name inside the import file' : regConflict ? 'conflict skipped' : 'skipped',
+          });
+        } else if (decision === 'replace') {
+          const isFn = tool.environment === 'js-function' || tool.environment === 'nodejs';
+          await updateTool(tool.name, {
+            description: tool.description,
+            purpose: tool.purpose,
+            category: tool.category,
+            toolVersion: tool.toolVersion,
+            schema: tool.schema,
+            functionSource: isFn ? tool.functionSource : undefined,
+            metadata: tool.metadata,
+            autoExecute: tool.autoExecute,
+            timeoutMs: tool.timeoutMs,
+            enabled: tool.enabled ?? true,
+          });
+          results.push({ name: tool.name, status: 'imported', note: 'replaced the existing tool' });
+        } else if (decision === 'copy') {
+          const copyName = proposeCopyName(occupied, tool.name);
+          occupied.add(copyName);
+          await registerPortableTool({ ...tool, name: copyName });
+          results.push({ name: copyName, status: 'imported', note: `imported as a copy of ${tool.name}` });
+        } else {
+          occupied.add(tool.name);
+          await registerPortableTool(tool);
+          results.push({ name: tool.name, status: 'imported' });
+        }
+      } catch (e) {
+        results.push({ name: tool.name, status: 'failed', note: e instanceof ApiClientError ? e.message : 'Registration failed' });
+      }
+      // Update between registrations — the UI never freezes during a large import.
+      setBulkImport((s) => (s ? { ...s, progress: { current, total: queue.length }, results: [...results] } : s));
+    }
+    setBulkImport((s) => (s ? { ...s, phase: 'summary' } : s));
+    void load();
   };
 
   const inputCls = 'min-h-11 border-white/[0.09] bg-white/[0.04] text-sm';
@@ -507,9 +636,9 @@ export default function ToolsView({
                 <DropdownMenuItem onClick={() => setRegOpen(true)}>
                   <FilePlus2 className="size-3.5" aria-hidden /> Register handler tool…
                 </DropdownMenuItem>
-                {/* v1.0.4 §13 — import a tool JSON file */}
+                {/* v1.0.4 §13 + v1.0.91 — import ONE tool object or an ARRAY of tools */}
                 <DropdownMenuItem onClick={() => importFileRef.current?.click()}>
-                  <FileUp className="size-3.5" aria-hidden /> Import tool (JSON)…
+                  <FileUp className="size-3.5" aria-hidden /> Import tools (JSON)…
                 </DropdownMenuItem>
                 {/* v1.0.4 §11 — export all tools */}
                 <DropdownMenuItem onClick={exportAll} disabled={!tools || tools.length === 0}>
@@ -593,7 +722,8 @@ export default function ToolsView({
         </div>
       )}
 
-      {/* v1.0.4 §11/§13 — import file picker (hidden; triggered from the actions menu) */}
+      {/* v1.0.4 §11/§13 — import file picker (hidden; triggered from the actions menu).
+          v1.0.91: accepts a single tool object OR a JSON array of tools. */}
       <input
         ref={importFileRef}
         type="file"
@@ -603,8 +733,9 @@ export default function ToolsView({
           void onImportFile(e.target.files?.[0]);
           e.target.value = '';
         }}
-        aria-label="Import tool JSON file"
+        aria-label="Import tool or tools JSON file"
       />
+      <p className="sr-only">Import one tool or a JSON array of tools.</p>
 
       {/* Handler-tool registration dialog (dynamic handler kinds) */}
       <Dialog open={regOpen} onOpenChange={setRegOpen}>
@@ -734,7 +865,7 @@ export default function ToolsView({
         <DialogContent className="glass-strong sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Import tool</DialogTitle>
-            <DialogDescription>Validated against the tool schema. Review before registering.</DialogDescription>
+            <DialogDescription>Validated against the tool schema. Review before registering. Tip: the importer also accepts a JSON array of tools for bulk import.</DialogDescription>
           </DialogHeader>
           {importPreview ? (
             <div className="nextool-scroll max-h-[60vh] space-y-3 overflow-y-auto pr-1">
@@ -820,6 +951,178 @@ export default function ToolsView({
           <DialogFooter>
             <Button variant="outline" className="min-h-11" onClick={() => setImportErrors(null)}>Close</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* v1.0.91 §2.2 — honest informational notice (e.g. an empty JSON array) */}
+      <Dialog open={importNotice !== null} onOpenChange={(open) => !open && setImportNotice(null)}>
+        <DialogContent className="glass-strong sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-300">{importNotice?.title}</DialogTitle>
+            <DialogDescription>{importNotice?.message} Nothing was registered and no import API call was made.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" className="min-h-11" onClick={() => setImportNotice(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* v1.0.91 §2.5-§2.12 — bulk import: preview → resolve conflicts →
+          progress → summary. One dialog, three phases; closing is blocked
+          while the import loop is running so progress is never lost. */}
+      <Dialog
+        open={bulkImport !== null}
+        onOpenChange={(open) => {
+          if (!open && bulkImport?.phase !== 'importing') setBulkImport(null);
+        }}
+      >
+        <DialogContent className="glass-strong sm:max-w-xl">
+          {bulkImport?.phase === 'preview' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Bulk Import Tools</DialogTitle>
+                <DialogDescription>
+                  <span data-testid="bulk-detect">{bulkImport.plan.items.length} tools detected</span>
+                  {' — '}<span className="text-emerald-300">✓ {bulkImport.plan.validCount} valid</span>
+                  {bulkImport.plan.invalidCount > 0 ? <> · <span className="text-rose-300">✕ {bulkImport.plan.invalidCount} invalid</span></> : null}
+                  . Every item was validated with the single-import pipeline; invalid tools are never registered and existing tools are never silently overwritten.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="nextool-scroll max-h-[50vh] space-y-1.5 overflow-y-auto pr-1" data-testid="bulk-preview-list">
+                {bulkImport.plan.inFileDuplicates.map((d) => (
+                  <p key={`dup-${d.name}`} role="alert" className="rounded-md border border-amber-400/30 bg-amber-400/[0.06] px-2.5 py-1.5 text-[11px] text-amber-200/90">
+                    ⚠ Duplicate tool name inside import file: <span className="font-mono">{d.name}</span> (items {d.indices.join(', ')}) — later occurrences default to Skip or import as a copy.
+                  </p>
+                ))}
+                {bulkImport.plan.items.map((item) => {
+                  const dup = bulkImport.plan.inFileDuplicates.find((d) => d.indices.includes(item.index));
+                  const isLaterDup = dup !== undefined && dup.indices[0] !== item.index;
+                  const regConflict = bulkImport.plan.registryConflicts.some((c) => c.index === item.index);
+                  const needsChoice = item.valid && (isLaterDup || regConflict);
+                  const decision = bulkDecision(bulkImport.plan, bulkImport.resolutions, item.index);
+                  return (
+                    <div key={item.index} className="rounded-md border border-white/[0.07] bg-white/[0.03] p-2.5">
+                      <div className="flex items-start gap-2">
+                        <span aria-hidden className={cn('mt-0.5 font-mono text-xs', item.valid ? 'text-emerald-300' : 'text-rose-300')}>{item.valid ? '✓' : '✕'}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words font-mono text-xs text-foreground" title={item.name}>
+                            <span className="text-muted-foreground">#{item.index}</span> {item.name}
+                            {regConflict ? <span className="ml-1.5 rounded border border-amber-400/30 px-1 text-[9px] uppercase text-amber-300">exists</span> : null}
+                            {isLaterDup ? <span className="ml-1.5 rounded border border-amber-400/30 px-1 text-[9px] uppercase text-amber-300">duplicate</span> : null}
+                          </p>
+                          {!item.valid ? (
+                            <p className="mt-0.5 break-words text-[11px] text-rose-300/90">
+                              {item.errors[0]}{item.errors.length > 1 ? ` (+${item.errors.length - 1} more)` : ''}
+                            </p>
+                          ) : item.warnings.length > 0 ? (
+                            <p className="mt-0.5 break-words text-[11px] text-amber-200/80">⚠ {item.warnings[0]}</p>
+                          ) : (
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">{item.tool?.environment} · {item.tool?.schema.properties?.length ?? 0} params</p>
+                          )}
+                        </div>
+                        {needsChoice ? (
+                          <Select
+                            value={decision === 'register' ? 'skip' : decision}
+                            onValueChange={(v) => setBulkImport((s) => (s ? { ...s, resolutions: { ...s.resolutions, [item.index]: v as BulkConflictResolution } } : s))}
+                          >
+                            <SelectTrigger className="h-8 w-[136px] shrink-0 text-[11px]" aria-label={`Conflict resolution for ${item.name}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="glass-strong">
+                              {regConflict ? <SelectItem value="replace" className="text-[11px]">Replace</SelectItem> : null}
+                              <SelectItem value="copy" className="text-[11px]">Import as copy</SelectItem>
+                              <SelectItem value="skip" className="text-[11px]">Skip</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" className="min-h-11" onClick={() => setBulkImport(null)}>Cancel</Button>
+                <Button
+                  className="min-h-11 gap-2 bg-primary-gradient text-primary-foreground hover:opacity-90"
+                  disabled={bulkImport.plan.validCount === 0 || importBusy}
+                  onClick={() => void startBulkImport()}
+                >
+                  {importBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Upload className="size-4" aria-hidden />}
+                  Import {bulkImport.plan.validCount} valid tool{bulkImport.plan.validCount === 1 ? '' : 's'}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : bulkImport?.phase === 'importing' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Importing tools…</DialogTitle>
+                <DialogDescription>Registering through the real registry endpoints — one tool at a time, with live progress.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2" data-testid="bulk-progress">
+                <div className="flex items-center justify-between font-mono text-xs text-muted-foreground" aria-live="polite">
+                  <span>{bulkImport.progress.current} / {bulkImport.progress.total}</span>
+                  <span>{bulkImport.progress.total > 0 ? Math.round((bulkImport.progress.current / bulkImport.progress.total) * 100) : 0}%</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.08]">
+                  <div
+                    className="h-full rounded-full bg-primary-gradient transition-all duration-200"
+                    style={{ width: `${bulkImport.progress.total > 0 ? Math.round((bulkImport.progress.current / bulkImport.progress.total) * 100) : 0}%` }}
+                  />
+                </div>
+                <div className="nextool-scroll max-h-[40vh] space-y-1 overflow-y-auto pr-1">
+                  {bulkImport.plan.items.filter((it) => it.valid).map((item) => {
+                    const row = bulkImport.results.find((r) => r.name === item.tool?.name) ?? null;
+                    return (
+                      <p key={item.index} className="break-words font-mono text-[11px]">
+                        {row ? (
+                          row.status === 'imported' ? <span className="text-emerald-300">✓ {row.name}{row.note ? ` — ${row.note}` : ''}</span>
+                          : row.status === 'skipped' ? <span className="text-amber-200/90">• {row.name} — skipped{row.note && row.note !== 'skipped' ? ` (${row.note})` : ''}</span>
+                          : <span className="text-rose-300">✕ {row.name} — {row.note ?? 'failed'}</span>
+                        ) : (
+                          <span className="text-muted-foreground">… {item.name}</span>
+                        )}
+                      </p>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          ) : bulkImport?.phase === 'summary' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Import complete</DialogTitle>
+                <DialogDescription>
+                  Imported: {bulkImport.results.filter((r) => r.status === 'imported').length} · Skipped: {bulkImport.results.filter((r) => r.status === 'skipped').length} · Failed: {bulkImport.results.filter((r) => r.status === 'failed').length}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="nextool-scroll max-h-[50vh] space-y-3 overflow-y-auto pr-1" data-testid="bulk-summary">
+                {(['imported', 'skipped', 'failed'] as const).map((section) => {
+                  const rows = bulkImport.results.filter((r) => r.status === section);
+                  if (rows.length === 0) return null;
+                  return (
+                    <div key={section}>
+                      <p className={cn('mb-1 font-mono text-[10px] uppercase tracking-wider', section === 'imported' ? 'text-emerald-300' : section === 'skipped' ? 'text-amber-300' : 'text-rose-300')}>
+                        {section === 'imported' ? 'Imported' : section === 'skipped' ? 'Skipped' : 'Failed'} ({rows.length})
+                      </p>
+                      <ul className="space-y-1">
+                        {rows.map((r, i) => (
+                          <li key={`${r.name}-${i}`} className="break-words font-mono text-[11px] text-foreground/90">
+                            {section === 'imported' ? '✓' : section === 'skipped' ? '•' : '✕'} {r.name}{r.note ? <span className="text-muted-foreground"> — {r.note}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
+                {bulkImport.plan.invalidCount > 0 ? (
+                  <p className="break-words text-[11px] text-muted-foreground">{bulkImport.plan.invalidCount} invalid item{bulkImport.plan.invalidCount === 1 ? '' : 's'} in the file were never registered.</p>
+                ) : null}
+              </div>
+              <DialogFooter>
+                <Button variant="outline" className="min-h-11" onClick={() => setBulkImport(null)}>Close</Button>
+              </DialogFooter>
+            </>
+          ) : null}
         </DialogContent>
       </Dialog>
     </div>

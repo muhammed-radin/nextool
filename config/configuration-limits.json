@@ -56,6 +56,13 @@
       "default": true,
       "category": "network",
       "description": "Enable dynamic import() of http(s) URLs inside both tool environments (v1.0.8). Imported modules pass through the full network policy and run inside the same sandbox as the importing tool. Set false to disable URL imports without changing source code."
+    },
+    "selfOriginAccess": {
+      "type": "boolean",
+      "nullable": false,
+      "default": true,
+      "category": "network",
+      "description": "Allow tool functions to call the NexTool application itself (v1.0.91): relative fetch URLs such as /api/tools/test resolve against the application origin, and requests to that exact origin are exempt from the local-host block ONLY. Every other policy limit (protocol, timeout, response size, redirects, per-execution request count) still applies, and all other local/private hosts stay blocked."
     }
   },
   "vfs": {
