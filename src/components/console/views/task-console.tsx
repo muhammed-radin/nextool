@@ -112,6 +112,9 @@ export default function TaskConsoleView() {
 
   // v1.0.10 §18 — the Task Console's planner fields default to the GLOBAL
   // settings (Default planner + pre-plan step limit); the task may override.
+  // v1.0.11 §41 — the global auto-execution value also drives the honest
+  // "Controlled by global auto-execution setting" hint on the task switch.
+  const [globalAutoExecHint, setGlobalAutoExecHint] = useState<boolean | null>(null);
   useEffect(() => {
     let alive = true;
     getSettings()
@@ -119,6 +122,7 @@ export default function TaskConsoleView() {
         if (!alive) return;
         if (s.defaultPlannerType === 'one-by-one' || s.defaultPlannerType === 'pre-plan') setPlannerType(s.defaultPlannerType);
         if (Number.isFinite(s.prePlanMaxSteps) && s.prePlanMaxSteps > 0) setPrePlanMaxSteps(Math.floor(s.prePlanMaxSteps));
+        setGlobalAutoExecHint(s.autoExecuteTools === true);
       })
       .catch(() => { /* global settings unavailable — shipped defaults remain */ });
     return () => {
@@ -427,14 +431,21 @@ export default function TaskConsoleView() {
           <Switch id="task-parallel" checked={parallelToolCalls} onCheckedChange={setParallelToolCalls} aria-label="Parallel tool calls" />
         </div>
 
-        {/* v1.0.6 §12 — task-level approval + multi-event policy */}
+        {/* v1.0.6 §12 / v1.0.11 §37/§41 — task-level approval + multi-event policy.
+            The Task Console preference is the LOWEST layer of the auto-execution
+            hierarchy: Global Settings (highest) → Tool config → this. */}
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 py-2.5">
             <div className="min-w-0">
               <Label htmlFor="task-autoexec" className="flex items-center gap-1.5 text-sm">
                 <ShieldCheck className="size-3.5 text-emerald-300" aria-hidden /> Auto-Execute Tools
+                <span className="rounded border border-white/[0.12] bg-white/[0.05] px-1 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground">Task — lowest priority</span>
               </Label>
-              <p className="text-[11px] text-muted-foreground">When OFF (default), the runtime asks for approval before each tool. Global setting may override.</p>
+              <p className="text-[11px] text-muted-foreground">
+                {globalAutoExecHint
+                  ? 'Controlled by global auto-execution setting — this task preference cannot override it.'
+                  : 'When ON, tools in this task run without approval unless a per-tool config decides. Global has higher priority; per-tool config overrides this.'}
+              </p>
             </div>
             <Switch id="task-autoexec" checked={autoExecuteTools} onCheckedChange={setAutoExecuteTools} aria-label="Auto-execute tools for this task" />
           </div>

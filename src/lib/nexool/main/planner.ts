@@ -2,9 +2,10 @@
  * NexTool Planner — decomposes a request into ordered, minimal steps.
  * LLM-driven with a deterministic fallback plan.
  */
-import ZAI from 'z-ai-web-dev-sdk';
 import type { PlanStep, ToolDefinition } from '../types';
 import { emitEvent } from '../eventbus';
+// v1.0.11 §50 — shared cached client (one init per process).
+import { getZai } from '../core/coremodule';
 
 const PLANNER_TIMEOUT_MS = 25_000;
 /**
@@ -82,7 +83,7 @@ export async function buildPlan(
   const effectiveMaxSteps = Math.min(Math.max(Math.round(Number(maxSteps) || DEFAULT_PRE_PLAN_MAX_STEPS), 1), 122);
   const started = Date.now();
   try {
-    const zai = await ZAI.create();
+    const zai = await getZai();
     const system = [
       'You are the Planner of NexTool, a task-processing system (not a chatbot).',
       'Decompose the request into minimal ordered steps. Each step is one concrete operational action.',

@@ -8,15 +8,16 @@ import { getSettings } from '../settings';
 import { getEnabledToolDefs } from '../tools/registry';
 import { executeTool, executeParallelBatch } from '../tools/executor';
 import { clampNetworkTimeoutMs } from '../tools/network-timeout';
-import { decide } from '../core/coremodule';
+import { decide, getZai } from '../core/coremodule';
 import { buildPlan, DEFAULT_PRE_PLAN_MAX_STEPS } from './planner';
 import {
   buildOneByOneContext, buildOneByOneFallbackStep, planOneByOneStep,
 } from './planner-strategy';
 import type { PlannerType } from '../types';
 import { interpret, checkGoalComplete } from './observer';
+import { runPrePlanRecovery } from './recovery';
 import { listServers } from '../environment';
-import { resolveAutoExecute, requestApproval } from '../approval';
+import { resolveAutoExecution, requestApproval } from '../approval';
 import { clampToLimit, getResolvedLimits } from '../config-limits';
 import { recordPatternObservation, recordTaskOutcomePatterns } from '../patterns/extractor';
 import type {
@@ -102,6 +103,15 @@ export interface ResolvedTaskConfig extends TaskConfig {
   /** v1.0.10 §16 — resolved pre-plan step limit (1..122, default 10).
    *  Relevant to pre-plan planning only. */
   prePlanMaxSteps: number;
+  /** v1.0.11 — resolved recovery attempt cap per failed pre-plan step
+   *  (2..4, default 4). Pre-plan planner only. */
+  recoveryMaxAttempts: number;
+  /** v1.0.11 §38 — the RAW per-task auto-execute preference (undefined =
+   *  not set) — the resolver needs the un-coalesced value to report the
+   *  effective SOURCE (global | tool | task | default). */
+  autoExecuteToolsRaw?: boolean;
+  /** v1.0.11 §38 — the global Settings auto-execute value at run start. */
+  autoExecuteToolsGlobal: boolean;
 }
 
 function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<typeof getSettings>>): ResolvedTaskConfig {
@@ -132,9 +142,6 @@ function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<t
     liveIntervalMs: clampLimit('task', 'liveIntervalMs', stored.liveIntervalMs, settings.liveIntervalMs),
     parallelToolCalls: stored.parallelToolCalls ?? settings.parallelToolCalls,
     maxParallelToolCalls: clampLimit('task', 'maxParallelToolCalls', stored.maxParallelToolCalls, settings.maxParallelToolCalls),
-    // §9.4 precedence: global setting → per-task config → per-tool (per-tool is
-    // resolved at execution time against the concrete tool definition).
-    autoExecuteTools: stored.autoExecuteTools ?? settings.autoExecuteTools,
     allowMultipleEvents: stored.allowMultipleEvents ?? settings.allowMultipleEvents,
     // v1.0.10 §13 — planner strategy: stored (persisted at creation) → global
     // default → 'pre-plan'. Old tasks without the field keep working.
@@ -144,6 +151,16 @@ function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<t
     // v1.0.10 §16 — pre-plan step limit: task value (clamped 1..122) → global
     // default (10).
     prePlanMaxSteps: clampLimit('task', 'prePlanMaxSteps', stored.prePlanMaxSteps, settings.prePlanMaxSteps),
+    // v1.0.11 — recovery attempt cap: task value (clamped 2..4) → global default (4).
+    recoveryMaxAttempts: clampLimit('task', 'recoveryMaxAttempts', stored.recoveryMaxAttempts, settings.recoveryMaxAttempts),
+    // v1.0.11 §38 — auto-execution hierarchy inputs: the RAW task preference
+    // (no fallback coalescing) + the global value, resolved per execution by
+    // resolveAutoExecution (global → tool → task → default).
+    autoExecuteToolsRaw: stored.autoExecuteTools,
+    autoExecuteToolsGlobal: settings.autoExecuteTools,
+    // Back-compat coalesced view (task → global) retained for callers that
+    // only need a boolean — never used for the effective-source decision.
+    autoExecuteTools: stored.autoExecuteTools ?? settings.autoExecuteTools,
     sessionId: stored.sessionId,
     context: stored.context,
   };
@@ -183,6 +200,9 @@ interface RunContext {
   /** v1.0.10 §10 — endless-repetition guard: last failed step key + streak. */
   lastFailedStepKey?: string;
   identicalFailureStreak: number;
+  /** v1.0.11 — completed recovery cycles per failed-step key (§9 attempt
+   *  counting; bounded by task.recoveryMaxAttempts). */
+  recoveryAttemptsByStep: Map<string, number>;
 }
 
 // ---------- pause (v1.0.6 §11) ----------
@@ -242,14 +262,26 @@ async function requestApprovalIfNeeded(
   opts: { purpose?: string; reason?: string } = {},
 ): Promise<'auto' | 'allowed' | 'denied' | 'timeout' | 'cancelled'> {
   const def = ctx.toolDefs.find((d) => d.name === tool);
-  // §9.4 — global/task override already folded into config.autoExecuteTools;
-  // otherwise consult the concrete tool definition (documented default false).
-  const auto = ctx.config.autoExecuteTools === true || resolveAutoExecute(
-    def ?? { autoExecute: undefined },
-    { autoExecuteTools: undefined },
-    { autoExecuteTools: false },
+  // v1.0.11 §34-§38 — the auto-execution hierarchy resolved through ONE
+  // centralized resolver: GLOBAL (Settings) → TOOL config → TASK console →
+  // default OFF. The effective source is observable via tool.auto_execution.
+  const resolved = resolveAutoExecution(
+    ctx.config.autoExecuteToolsGlobal,
+    def?.autoExecute,
+    ctx.config.autoExecuteToolsRaw,
   );
-  if (auto) return 'auto';
+  if (resolved.enabled) {
+    if (resolved.source !== 'global') {
+      // §39/§41 — make the effective source observable when a lower layer
+      // decided (the global-forced case is the documented default behavior).
+      void emitEvent({
+        taskId: ctx.taskId, type: 'tool.auto_execution', source: 'runtime',
+        message: `${tool} auto-executed (effective source: ${resolved.source}).`,
+        data: { tool, enabled: true, source: resolved.source }, priority: 6,
+      });
+    }
+    return 'auto';
+  }
 
   const subgoal = ctx.state.activeSubgoal?.title;
   ctx.state.pendingApproval = {
@@ -508,8 +540,8 @@ async function proposeNextSubgoal(
   ctx: RunContext,
 ): Promise<{ done: true } | { done: false; title: string; reason: string }> {
   try {
-    const { default: ZAI } = await import('z-ai-web-dev-sdk');
-    const zai = await ZAI.create();
+    // v1.0.11 §50 — shared cached client (one init per process).
+    const zai = await getZai();
     const res = await Promise.race([
       zai.chat.completions.create({
         messages: [
@@ -914,7 +946,7 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
       };
     }
 
-    // tool_call — execute with ONE retry on failure
+    // tool_call — execute
     if (!result) {
       // defensive: tool_call without execution
       continue;
@@ -926,6 +958,7 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
         // identical action. Record the failure, observe it, verify the goal,
         // then REPLAN one step with the failure context (the planner input
         // carries knownFailures). Bounded by maxIterations/safetyLimit/timeout.
+        // v1.0.11 §15 — one-by-one semantics are NOT changed by recovery.
         recordExecution(ctx, result.execution.tool, result);
         for (const id of activeStepIds) markStepByExecution(ctx.state.plan, id, 'failed');
         observeOneByOneStepOutcome(ctx, ctx.state.plan.find((s) => s.id === activeStepIds[0]), result.execution);
@@ -952,28 +985,64 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
         }
         continue;
       }
-      void emitEvent({
-        taskId: ctx.taskId, type: 'planner.retry', source: 'planner',
-        message: `Execution failed (${result.execution.status}); retrying once with error as observation.`,
-        data: { tool: result.execution.tool, error: result.execution.error }, priority: 4,
+
+      // v1.0.11 §1–§15 — PRE-PLAN FAILURE RECOVERY (replaces the v1.0.3
+      // single blind retry + hard stop). The main plan is FROZEN while the
+      // recovery subgoal runs its own pre-plan; a successful recovery
+      // resumes the main plan state-aware (§6/§7).
+      recordExecution(ctx, result.execution.tool, result);
+      for (const id of activeStepIds) markStepByExecution(ctx.state.plan, id, 'failed');
+      await persistState(ctx);
+      const failedStep = ctx.state.plan.find((s) => s.id === activeStepIds[0]);
+      const recoveryHost = {
+        taskId: ctx.taskId,
+        request: ctx.request,
+        goal: ctx.goal,
+        toolDefs: ctx.toolDefs,
+        reasoningLevel: config.reasoningLevel,
+        recoveryMaxAttempts: config.recoveryMaxAttempts,
+        state: ctx.state,
+        recoveryAttempts: ctx.recoveryAttemptsByStep,
+        decideAndExecute: (objective: string, overrides?: { lastObservation?: string }) =>
+          decideAndExecute(ctx, objective, overrides),
+        recordExecution: (tool: string, r: { execution: ToolExecution; observation: string }) =>
+          recordExecution(ctx, tool, r),
+        persistState: () => persistState(ctx),
+        verifyGoal: () => verifyGoal(ctx),
+        blockedStopReason: () => blockedStopReason(ctx),
+      };
+      const recovery = await runPrePlanRecovery(recoveryHost, {
+        failedStepId: activeStepIds[0] || undefined,
+        failedStepTitle: failedStep?.title ?? ctx.state.activeSubgoal?.title ?? objective,
+        failedStepDetail: failedStep?.detail,
+        failedTool: result.execution.tool,
+        failureStatus: result.execution.status,
+        failureMessage: result.execution.error?.message ?? result.execution.status,
       });
-      const retry = await decideAndExecute(ctx, objective, {
-        lastObservation: `Previous attempt ${result.execution.status}: ${result.execution.error?.message ?? 'unknown'}`,
-      });
-      if (retry.result && retry.result.execution.status !== 'failed' && retry.result.execution.status !== 'timeout') {
-        finalResult = retry.result;
-      } else {
-        recordExecution(ctx, result.execution.tool, result);
-        if (retry.result) recordExecution(ctx, retry.result.execution.tool, retry.result);
-        for (const id of activeStepIds) markStepByExecution(ctx.state.plan, id, 'failed');
-        await persistState(ctx);
-        const errMsg = retry.result?.execution.error?.message ?? result.execution.error?.message ?? 'unknown error';
+      if (recovery.kind === 'completed') {
+        return { finalStatus: 'completed', taskStatus: 'completed', summary: recovery.summary };
+      }
+      if (recovery.kind === 'aborted') {
+        // §11/§12 — exhausted or unrecoverable: end the task honestly.
+        // §9.7 — a stop/approval-timeout during recovery still ends 'stopped'.
+        if (ctx.handle.stopFlag.stopped || recovery.errorCode === 'RECOVERY_BLOCKED') {
+          return {
+            finalStatus: 'stopped', taskStatus: 'stopped',
+            statusDetail: recovery.statusDetail,
+            summary: ctx.state.lastObservation ?? recovery.statusDetail,
+          };
+        }
         return {
-          finalStatus: 'failed', taskStatus: 'failed', statusDetail: `Tool failure after retry: ${errMsg}`,
-          summary: ctx.state.lastObservation ?? 'Tool execution failed.',
-          errorState: { code: 'TOOL_FAILURE', message: errMsg, stage: 'tool_execution' },
+          finalStatus: 'failed', taskStatus: 'failed',
+          statusDetail: recovery.statusDetail,
+          summary: ctx.state.lastObservation ?? 'Recovery failed — task ended.',
+          errorState: { code: recovery.errorCode, message: recovery.statusDetail, stage: 'recovery' },
         };
       }
+      // kind === 'resumed' — the main plan continues (failed step satisfied
+      // or re-queued); the loop re-evaluates from the current state.
+      await persistState(ctx);
+      continue;
     }
 
     recordExecution(ctx, finalResult.execution.tool, finalResult);
@@ -1530,7 +1599,7 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
 
   const ctx: RunContext = {
     taskId, request, goal: state.goal, config, toolDefs: [], state, handle, startedAtMs, artifacts: [], eventSeq: 0, blockedStop: null,
-    failureLog: [], oneByOneSubgoalByStep: new Map(), identicalFailureStreak: 0,
+    failureLog: [], oneByOneSubgoalByStep: new Map(), identicalFailureStreak: 0, recoveryAttemptsByStep: new Map(),
   };
 
   // v1.0.6 §11.9 — resume support: a task re-created as paused waits at the

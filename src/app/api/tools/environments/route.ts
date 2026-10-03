@@ -31,7 +31,8 @@ import { syncTimeoutMs, maxFunctionSourceChars, maxResultBytes, maxLogLines } fr
 import { getNetworkPolicy } from '@/lib/nexool/tools/sandbox-net';
 import { getVfsLimits, VFS_WORKSPACE_DIRECTORIES } from '@/lib/nexool/tools/vfs';
 import { getChildProcessLimits, VIRTUAL_COMMANDS } from '@/lib/nexool/tools/virtual-child-process';
-import { getLimitProperty, getResolvedLimits } from '@/lib/nexool/config-limits';
+import { getLimitProperty, getResolvedLimits, getFreedomFsConfig } from '@/lib/nexool/config-limits';
+import { isFreedomNodeAuthorized } from '@/lib/nexool/tools/freedom-node-runner';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,6 +67,14 @@ export async function GET() {
         description: 'Registered handler kind (echo/delay/http_get/uuid) with structured configuration — no custom code.',
         authorable: true,
         execution: 'handler',
+      },
+      {
+        // v1.0.11 §20/§22/§29 — the INTENTIONALLY UNRESTRICTED environment.
+        id: 'freedom-node',
+        label: 'Freedom Node (unrestricted)',
+        description: 'Full host Node.js access. File system, network, processes, and host-level capabilities may be available. Requires the configuration-file fs gate (the Settings UI cannot grant it).',
+        authorable: true,
+        execution: 'freedom-node',
       },
       {
         id: 'builtin',
@@ -116,29 +125,48 @@ export async function GET() {
       limits: cp,
       virtualCommands: VIRTUAL_COMMANDS,
     },
-    // v1.0.6 §8 + v1.0.8 — capability matrix, generated from the real runtime config
+    // v1.0.6 §8 + v1.0.8 — capability matrix, generated from the real runtime config.
+    // v1.0.11 — the freedomNode column is the honest runtime state of the
+    // unrestricted environment (gate state included; §29/§64).
     capabilities: [
-      { capability: 'JavaScript standard APIs', jsFunction: 'Yes', nodejs: 'Yes' },
-      { capability: 'fetch', jsFunction: 'Yes (policy-controlled)', nodejs: 'Yes (policy-controlled)' },
-      { capability: 'XMLHttpRequest', jsFunction: 'Yes (async, policy-controlled)', nodejs: 'Yes (async, policy-controlled)' },
-      { capability: 'async alert', jsFunction: 'Yes (runtime event)', nodejs: 'Yes (runtime event)' },
-      { capability: 'async prompt', jsFunction: 'Yes (pauses the tool only)', nodejs: 'Yes (pauses the tool only)' },
-      { capability: 'async confirm', jsFunction: 'Yes (v1.0.8 — boolean result, pauses the tool)', nodejs: 'Yes (v1.0.8 — boolean result, pauses the tool)' },
-      { capability: 'Timers (setTimeout/setInterval)', jsFunction: 'Yes (deadline-bounded)', nodejs: 'Yes (deadline-bounded)' },
-      { capability: 'Virtual FS', jsFunction: 'VFS modules via require()/import() only', nodejs: 'Full VFS API (fs module)' },
-      { capability: 'require()', jsFunction: 'Restricted (VFS modules only)', nodejs: 'Yes — allowlist + virtual modules' },
-      { capability: 'Dynamic import()', jsFunction: 'Yes (v1.0.8 — URL via network policy + VFS)', nodejs: 'Yes — allowlist + VFS + URL (policy)' },
-      { capability: 'URL imports', jsFunction: 'Yes (policy-controlled, enabled by default)', nodejs: 'Yes (policy-controlled, enabled by default)' },
-      { capability: 'Node APIs', jsFunction: 'None', nodejs: 'Expanded safe set' },
-      { capability: 'fs', jsFunction: 'No', nodejs: 'Virtual FS only' },
-      { capability: 'http / https', jsFunction: 'No (use fetch)', nodejs: 'Controlled network layer' },
-      { capability: 'child_process', jsFunction: 'No', nodejs: 'Restricted virtual commands + node + npm' },
-      { capability: 'node', jsFunction: 'No', nodejs: 'Yes (v1.0.8 — sandboxed program execution inside the VFS)' },
-      { capability: 'npm', jsFunction: 'No', nodejs: 'Yes (v1.0.8 — init/install/uninstall/run/ls inside the VFS workspace)' },
-      { capability: 'Host filesystem', jsFunction: 'No', nodejs: 'No' },
-      { capability: 'process / net / dgram / dns', jsFunction: 'No', nodejs: 'No' },
-      { capability: 'cluster / vm / worker_threads', jsFunction: 'No', nodejs: 'No' },
+      { capability: 'JavaScript standard APIs', jsFunction: 'Yes', nodejs: 'Yes', freedomNode: 'Yes' },
+      { capability: 'fetch', jsFunction: 'Yes (policy-controlled)', nodejs: 'Yes (policy-controlled)', freedomNode: 'Yes (REAL network — no policy caps)' },
+      { capability: 'XMLHttpRequest', jsFunction: 'Yes (async, policy-controlled)', nodejs: 'Yes (async, policy-controlled)', freedomNode: 'No (use fetch)' },
+      { capability: 'async alert', jsFunction: 'Yes (runtime event)', nodejs: 'Yes (runtime event)', freedomNode: 'Yes (runtime event)' },
+      { capability: 'async prompt', jsFunction: 'Yes (pauses the tool only)', nodejs: 'Yes (pauses the tool only)', freedomNode: 'Yes (pauses the tool only)' },
+      { capability: 'async confirm', jsFunction: 'Yes (v1.0.8 — boolean result, pauses the tool)', nodejs: 'Yes (v1.0.8 — boolean result, pauses the tool)', freedomNode: 'Yes (boolean result, pauses the tool)' },
+      { capability: 'Timers (setTimeout/setInterval)', jsFunction: 'Yes (deadline-bounded)', nodejs: 'Yes (deadline-bounded)', freedomNode: 'Yes (deadline-bounded — task lifecycle)' },
+      { capability: 'Virtual FS', jsFunction: 'VFS modules via require()/import() only', nodejs: 'Full VFS API (fs module)', freedomNode: 'No — freedom-node uses the REAL filesystem' },
+      { capability: 'require()', jsFunction: 'Restricted (VFS modules only)', nodejs: 'Yes — allowlist + virtual modules', freedomNode: 'Yes — REAL Node builtins + npm packages' },
+      { capability: 'Dynamic import()', jsFunction: 'Yes (v1.0.8 — URL via network policy + VFS)', nodejs: 'Yes — allowlist + VFS + URL (policy)', freedomNode: 'Yes — REAL ESM import (no URL restrictions)' },
+      { capability: 'URL imports', jsFunction: 'Yes (policy-controlled, enabled by default)', nodejs: 'Yes (policy-controlled, enabled by default)', freedomNode: 'Yes — unrestricted' },
+      { capability: 'Node APIs', jsFunction: 'None', nodejs: 'Expanded safe set', freedomNode: 'ALL (host runtime)' },
+      { capability: 'fs', jsFunction: 'No', nodejs: 'Virtual FS only', freedomNode: 'REAL host filesystem (fs config gate)' },
+      { capability: 'http / https', jsFunction: 'No (use fetch)', nodejs: 'Controlled network layer', freedomNode: 'Yes — real modules, unrestricted' },
+      { capability: 'child_process', jsFunction: 'No', nodejs: 'Restricted virtual commands + node + npm', freedomNode: 'Yes — REAL host processes' },
+      { capability: 'node', jsFunction: 'No', nodejs: 'Yes (v1.0.8 — sandboxed program execution inside the VFS)', freedomNode: 'Yes — real node' },
+      { capability: 'npm', jsFunction: 'No', nodejs: 'Yes (v1.0.8 — init/install/uninstall/run/ls inside the VFS workspace)', freedomNode: 'Yes — real npm packages' },
+      { capability: 'Host filesystem', jsFunction: 'No', nodejs: 'No', freedomNode: 'Yes — by design (fs gate)' },
+      { capability: 'process', jsFunction: 'No', nodejs: 'No', freedomNode: 'Yes — real process (incl. env)' },
+      { capability: 'net / dgram / dns', jsFunction: 'No', nodejs: 'No', freedomNode: 'Yes — real modules' },
+      { capability: 'cluster / vm / worker_threads', jsFunction: 'No', nodejs: 'No', freedomNode: 'Yes — real modules' },
     ],
+    // v1.0.11 — freedom-node runtime reference (§29: the IDE reference reflects
+    // the ACTUAL runtime, including the honest gate state).
+    freedomNode: {
+      enabled: isFreedomNodeAuthorized(),
+      fsConfig: getFreedomFsConfig(),
+      note: 'Intentionally unrestricted. Authorized ONLY by the fs section of config/configuration-limits.json (configuration-file gate — the Settings UI cannot enable it; fail closed).',
+      preservedLimits: {
+        timeoutMs: exec.timeoutMs,
+        timeoutMaxMs: getLimitProperty('execution', 'timeoutMs').max ?? 3_600_000,
+        syncTimeoutMs: syncTimeoutMs(),
+        maxSourceChars: maxFunctionSourceChars(),
+        maxResultTransportBytes: 5 * 1024 * 1024,
+        maxLogLines: maxLogLines(),
+        note: 'Task-lifecycle bounds only (deadline, vm sync cap, result transport, log caps) — the Network Policy/VFS/request restrictions do NOT apply.',
+      },
+    },
     node: {
       modules: NODE_MODULE_ALLOWLIST,
       blocked: NODE_BLOCKED_MODULES,

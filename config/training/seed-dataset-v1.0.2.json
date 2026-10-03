@@ -1,0 +1,2350 @@
+{
+  "name": "NexTool Core v1.0.2 Seed",
+  "version": "1.0.2",
+  "note": "v1.0.11 (THE EMPOWERMENT) training seed for the locally trained tool-selection classifier, model generation 1.0.2. Expands the v1.0.1 seed with: large Markdown-heavy task descriptions (objective at the beginning, middle and end of the document), checklists, tables, code snippets, API/config documentation, long operational instructions, additional hard examples (typos, synonyms, similar tools, same keywords with different intent, irrelevant context, failed previous attempts, state-after-action, conditional requirements) and pattern-aware recovery/verification/state-transition examples. All 15 registered tools are covered in train, validation and test splits; expectedParams stay inside the real tool schemas; requests are deduplicated.",
+  "examples": [
+    {
+      "category": "server-ops",
+      "request": "health status of api-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "is api-01 healthy right now?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-01 box status check",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "verify that api-01 is up and serving",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "health status of api-02",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "is api-02 healthy right now?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-02 box status check",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "verify that api-02 is up and serving",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "health status of web-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "is web-01 healthy right now?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "web-01 box status check",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "verify that web-01 is up and serving",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "health status of web-02",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "is web-02 healthy right now?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "web-02 box status check",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "verify that web-02 is up and serving",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "health status of db-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "is db-01 healthy right now?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "db-01 box status check",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "verify that db-01 is up and serving",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "chehk the helath of api-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "server-ops",
+      "request": "how's the api box doing? assume api-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "what are api-02's cpu and memory numbers?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-02 was restarted 3 seconds ago — is it healthy again?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "if db-01 is unhealthy we escalate; check its state first",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "Ticket OPS-9111 pending review since Friday. Also grab web-01's health read-out for the report.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "confirm the restart of web-02 fixed it — probe its health",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "post-maintenance check: state of db-01?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "pattern-aware",
+      "request": "api-01 was unhealthy; a restart was already initiated — verify the node turned healthy",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "pattern-aware",
+      "request": "the queue worker service on web-01 was cycled a moment ago; confirm the node is healthy now",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "pattern-aware",
+      "request": "web-02 just came back from a restart — observe its current health numbers",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "pattern-aware",
+      "request": "the earlier health probe of api-02 failed; run the probe again to see the live state",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "conversational",
+      "request": "can you see if api-01 is ok?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "ops-short",
+      "request": "step 5 of RUN-118 for web-02: verify",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "## Maintenance window — node assignment\n\n| Window (UTC) | Node       | Engineer |\n|--------------|------------|----------|\n| 02:00-02:30  | api-01     | A. Karim |\n| 02:30-03:00  | web-01     | S. Nair  |\n| 03:00-03:30  | db-01      | A. Karim |\n\nDuring the api-01 slot the engineer must verify the node recovered cleanly\nafter the earlier patch. Perform that verification now: check api-01's\nhealth status.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "## Maintenance window — node assignment\n\n| Window (UTC) | Node       | Engineer |\n|--------------|------------|----------|\n| 02:00-02:30  | api-01     | A. Karim |\n| 02:30-03:00  | web-01     | S. Nair  |\n| 03:00-03:30  | db-01      | A. Karim |\n\nDuring the web-01 slot the engineer must verify the node recovered cleanly\nafter the earlier patch. Perform that verification now: check web-01's\nhealth status.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "## Maintenance window — node assignment\n\n| Window (UTC) | Node       | Engineer |\n|--------------|------------|----------|\n| 02:00-02:30  | api-01     | A. Karim |\n| 02:30-03:00  | web-01     | S. Nair  |\n| 03:00-03:30  | db-01      | A. Karim |\n\nDuring the db-01 slot the engineer must verify the node recovered cleanly\nafter the earlier patch. Perform that verification now: check db-01's\nhealth status.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "# Operational Runbook — Weekly Fleet Maintenance\n\n## Scope\nThis runbook covers the Tuesday maintenance window for the virtual server\nfleet managed by the NexTool runtime.\n\n## Preconditions\n1. On-call engineer acknowledged the page.\n2. Change ticket CHG-4711 is in state \"approved\".\n3. The maintenance window is 02:00-04:00 UTC.\n\n## Preparation checklist\n- [x] Snapshot the configuration directory\n- [x] Notify stakeholders in the ops channel\n- [ ] Drain traffic from the target node\n\n## Maintenance procedure\n| Step | Action        | Expected result          |\n|------|---------------|--------------------------|\n| 1    | drain traffic | load balancer weight = 0 |\n| 2    | stop service  | exit code 0              |\n| 3    | patch binary  | checksum matches         |\n| 4    | start service | systemd active (running) |\n| 5    | verify        | health probe returns ok  |\n\n## Notes\n- Rollback is manual; keep the previous binary for 48h.\n- Escalate to the platform team if step 3 fails twice.\n\n## Instruction for the runtime\nCheck the current health status of api-01 now, before we start the window.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "# Weekly operations digest\n\nSection 1 — Deploys: three services shipped, zero rollbacks.\n\nSection 2 — Capacity: headroom is stable across the fleet.\n\nSection 3 — Follow-ups (actionable): the digest closes with the one\noperation the runtime should perform today — check the health of api-01\nand report the observed CPU and memory numbers.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "test"
+    },
+    {
+      "category": "markdown-long-context",
+      "request": "# Platform Operations — Quarterly Maintenance Pack (Q4)\n\nYou are handed the consolidated maintenance pack for the quarter. Read the\nwhole document; the single operation the runtime must perform is stated at\nthe very end.\n\n## 1. Context\n\nThe virtual fleet is spread across one region (blr-1) and consists of API\nfront-ends, web front-ends and a database node. Health probing happens every\n30 seconds; the maintenance windows are booked through the change system.\n\n## 2. Change summary\n\n| Change  | Node   | Type       | Risk | Outcome   |\n|---------|--------|------------|------|-----------|\n| CHG-4709| web-02 | patch      | low  | reverted  |\n| CHG-4710| api-01 | config     | low  | applied   |\n| CHG-4711| api-02 | restart  | med  | scheduled |\n\n## 3. Runbook extract (RUN-118)\n\n### 3.1 Preconditions\n\n```text\n- change approved\n- backup verified\n- on-call acknowledged\n```\n\n### 3.2 Verification probes\n\nAfter any restart the node must pass the standard probe:\n\n```yaml\nprobe:\n  path: /healthz\n  expect: 200\n  retries: 3\n  backoff: 2s\n```\n\n### 3.3 Escalation\n\nIf the probe fails three times in a row, escalate to the platform team and\nattach the last ten log lines:\n\n```\nCheckoutError: upstream timeout after 5000ms (attempt 2/3)\nConnectionResetError: [Errno 104] peer reset\n```\n\n## 4. API reference excerpt\n\n```http\nGET /v1/servers/{id}/health   → {\"health\": \"healthy\", \"cpu\": 12, \"memory\": 40}\nPOST /v1/servers/{id}/restart → 202 Accepted (async)\n```\n\n## 5. Notes for the auditor\n\n- All commands are idempotent.\n- The maintenance pack is read-only except for the final instruction.\n- Numbers in the tables are illustrative; real state comes from the runtime.\n\n## 6. Final instruction (execute this)\n\nCheck the current health status of api-02 and report the observed CPU and\nmemory numbers back to the change record.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "markdown-long-context",
+      "request": "# Platform Operations — Quarterly Maintenance Pack (Q4)\n\nYou are handed the consolidated maintenance pack for the quarter. Read the\nwhole document; the single operation the runtime must perform is stated at\nthe very end.\n\n## 1. Context\n\nThe virtual fleet is spread across one region (blr-1) and consists of API\nfront-ends, web front-ends and a database node. Health probing happens every\n30 seconds; the maintenance windows are booked through the change system.\n\n## 2. Change summary\n\n| Change  | Node   | Type       | Risk | Outcome   |\n|---------|--------|------------|------|-----------|\n| CHG-4709| web-02 | patch      | low  | reverted  |\n| CHG-4710| api-01 | config     | low  | applied   |\n| CHG-4711| web-01 | restart  | med  | scheduled |\n\n## 3. Runbook extract (RUN-118)\n\n### 3.1 Preconditions\n\n```text\n- change approved\n- backup verified\n- on-call acknowledged\n```\n\n### 3.2 Verification probes\n\nAfter any restart the node must pass the standard probe:\n\n```yaml\nprobe:\n  path: /healthz\n  expect: 200\n  retries: 3\n  backoff: 2s\n```\n\n### 3.3 Escalation\n\nIf the probe fails three times in a row, escalate to the platform team and\nattach the last ten log lines:\n\n```\nCheckoutError: upstream timeout after 5000ms (attempt 2/3)\nConnectionResetError: [Errno 104] peer reset\n```\n\n## 4. API reference excerpt\n\n```http\nGET /v1/servers/{id}/health   → {\"health\": \"healthy\", \"cpu\": 12, \"memory\": 40}\nPOST /v1/servers/{id}/restart → 202 Accepted (async)\n```\n\n## 5. Notes for the auditor\n\n- All commands are idempotent.\n- The maintenance pack is read-only except for the final instruction.\n- Numbers in the tables are illustrative; real state comes from the runtime.\n\n## 6. Final instruction (execute this)\n\nCheck the current health status of web-01 and report the observed CPU and\nmemory numbers back to the change record.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long-context",
+      "request": "# Platform Operations — Quarterly Maintenance Pack (Q4)\n\nYou are handed the consolidated maintenance pack for the quarter. Read the\nwhole document; the single operation the runtime must perform is stated at\nthe very end.\n\n## 1. Context\n\nThe virtual fleet is spread across one region (blr-1) and consists of API\nfront-ends, web front-ends and a database node. Health probing happens every\n30 seconds; the maintenance windows are booked through the change system.\n\n## 2. Change summary\n\n| Change  | Node   | Type       | Risk | Outcome   |\n|---------|--------|------------|------|-----------|\n| CHG-4709| web-02 | patch      | low  | reverted  |\n| CHG-4710| api-01 | config     | low  | applied   |\n| CHG-4711| db-01 | restart  | med  | scheduled |\n\n## 3. Runbook extract (RUN-118)\n\n### 3.1 Preconditions\n\n```text\n- change approved\n- backup verified\n- on-call acknowledged\n```\n\n### 3.2 Verification probes\n\nAfter any restart the node must pass the standard probe:\n\n```yaml\nprobe:\n  path: /healthz\n  expect: 200\n  retries: 3\n  backoff: 2s\n```\n\n### 3.3 Escalation\n\nIf the probe fails three times in a row, escalate to the platform team and\nattach the last ten log lines:\n\n```\nCheckoutError: upstream timeout after 5000ms (attempt 2/3)\nConnectionResetError: [Errno 104] peer reset\n```\n\n## 4. API reference excerpt\n\n```http\nGET /v1/servers/{id}/health   → {\"health\": \"healthy\", \"cpu\": 12, \"memory\": 40}\nPOST /v1/servers/{id}/restart → 202 Accepted (async)\n```\n\n## 5. Notes for the auditor\n\n- All commands are idempotent.\n- The maintenance pack is read-only except for the final instruction.\n- Numbers in the tables are illustrative; real state comes from the runtime.\n\n## 6. Final instruction (execute this)\n\nCheck the current health status of db-01 and report the observed CPU and\nmemory numbers back to the change record.",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "run the health probe on api-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-01: healthy or not?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "observe api-01 state for the shift handover",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "run the health probe on api-02",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-02: healthy or not?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "observe api-02 state for the shift handover",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "run the health probe on web-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "web-01: healthy or not?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "observe web-01 state for the shift handover",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "run the health probe on web-02",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "web-02: healthy or not?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "observe web-02 state for the shift handover",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "run the health probe on db-01",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "db-01: healthy or not?",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "observe db-01 state for the shift handover",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "probe api-01 after the config change",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "check db-01 then (only if unhealthy) plan a restart — start with the check",
+      "expectedTool": "server.health",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "restart api-01",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "bounce api-01 please",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-01 is unhealthy — recover it with a restart",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "restart api-02",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "bounce api-02 please",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-02 is unhealthy — recover it with a restart",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "restart web-01",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "bounce web-01 please",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "web-01 is unhealthy — recover it with a restart",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "restart db-01",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "bounce db-01 please",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "db-01 is unhealthy — recover it with a restart",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "resart web-02 (it crashed)",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "server-ops",
+      "request": "the previous restart attempt failed — try restarting api-02 again",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "db-01 went down during the deploy. bring it back.",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "execute a restart of the api-01 node per CHG-4712",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "pattern-aware",
+      "request": "db-01 crashed during the batch job. bring the node back up.",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "# Change request CHG-4712\n\n## Metadata\n- requester: platform-oncall\n- risk: low\n- affected: api-02\n\n## Description\nRoll the node into the current release channel. The runbook is linked in the\nreferences section; the health probe is expected to be green within 3\nseconds of the service coming back up.\n\n## Request\nAt the end of this document: restart api-02 in the virtual environment so\nthe change can be executed and observed.\n\n## References\n- Runbook: RUN-118\n- Previous change: CHG-4709 (reverted)",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "# Operational Runbook — Weekly Fleet Maintenance\n\n## Scope\nThis runbook covers the Tuesday maintenance window for the virtual server\nfleet managed by the NexTool runtime.\n\n## Preconditions\n1. On-call engineer acknowledged the page.\n2. Change ticket CHG-4711 is in state \"approved\".\n3. The maintenance window is 02:00-04:00 UTC.\n\n## Preparation checklist\n- [x] Snapshot the configuration directory\n- [x] Notify stakeholders in the ops channel\n- [ ] Drain traffic from the target node\n\n## Maintenance procedure\n| Step | Action        | Expected result          |\n|------|---------------|--------------------------|\n| 1    | drain traffic | load balancer weight = 0 |\n| 2    | stop service  | exit code 0              |\n| 3    | patch binary  | checksum matches         |\n| 4    | start service | systemd active (running) |\n| 5    | verify        | health probe returns ok  |\n\n## Notes\n- Rollback is manual; keep the previous binary for 48h.\n- Escalate to the platform team if step 3 fails twice.\n\n## Instruction for the runtime\nCheck the current health status of web-02 now, before we start the window.",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "markdown-long",
+      "request": "# Weekly operations digest\n\nSection 1 — Deploys: three services shipped, zero rollbacks.\n\nSection 2 — Capacity: headroom is stable across the fleet.\n\nSection 3 — Follow-ups (actionable): the digest closes with the one\noperation the runtime should perform today — check the health of web-02\nand report the observed CPU and memory numbers.",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-01 is degraded — restart it",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "please restart node api-01 now",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "api-02 is degraded — restart it",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "please restart node api-02 now",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "server-ops",
+      "request": "web-01 is degraded — restart it",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "please restart node web-01 now",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "web-02 is degraded — restart it",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "please restart node web-02 now",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "db-01 is degraded — restart it",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "please restart node db-01 now",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "reboot api-02 in the virtual environment",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "restart api-01's whole NODE",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "node api-02 is unhealthy after the deploy — restart the node",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "restart web-02",
+      "expectedTool": "server.restart",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "service-ops",
+      "request": "restart the checkout service on api-01",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "test"
+    },
+    {
+      "category": "service-ops",
+      "request": "cycle the queue worker service on web-01",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "web-01"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "service-ops",
+      "request": "restart the payment service on db-01",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "service-ops",
+      "request": "the ingestion service on api-02 is wedged — restart that service",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "service-ops",
+      "request": "servcie restart on web-02 for the render worker",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "web-02"
+      },
+      "split": "test"
+    },
+    {
+      "category": "service-ops",
+      "request": "recover the failing cron-runner service on db-01",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "db-01"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "service-ops",
+      "request": "restart the auth service (not the whole node) on api-02",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "service-ops",
+      "request": "restart only the auth SERVICE on api-01",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "api-01"
+      },
+      "split": "train"
+    },
+    {
+      "category": "service-ops",
+      "request": "the ingestion service on api-02 is unhealthy after the deploy — restart the service",
+      "expectedTool": "service.restart",
+      "expectedParams": {
+        "serverId": "api-02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "list all servers with their health",
+      "expectedTool": "server.list",
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "show the fleet overview",
+      "expectedTool": "server.list",
+      "split": "validation"
+    },
+    {
+      "category": "server-ops",
+      "request": "give me an environment overview with cpu and memory",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "which servers do we have and how are they doing?",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "inventory of the virtual environment",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "fleet status snapshot, all nodes",
+      "expectedTool": "server.list",
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "overview: every server's health, cpu, memory",
+      "expectedTool": "server.list",
+      "split": "validation"
+    },
+    {
+      "category": "server-ops",
+      "request": "enumerate the nodes in the environment",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "**INCIDENT REPORT — SEV-2 — ACTION REQUIRED FIRST**\n\nAt 03:12 UTC monitoring flagged repeated 5xx from the checkout path. The\ntimeline below is copied from the incident channel; the actionable request\nfor the runtime is the FIRST line of this document.\n\nRequested action: list all servers in the environment with their health so\nthe incident commander can see the blast radius.\n\n---\n### Timeline\n- 03:12 pager fired (checkout error budget burn)\n- 03:14 deploy 4f2c1e suspected\n- 03:15 cache flush attempted, no improvement\n- 03:19 incident commander joined\n- 03:21 status page updated to \"degraded\"\n\n### Suspected factors\n1. New deployment 4f2c1e (checkout service)\n2. Cache node memory pressure\n3. Upstream payment provider latency\n\n### Error sample\n```\nCheckoutError: upstream timeout after 5000ms (attempt 2/3)\n```\n---",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "before the audit starts, dump the full server list",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "after the maintenance window, list all servers again to confirm states",
+      "expectedTool": "server.list",
+      "split": "test"
+    },
+    {
+      "category": "server-ops",
+      "request": "show me everything in the fleet — one line per node",
+      "expectedTool": "server.list",
+      "split": "validation"
+    },
+    {
+      "category": "pattern-aware",
+      "request": "routine live tick: fleet overview snapshot",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "fleet overview for the standup notes",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "list the nodes once more before sign-off",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "host system information",
+      "expectedTool": "system.info",
+      "split": "test"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "what machine is the runtime on? platform, cpus, memory",
+      "expectedTool": "system.info",
+      "split": "validation"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "sysinfo please",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "hostname, platform and load average of the host",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "inspect the actual host the runtime runs on",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "cpu count and memory of this machine",
+      "expectedTool": "system.info",
+      "split": "test"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "uptime and load of the runtime host",
+      "expectedTool": "system.info",
+      "split": "validation"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "system details for the runbook header",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "# Release checklist — web console v2.4\n\n1. Unit tests green\n2. Lint clean\n3. `npm run build` succeeds\n4. Smoke test on staging\n5. Changelog updated\n\nEverything above is already done. What is the current host system\ninformation of the machine running the runtime (platform, CPUs, memory)?",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "load average spike investigation — start with host system info",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "the RUNTIME host info (not the virtual fleet): hostname, platform, cpus",
+      "expectedTool": "system.info",
+      "split": "test"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "SYSTEM.INFO — full read-out",
+      "expectedTool": "system.info",
+      "split": "validation"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "runtime host details for the doc header",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "what platform and cpu count is the runtime on?",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "is it the host machine or the fleet that's slow? host system info first",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "compute (2+3)*4",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(2+3)*4"
+      },
+      "split": "test"
+    },
+    {
+      "category": "math",
+      "request": "what is 144/12?",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "144/12"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "math",
+      "request": "evaluate 17%5",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "17%5"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "sum: 128+256+512",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "128+256+512"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "how much is (18-3)/5",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(18-3)/5"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "multiply 23 by 7",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "23*7"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "divide 1000 by 8",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "1000/8"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "99*99 result",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "99*99"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "(7+8)*(3+1) evaluate",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(7+8)*(3+1)"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "percentage: 45% of 900 → 45/100*900",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "45/100*900"
+      },
+      "split": "test"
+    },
+    {
+      "category": "math",
+      "request": "calculate 2*(3+4)-6",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "2*(3+4)-6"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "math",
+      "request": "9+10/2 — do the math",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "9+10/2"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "error budget: 30*0.02",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "30*0.02"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "memory headroom: (16-11.2)/16",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(16-11.2)/16"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "evalute (12+8)*3 for the ticket",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(12+8)*3"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "In the sizing doc the formula is 4*24*3600 — evaluate it.",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "4*24*3600"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "what is 3 plus 4?",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "3+4"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "multiply 50 by 4",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "50*4"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "720 divided by 9",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "720/9"
+      },
+      "split": "test"
+    },
+    {
+      "category": "math",
+      "request": "evaluate (100-25)/3",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(100-25)/3"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "math",
+      "request": "compute 2^10*1+0 (use * for powers)",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "2^10*1+0"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "remainder of 15 divided by 4 — as an expression 15%4",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "15%4"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "evaluate 8*(9+2)",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "8*(9+2)"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "sum 123, 456 and 789",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "123+456+789"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "40 minus 13 minus 7",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "40-13-7"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "compute (6/2)*5",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(6/2)*5"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "double 95 for me",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "95*2"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "one third as a decimal — evaluate 1/3",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "1/3"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "how many words and characters: 'The quick brown fox jumps over the lazy dog'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "The quick brown fox jumps over the lazy dog"
+      },
+      "split": "test"
+    },
+    {
+      "category": "text-analysis",
+      "request": "word count for this sentence: Deploy early, deploy often.",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "Deploy early, deploy often."
+      },
+      "split": "validation"
+    },
+    {
+      "category": "text-analysis",
+      "request": "Captured access log tail (last hour, truncated to the interesting rows):\n\n```\n10.0.0.4 - - [09/Oct/2025:10:01:02] \"GET /healthz\" 200 2\n10.0.0.7 - - [09/Oct/2025:10:01:05] \"GET /api/cart\" 500 1213\n10.0.0.4 - - [09/Oct/2025:10:01:09] \"GET /healthz\" 200 2\n10.0.0.9 - - [09/Oct/2025:10:01:14] \"POST /api/checkout\" 500 981\n```\n\nTwo 5xx rows appear in the tail. For the incident notes I need the text\nstatistics (character, word and sentence counts) of this line:\n\nCheckoutError: upstream timeout after 5000ms (attempt 2/3)",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "CheckoutError: upstream timeout after 5000ms (attempt 2/3)"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "analyze the text: 'status page updated; customers notified'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "status page updated; customers notified"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "sentence count of: 'First one. Second one! Third one?'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "First one. Second one! Third one?"
+      },
+      "split": "test"
+    },
+    {
+      "category": "text-analysis",
+      "request": "top words in: 'cache cache flush cache miss retry retry timeout'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "cache cache flush cache miss retry retry timeout"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "text-analysis",
+      "request": "txt stats pls: 'hello runtime world'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "hello runtime world"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "For the postmortem, get the character and sentence counts of: 'Incident resolved. Root cause: bad deploy. Follow-up filed.'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "Incident resolved. Root cause: bad deploy. Follow-up filed."
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "count the words in: 'health checks run every thirty seconds'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "health checks run every thirty seconds"
+      },
+      "split": "test"
+    },
+    {
+      "category": "text-analysis",
+      "request": "analyze: 'deploy 4f2c1e shipped to staging'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "deploy 4f2c1e shipped to staging"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "text-analysis",
+      "request": "character count of: 'NexTool Q1'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "NexTool Q1"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "sentence stats for: 'Probe failed. Retry scheduled. Escalation pending.'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "Probe failed. Retry scheduled. Escalation pending."
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "top words in: 'restart restart restart verify verify done'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "restart restart restart verify verify done"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "how many times does the word 'restart' appear in: 'restart restart verify restart' — analyze the text",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "restart restart verify restart"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "what time is it?",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "test"
+    },
+    {
+      "category": "time",
+      "request": "current time in Asia/Kolkata",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Asia/Kolkata"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "time",
+      "request": "what's the clock in America/New_York?",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "America/New_York"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "give me the time in Europe/Berlin",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Europe/Berlin"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "# Internal Fleet API — Reference (excerpt)\n\n## Endpoint: GET /v1/servers\nReturns the fleet inventory.\n\n```json\n{ \"servers\": [ { \"id\": \"api-01\", \"region\": \"blr-1\" } ] }\n```\n\n## Endpoint: POST /v1/servers/{id}/restart\nSchedules an asynchronous restart. Accepts query parameter `drain=true|false`.\n\n## Rate limits\nRequests are limited to 60/min per token.\n\n## Runtime instruction (act on this)\nGive me the current time in Asia/Kolkata.",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Asia/Kolkata"
+      },
+      "split": "test"
+    },
+    {
+      "category": "time",
+      "request": "UTC timestamp now (ISO)",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "time",
+      "request": "tme in Asia/Tokyo for the log header",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Asia/Tokyo"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "clock check — Singapore zone",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Asia/Singapore"
+      },
+      "split": "train"
+    },
+    {
+      "category": "conversational",
+      "request": "hey, what's up with the clock right now?",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "test"
+    },
+    {
+      "category": "time",
+      "request": "what time is it in Europe/London?",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Europe/London"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "time",
+      "request": "clock in Australia/Sydney",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Australia/Sydney"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "current time for the log line — America/Chicago",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "America/Chicago"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "time check (UTC)",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "train"
+    },
+    {
+      "category": "uuid",
+      "request": "generate a uuid",
+      "expectedTool": "uuid.generate",
+      "split": "test"
+    },
+    {
+      "category": "uuid",
+      "request": "one unique identifier please",
+      "expectedTool": "uuid.generate",
+      "split": "validation"
+    },
+    {
+      "category": "uuid",
+      "request": "new uuidv4 for the trace id",
+      "expectedTool": "uuid.generate",
+      "split": "train"
+    },
+    {
+      "category": "uuid",
+      "request": "generate 3 uuids for the test fixtures",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 3
+      },
+      "split": "train"
+    },
+    {
+      "category": "uuid",
+      "request": "i need 5 unique ids",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 5
+      },
+      "split": "test"
+    },
+    {
+      "category": "uuid",
+      "request": "produce 10 identifiers for the batch",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 10
+      },
+      "split": "validation"
+    },
+    {
+      "category": "uuid",
+      "request": "```js\n// deploy/verify.js\nimport { execSync } from \"node:child_process\";\n\nexport function verifyDeploy(host) {\n  const out = execSync(`curl -fsS https://${host}/healthz`).toString();\n  return out.includes(\"ok\");\n}\n```\n\nThe snippet above is part of the deploy tooling docs. In the description of\nthe release ticket, generate a fresh unique identifier (a single UUID) for\nthe audit reference field.",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 1
+      },
+      "split": "train"
+    },
+    {
+      "category": "uuid",
+      "request": "genrate a uuid for the request header",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 1
+      },
+      "split": "train"
+    },
+    {
+      "category": "uuid",
+      "request": "generate 25 uuids",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 10
+      },
+      "split": "test"
+    },
+    {
+      "category": "uuid",
+      "request": "two correlation ids, unique",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 2
+      },
+      "split": "validation"
+    },
+    {
+      "category": "conversational",
+      "request": "need a fresh id when you get a sec",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 1
+      },
+      "split": "train"
+    },
+    {
+      "category": "uuid",
+      "request": "generate 4 ids for the fixtures",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 4
+      },
+      "split": "train"
+    },
+    {
+      "category": "uuid",
+      "request": "a single new uuid please",
+      "expectedTool": "uuid.generate",
+      "expectedParams": {
+        "count": 1
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo 'runtime check'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "runtime check"
+      },
+      "split": "test"
+    },
+    {
+      "category": "echo-verification",
+      "request": "ping the tool runtime with echo: 'alive'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "alive"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo back: deployment smoke test",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "deployment smoke test"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "just echo this exact string (don't analyze it): words words words",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "words words words"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "eco the message 'roundtrip ok'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "roundtrip ok"
+      },
+      "split": "test"
+    },
+    {
+      "category": "echo-verification",
+      "request": "verification step: echo 'post-deploy ok'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "post-deploy ok"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo 'probe-wire-ok'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "probe-wire-ok"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo this: 'memory pipeline verified'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "memory pipeline verified"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo the word 'restart' (do not restart anything)",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "restart"
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "wait 500 milliseconds",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 500
+      },
+      "split": "test"
+    },
+    {
+      "category": "pacing",
+      "request": "pause for 2 seconds",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 2000
+      },
+      "split": "validation"
+    },
+    {
+      "category": "pacing",
+      "request": "sleep 100ms",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 100
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "wait for 1.5 seconds before the next probe",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 1500
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "hold 10 seconds (pacing test)",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 10000
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "give me a 3 second delay",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 3000
+      },
+      "split": "test"
+    },
+    {
+      "category": "pacing",
+      "request": "wait 60 seconds",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 10000
+      },
+      "split": "validation"
+    },
+    {
+      "category": "pacing",
+      "request": "wiat 750ms",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 750
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "pause 250ms",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 250
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "wait 4 seconds between probes",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 4000
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "sleep for 1 second",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 1000
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "store the deployment window under key 'maint-window': value {\"start\":\"02:00\",\"end\":\"04:00\"}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "maint-window",
+        "value": {
+          "start": "02:00",
+          "end": "04:00"
+        }
+      },
+      "split": "test"
+    },
+    {
+      "category": "memory",
+      "request": "remember with key oncall and value {\"name\":\"A. Karim\",\"phone\":\"x1111\"}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "oncall",
+        "value": {
+          "name": "A. Karim",
+          "phone": "x1111"
+        }
+      },
+      "split": "validation"
+    },
+    {
+      "category": "memory",
+      "request": "# fleet.yaml (current configuration)\n\n```yaml\nfleet:\n  region: blr-1\n  nodes:\n    - id: api-01\n      role: api\n      replicas: 3\n    - id: db-01\n      role: database\n      replicas: 1\n  alerts:\n    cpu_threshold_pct: 90\n    mem_threshold_pct: 85\n    notify_level: warning\n```\n\nThe configuration is loaded at boot. For the audit trail, store the alert\nthreshold block in persistent memory under the key `fleet-alert-thresholds`\nwith tags `audit` and `config`.",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "fleet-alert-thresholds",
+        "value": {
+          "cpu_threshold_pct": 90,
+          "mem_threshold_pct": 85,
+          "notify_level": "warning"
+        },
+        "tags": [
+          "audit",
+          "config"
+        ]
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "save {\"build\":\"4f2c1e\",\"env\":\"staging\"} in memory under key last-build",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "last-build",
+        "value": {
+          "build": "4f2c1e",
+          "env": "staging"
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "keep the incident timeline in memory: key incident-9111, value {\"sev\":2,\"status\":\"open\"}, tags incident",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "incident-9111",
+        "value": {
+          "sev": 2,
+          "status": "open"
+        },
+        "tags": [
+          "incident"
+        ]
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "memmory store: key rbac-note value {\"note\":\"rotate q4\"}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "rbac-note",
+        "value": {
+          "note": "rotate q4"
+        }
+      },
+      "split": "test"
+    },
+    {
+      "category": "memory",
+      "request": "persist key sla-targets with value {\"uptime\":\"99.9\"} for the quarter report",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "sla-targets",
+        "value": {
+          "uptime": "99.9"
+        }
+      },
+      "split": "validation"
+    },
+    {
+      "category": "memory",
+      "request": "store key release-freeze with value {\"until\":\"2025-10-15\"}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "release-freeze",
+        "value": {
+          "until": "2025-10-15"
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "remember key escalation-path, value {\"team\":\"platform\",\"slack\":\"#plat-oncall\"}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "escalation-path",
+        "value": {
+          "team": "platform",
+          "slack": "#plat-oncall"
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "save this under key phrasebook: {\"restart\":\"cycle the node\"}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "phrasebook",
+        "value": {
+          "restart": "cycle the node"
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "recall the memory key maint-window",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "maint-window"
+      },
+      "split": "test"
+    },
+    {
+      "category": "memory",
+      "request": "what do we have stored under key oncall?",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "oncall"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "memory",
+      "request": "search memory for anything tagged incident",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "query": "incident"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "look up 'last-build' in persistent memory",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "last-build"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "find stored notes matching query 'threshold'",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "query": "threshold"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "retrieve the sla targets we saved",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "query": "sla"
+      },
+      "split": "test"
+    },
+    {
+      "category": "memory",
+      "request": "don't save anything — just read back key rbac-note from memory",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "rbac-note"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "memory",
+      "request": "memroy recall key maint-window",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "maint-window"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "recall key escalation-path",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "escalation-path"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "search memory for 'release'",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "query": "release"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "what is stored under key maint-window?",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "maint-window"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "send an info notification titled 'Maintenance starting'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Maintenance starting",
+        "level": "info"
+      },
+      "split": "test"
+    },
+    {
+      "category": "notification",
+      "request": "notify the user with a warning that api-02 cpu is at 91%",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "api-02 CPU at 91%",
+        "body": "Sustained CPU above the 90% threshold on api-02.",
+        "level": "warning"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "notification",
+      "request": "critical notification: db-01 is unhealthy — page the on-call",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "db-01 unhealthy — on-call page",
+        "body": "db-01 failed the health probe during the maintenance window.",
+        "level": "critical"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "post an info notice: 'Deploy 4f2c1e completed'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Deploy 4f2c1e completed",
+        "level": "info"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "warn the operator that the queue depth crossed 10k",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Queue depth crossed 10k",
+        "body": "Background job queue depth exceeded the 10,000 job warning line.",
+        "level": "warning"
+      },
+      "split": "test"
+    },
+    {
+      "category": "notification",
+      "request": "send a critical alert titled 'Checkout 5xx spike'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Checkout 5xx spike",
+        "body": "Checkout error budget is burning fast after deploy 4f2c1e.",
+        "level": "critical"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "notification",
+      "request": "the node will be restarted separately — right now just send a warning notification about the coming restart",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Restart scheduled",
+        "body": "A restart of the affected node is scheduled next; expect a short blip.",
+        "level": "warning"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "notifiy info: 'cron finished'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "cron finished",
+        "level": "info"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "info notice: 'Snapshot job finished'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Snapshot job finished",
+        "level": "info"
+      },
+      "split": "test"
+    },
+    {
+      "category": "notification",
+      "request": "warning that disk usage hit 92% on web-01",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Disk usage 92% on web-01",
+        "body": "Filesystem usage crossed the 90% warning threshold.",
+        "level": "warning"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "notification",
+      "request": "critical: 'Payment provider down' — alert the channel",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Payment provider down",
+        "body": "Upstream payment provider is not responding; checkout degraded.",
+        "level": "critical"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "send an info notification titled 'Maintenance window closed'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Maintenance window closed",
+        "level": "info"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "create an image of a lighthouse at stormy dusk",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A lone lighthouse on a rocky coast at stormy dusk, dramatic waves crashing, moody blue-grey sky, cinematic lighting, highly detailed",
+        "size": "1024x1024"
+      },
+      "split": "test"
+    },
+    {
+      "category": "content",
+      "request": "generate a photorealistic picture of a mountain lake at sunrise",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A serene mountain lake at sunrise, golden light on snow-capped peaks, mirror-like reflections, photorealistic, high detail",
+        "size": "1024x1024",
+        "style": "photorealistic"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "content",
+      "request": "produce a 768x1344 portrait-style image of a robot barista making coffee",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A friendly robot barista pouring latte art in a cozy cafe, warm ambient lighting, shallow depth of field, detailed, portrait orientation",
+        "size": "768x1344"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "illustrate a red race car on a city street at night",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A glossy red race car speeding through a city street at night, neon reflections on wet asphalt, motion blur, cinematic composition",
+        "size": "1024x1024"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "wide 1344x768 banner: abstract data-flow network art in teal",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "Abstract data-flow network artwork, teal and cyan palette, flowing lines and nodes on a dark background, clean modern banner composition",
+        "size": "1344x768"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "I need a visual for the incident postmortem cover: a burning server room, dramatic lighting",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A dramatic server room with red warning lights and light haze, dramatic contrast lighting, cinematic wide shot, high detail",
+        "size": "1024x1024"
+      },
+      "split": "test"
+    },
+    {
+      "category": "content",
+      "request": "geneate an image of a paper plane flying over clouds",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A white paper plane gliding above soft clouds, bright daylight, minimalist composition, crisp detail",
+        "size": "1024x1024"
+      },
+      "split": "validation"
+    },
+    {
+      "category": "content",
+      "request": "image of a hot air balloon over misty hills at dawn",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "Colorful hot air balloons floating over misty green hills at dawn, soft golden light, serene atmosphere, highly detailed",
+        "size": "1024x1024"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "generate: a minimalist desk setup with a laptop and plant, clean style",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A minimalist desk setup with a sleek laptop, a small potted plant and soft natural window light, clean modern style, crisp shadows",
+        "size": "1024x1024",
+        "style": "minimalist"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "864x1152 image of an astronaut reading a book on the moon",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "An astronaut sitting on the moon reading a book, Earth visible in the starry sky, cinematic and detailed",
+        "size": "864x1152"
+      },
+      "split": "train"
+    }
+  ]
+}

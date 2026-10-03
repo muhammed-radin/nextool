@@ -35,7 +35,7 @@ import { ChecklistItems, TaskChecklist } from '../task-checklist';
 import { EmptyState, ErrorCard, ExecutionStatusBadge, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
 import { reconcileExecutions, isTerminalExecutionStatus } from '@/lib/nexool/execution-merge';
 import {
-  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, Flag, Layers, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, Square, TerminalSquare, Wrench, X, Zap,
+  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, Flag, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, Square, TerminalSquare, Wrench, X, Zap,
 } from 'lucide-react';
 
 const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
@@ -52,8 +52,8 @@ function readTerminalPreference(): boolean {
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting', 'awaiting_approval', 'paused']);
 /** v1.0.3 §1: terminal states — Live Checklist/Terminal are removed once reached. */
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'stopped']);
-/** Events that should refresh task detail/plan/executions immediately (v1.0.3 §2 + v1.0.6 §16 + v1.0.10 §21). */
-const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm)|task\.(completed|failed|cancelled|started|paused|resumed)|planner\.(plan|parallel_batch|partial_failure|mode_selected|one_by_one_step_planned|one_by_one_step_completed|one_by_one_replanned|one_by_one_goal_reached)|subgoal\.created|live\.event\.)/;
+/** Events that should refresh task detail/plan/executions immediately (v1.0.3 §2 + v1.0.6 §16 + v1.0.10 §21 + v1.0.11 §13). */
+const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm|auto_execution)|task\.(completed|failed|cancelled|started|paused|resumed)|planner\.(plan|parallel_batch|partial_failure|mode_selected|one_by_one_step_planned|one_by_one_step_completed|one_by_one_replanned|one_by_one_goal_reached|recovery_started|recovery_plan_built|recovery_attempt|recovery_succeeded|recovery_failed|recovery_exhausted|main_plan_resumed|main_plan_aborted)|subgoal\.created|live\.event\.)/;
 
 function ExecutionCard({ ex }: { ex: ToolExecution }) {
   // v1.0.9 §15.1/§15.3-§15.6 — the status comes from the execution record via
@@ -553,6 +553,85 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
     </section>
   );
 
+  // v1.0.11 §14 — Task Preview RECOVERY UI. A failed pre-plan step creates a
+  // recovery subgoal with its own pre-plan; the main plan is frozen while it
+  // runs. This panel makes that visible (never hidden inside the generic
+  // execution list) — per spec: nested recovery steps, attempts, resume note
+  // or an honest exhausted message.
+  const recovery = state?.recovery;
+  const recoverySection = recovery ? (
+    <section
+      aria-label="Recovery"
+      className={cn(
+        'glass-panel rounded-lg p-4',
+        recovery.status === 'recovering' && 'ring-1 ring-amber-400/40',
+        recovery.status === 'exhausted' && 'ring-1 ring-rose-400/40',
+        recovery.status === 'resumed' && 'ring-1 ring-emerald-400/30',
+      )}
+    >
+      <SectionTitle
+        icon={<LifeBuoy className={cn('size-4', recovery.status === 'recovering' ? 'animate-pulse text-amber-300' : recovery.status === 'exhausted' ? 'text-rose-300' : 'text-emerald-300')} aria-hidden />}
+        title="Recovery"
+        desc="Failed pre-plan step → recovery subgoal with its own pre-plan → main plan resumes."
+        right={
+          <Badge
+            variant="outline"
+            className={cn(
+              'font-mono text-[10px]',
+              recovery.status === 'recovering' && 'border-amber-400/40 bg-amber-400/10 text-amber-300',
+              recovery.status === 'resumed' && 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300',
+              recovery.status === 'exhausted' && 'border-rose-400/40 bg-rose-400/10 text-rose-300',
+            )}
+          >
+            {recovery.status === 'recovering' ? `Recovering ${recovery.attempt}/${recovery.maxAttempts}` : recovery.status === 'resumed' ? `Main plan resumed (${recovery.attempt}/${recovery.maxAttempts})` : `Recovery failed ${recovery.attempt}/${recovery.maxAttempts}`}
+          </Badge>
+        }
+      />
+      <div className="mt-3 space-y-3">
+        <div>
+          <TechLabel className="text-[9px]">failed step</TechLabel>
+          <p className="mt-1 text-sm font-medium text-foreground">
+            <span aria-hidden className="mr-1.5 text-rose-300">✗</span>
+            {recovery.failedStepTitle ?? 'Plan step'}
+          </p>
+          <p className="mt-0.5 break-words font-mono text-[10px] text-rose-300/80">{recovery.reason}</p>
+        </div>
+        <div>
+          <TechLabel className="text-[9px]">recovery pre-plan</TechLabel>
+          {recovery.steps.length === 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground/70">Pre-planning the recovery…</p>
+          ) : (
+            <ul className="nextool-scroll mt-1 max-h-40 space-y-1 overflow-y-auto pr-1">
+              {recovery.steps.map((s) => (
+                <li key={s.id} className="flex items-start gap-2 text-xs text-foreground/85">
+                  <span aria-hidden className={cn('mt-0.5 shrink-0 font-mono', s.status === 'completed' ? 'text-emerald-300' : s.status === 'failed' ? 'text-rose-300' : s.status === 'in_progress' ? 'animate-pulse text-sky-300' : 'text-muted-foreground/50')}>
+                    {s.status === 'completed' ? '✓' : s.status === 'failed' ? '!' : s.status === 'in_progress' ? '→' : '○'}
+                  </span>
+                  <span>{s.title}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div>
+          <TechLabel className="text-[9px]">main plan</TechLabel>
+          {recovery.status === 'recovering' ? (
+            <p className="mt-1 text-xs text-amber-300/90">Frozen while recovery executes (attempt {recovery.attempt}/{recovery.maxAttempts})…</p>
+          ) : recovery.status === 'resumed' ? (
+            <p className="mt-1 flex items-start gap-1.5 text-xs text-emerald-300/90">
+              <span aria-hidden>↻</span>
+              <span>{recovery.resumeNote ?? 'Main plan resumed.'}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-rose-300/90">
+              Recovery failed — attempts: {recovery.attempt}/{recovery.maxAttempts}. Main task ended because the failed step could not be recovered.
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
+  ) : null;
+
   const toolsSection = (
     <section aria-label="Tool calls" className="glass-panel rounded-lg p-4">
       <SectionTitle icon={<Wrench className="size-4 text-sky-300" aria-hidden />} title="Tool calls" desc="Executions with params and results." />
@@ -961,6 +1040,7 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
             {subgoalCard}
             {isTerminal ? finalOutputSection : livePreview}
             {planSection}
+            {recoverySection}
           </TabsContent>
           <TabsContent value="timeline" className="mt-3 space-y-4 outline-none">
             {timelineSection}
@@ -985,6 +1065,8 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
         </div>
 
         {planSection}
+
+        {recoverySection}
 
         {isTerminal ? finalOutputSection : livePreview}
 

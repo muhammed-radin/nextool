@@ -33,10 +33,14 @@ export interface ToolSchema {
  * http/https, a virtual child_process layer and the common safe APIs
  * (fetch/XHR/alert/prompt); js-function gains the same common APIs.
  */
-export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs';
+export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs' | 'freedom-node';
 
-/** Environments a developer may author tools for in the Tool IDE (v1.0.5 §2.3). */
-export const AUTHORABLE_ENVIRONMENTS = ['js-function', 'nodejs', 'dynamic'] as const;
+/** Environments a developer may author tools for in the Tool IDE (v1.0.5 §2.3).
+ *  v1.0.11 — `freedom-node` joins the authorable set: an INTENTIONALLY
+ *  UNRESTRICTED environment with real host Node.js capabilities (real fs,
+ *  network, child processes, process). Gated server-side by the central
+ *  `fs` configuration section — fail closed. */
+export const AUTHORABLE_ENVIRONMENTS = ['js-function', 'nodejs', 'dynamic', 'freedom-node'] as const;
 export type AuthorableEnvironment = (typeof AUTHORABLE_ENVIRONMENTS)[number];
 
 export interface ToolDefinition {
@@ -59,7 +63,9 @@ export interface ToolDefinition {
   metadata?: Record<string, string>;
   /** v1.0.6 §9 — execute automatically inside tasks (default FALSE: tools
    *  require explicit user approval unless a global/task setting overrides).
-   *  Resolution precedence: global setting → per-task config → per-tool. */
+   *  v1.0.11 resolution precedence (resolveAutoExecution): global setting →
+   *  per-tool config → per-task config → default OFF. undefined = inherit
+   *  (the tool does not force an explicit decision). */
   autoExecute?: boolean;
   /** v1.0.7 §1 — tool-specific execution timeout in ms (optional). Overrides
    *  the global default; the runtime still caps every value at 1 hour
@@ -206,6 +212,32 @@ export interface MainState {
   currentEventSeq?: number;
   /** v1.0.6 §11 — paused flag mirrored from the task status column. */
   paused?: boolean;
+  /** v1.0.11 — pre-plan recovery state machine snapshot (Task Preview).
+   *  Present while a recovery subgoal is active, after a resume (status
+   *  'resumed', kept for observability) and after exhaustion. */
+  recovery?: TaskRecoveryState;
+}
+
+/** v1.0.11 — recovery of a FAILED pre-plan step. The main plan is frozen
+ *  while recovery runs; the recovery subgoal carries its OWN pre-plan. */
+export interface TaskRecoveryState {
+  /** 'recovering' = the main plan is paused, a recovery attempt is executing;
+   *  'resumed' = recovery succeeded, the main plan continues;
+   *  'exhausted' = all attempts failed, the task ends honestly. */
+  status: 'recovering' | 'resumed' | 'exhausted';
+  /** Human-readable failure the recovery addresses (bounded). */
+  reason: string;
+  failedStepId?: string;
+  failedStepTitle?: string;
+  attempt: number;
+  maxAttempts: number;
+  subgoalId?: string;
+  /** The recovery attempt's own pre-planned steps (PlanStep reuse). */
+  steps: PlanStep[];
+  startedAt: string;
+  updatedAt: string;
+  /** Set when status = 'resumed' — how the main plan continued. */
+  resumeNote?: string;
 }
 
 // ---------- Task ----------
@@ -264,6 +296,11 @@ export interface TaskConfig {
    *  to pre-plan planning only; one-by-one planning always generates exactly
    *  one step per call. Default = the global Settings value (default 10). */
   prePlanMaxSteps?: number;
+  /** v1.0.11 — per-task cap on recovery attempts per failed pre-plan step
+   *  (2..4, default = the global Settings value, default 4). One attempt =
+   *  observe failure → recovery subgoal → recovery pre-plan → execute →
+   *  verify. Pre-plan planner only; one-by-one replans by design. */
+  recoveryMaxAttempts?: number;
   sessionId?: string;
   context?: Record<string, unknown>;
 }
@@ -517,6 +554,9 @@ export interface NexToolSettings {
   /** v1.0.10 §16 — global default pre-plan maximum steps (default 10,
    *  hard maximum 122 via the central task.prePlanMaxSteps limits). */
   prePlanMaxSteps: number;
+  /** v1.0.11 — global default cap on recovery attempts per failed pre-plan
+   *  step (2..4 via the central task.recoveryMaxAttempts limits, default 4). */
+  recoveryMaxAttempts: number;
 }
 
 // ---------- Training (v1.0.2) ----------

@@ -341,6 +341,32 @@
       "unit": "count",
       "category": "task",
       "description": "v1.0.10 — Maximum number of steps the pre-plan planner may generate (default 10, hard maximum 122). Bounds the Settings default and per-task configuration. Relevant to pre-plan planning only — one-by-one planning generates exactly one step per call."
+    },
+    "recoveryMaxAttempts": {
+      "type": "integer",
+      "nullable": false,
+      "default": 4,
+      "min": 2,
+      "max": 4,
+      "unit": "count",
+      "category": "task",
+      "description": "v1.0.11 — Maximum recovery attempts per failed pre-plan step (default 4, allowed range 2..4). One attempt = observe failure → recovery subgoal → recovery pre-plan → execute recovery steps → verify. Exhausted recovery ends the task honestly; one-by-one planning replans by design and does not consume recovery attempts."
+    }
+  },
+  "fs": {
+    "enabled": {
+      "type": "boolean",
+      "nullable": false,
+      "default": true,
+      "category": "freedom-node",
+      "description": "v1.0.11 — Authorizes the freedom-node environment's unrestricted host capabilities (real filesystem, real network, child processes, process env). Configuration-file ONLY: the Settings UI deliberately exposes no control for this switch (fail closed when false — freedom-node executions are rejected)."
+    },
+    "restricted": {
+      "type": "boolean",
+      "nullable": false,
+      "default": false,
+      "category": "freedom-node",
+      "description": "v1.0.11 — Marks the freedom-node filesystem mode as restricted or not. false (default) = freedom-node uses the REAL host filesystem and is never redirected into the restricted tool VFS; true would re-enable restrictions. Distinct from the vfs.* section, which governs the restricted virtual filesystem used by js-function/nodejs tools."
     }
   }
 }

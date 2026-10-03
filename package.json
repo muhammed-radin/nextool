@@ -1,7 +1,7 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.10",
-  "description": "NexTool Q1 v1.0.10 — dual planner architecture (pre-plan + one-by-one) with per-task override, configurable pre-plan limits, task/observer pattern learning, and the upgraded 1.0.1 trained tool-selection model.",
+  "version": "1.0.11",
+  "description": "NexTool Q1 v1.0.11 — THE EMPOWERMENT: pre-plan failure recovery, the freedom-node unrestricted environment, the global-tool-task auto-execution hierarchy, and the upgraded 1.0.2 trained tool-selection model.",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",

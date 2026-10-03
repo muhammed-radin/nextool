@@ -16,9 +16,10 @@
  * planner so both strategies stay consistent; only the planning semantics
  * differ. All pure helpers are exported for deterministic unit tests.
  */
-import ZAI from 'z-ai-web-dev-sdk';
 import type { MainState, PlanStep, PlannerType, TaskMode, ToolDefinition } from '../types';
 import { emitEvent } from '../eventbus';
+// v1.0.11 §50 — shared cached client (one init per process).
+import { getZai } from '../core/coremodule';
 
 const PLANNER_TIMEOUT_MS = 25_000;
 
@@ -213,7 +214,7 @@ export async function planOneByOneStep(
   const nextIndex = Math.max(ctx.state.plan.length, 0);
 
   try {
-    const zai = await ZAI.create();
+    const zai = await getZai();
     const system = [
       'You are the One-by-one Planner of NexTool, a task-processing system (not a chatbot).',
       'You see the latest task state AFTER the previous step was executed and observed.',

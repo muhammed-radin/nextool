@@ -24,7 +24,7 @@ export interface ToolEntry {
   description: string;
   purpose?: string;
   category: string;
-  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs';
+  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs' | 'freedom-node';
   schema: ToolDefinition['schema'];
   handlerKind?: string;
   /** v1.0.5: dynamic handler configuration object (http_get url/timeout, …). */

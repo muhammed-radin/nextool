@@ -117,6 +117,23 @@ export interface ResolvedRuntimeLimits {
     eventQueueCap: number;
     /** v1.0.10 — pre-plan planner maximum steps (default 10, hard max 122). */
     prePlanMaxSteps: number;
+    /** v1.0.11 — maximum recovery attempts per failed pre-plan step
+     *  (default 4, allowed range 2..4). */
+    recoveryMaxAttempts: number;
+  };
+  /** v1.0.11 — freedom-node escape gate (vfs vs fs semantics).
+   *  `fs` governs the UNRESTRICTED freedom-node filesystem mode; the separate
+   *  `vfs` section above governs the RESTRICTED virtual filesystem used by
+   *  js-function/nodejs tools. The Settings UI deliberately exposes NO
+   *  control for this section — it is configuration-file only (fail closed). */
+  fs: {
+    /** true → freedom-node executions are authorized at all. false → the
+     *  runtime FAILS CLOSED: freedom-node executions are rejected. */
+    enabled: boolean;
+    /** false (default) → freedom-node uses the REAL host filesystem and is
+     *  never redirected into the restricted tool VFS. true would re-enable
+     *  restrictions for the freedom-node filesystem mode. */
+    restricted: boolean;
   };
 }
 
@@ -279,8 +296,28 @@ export function getResolvedLimits(): ResolvedRuntimeLimits {
       maxParallelToolCalls: num('task', 'maxParallelToolCalls'),
       eventQueueCap: num('task', 'eventQueueCap'),
       prePlanMaxSteps: num('task', 'prePlanMaxSteps'),
+      recoveryMaxAttempts: num('task', 'recoveryMaxAttempts'),
+    },
+    fs: {
+      enabled: bool('fs', 'enabled'),
+      restricted: bool('fs', 'restricted'),
     },
   };
+}
+
+/**
+ * v1.0.11 — the authoritative freedom-node escape gate, read SERVER-SIDE
+ * from the central configuration file at every execution. There is no API,
+ * no Settings control and no frontend path that can flip this — a
+ * self-hosted administrator edits config/configuration-limits.json.
+ * Fail closed: when the file cannot be read, freedom-node is NOT authorized.
+ */
+export function getFreedomFsConfig(): { enabled: boolean; restricted: boolean } {
+  try {
+    return getResolvedLimits().fs;
+  } catch {
+    return { enabled: false, restricted: true };
+  }
 }
 
 /** Resolve ONE property's metadata (throws when the path does not exist). */

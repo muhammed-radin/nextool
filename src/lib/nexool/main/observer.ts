@@ -1,9 +1,10 @@
 /**
  * NexTool Observer — interprets tool executions and checks goal completion.
  */
-import ZAI from 'z-ai-web-dev-sdk';
 import type { ToolExecution } from '../types';
 import { emitEvent } from '../eventbus';
+// v1.0.11 §50 — the shared cached client (one init per process, every path).
+import { getZai } from '../core/coremodule';
 
 const VERIFY_TIMEOUT_MS = 6_000;
 
@@ -89,7 +90,7 @@ export async function checkGoalComplete(
   }
 
   try {
-    const zai = await ZAI.create();
+    const zai = await getZai();
     const res = await Promise.race([
       zai.chat.completions.create({
         messages: [
@@ -129,4 +130,95 @@ export async function checkGoalComplete(
     });
   }
   return { complete: false, reason: 'Verification unavailable — assuming goal not yet complete.', engine: 'heuristic-fallback' };
+}
+
+// ---------- v1.0.11 — pre-plan recovery assessment ----------
+
+export interface RecoveryAssessment {
+  /** The failed condition has been resolved (step objective satisfied or the
+   *  blocking condition removed). */
+  resolved: boolean;
+  /** The main goal can safely continue. false ONLY when the Observer
+   *  determines the situation cannot safely proceed (end immediately). */
+  recoverable: boolean;
+  reason: string;
+  engine: 'llm-core' | 'heuristic-fallback';
+}
+
+/**
+ * v1.0.11 §10/§12 — Observer authority for recovery outcomes. Recovery
+ * succeeds when the failed condition is resolved OR the main goal can safely
+ * continue; recoverable=false ends the task immediately (no wasted retries).
+ *
+ * Heuristic fallback is deliberately CONSERVATIVE: resolved=false +
+ * recoverable=true — the failed step is re-queued and its real re-execution
+ * (verified by the normal flow) becomes the verification. A merely-completed
+ * recovery step status is never treated as sufficient proof on its own.
+ */
+export async function assessRecovery(
+  input: {
+    stepTitle: string;
+    stepDetail?: string;
+    failure: string;
+    recoverySteps: { title: string; status: string }[];
+    observations: string[];
+  },
+  reasoningLevel: number,
+  taskId?: string,
+): Promise<RecoveryAssessment> {
+  if (reasoningLevel > 2) {
+    try {
+      const zai = await getZai();
+      const res = await Promise.race([
+        zai.chat.completions.create({
+          messages: [
+            {
+              role: 'assistant' as const,
+              content: [
+                'You are the Observer of NexTool, assessing a FAILED plan step after a recovery attempt.',
+                'Decide:',
+                '- "resolved": the failed condition is now resolved (the step objective is satisfied by the recovery actions, or the blocking condition was removed).',
+                '- "recoverable": the main goal can safely continue. Use false ONLY when the situation clearly cannot proceed (required capability missing, unrecoverable environment).',
+                'Output STRICT JSON only: {"resolved": true|false, "recoverable": true|false, "reason": "one concise sentence"}',
+              ].join('\n'),
+            },
+            { role: 'user' as const, content: JSON.stringify(input) },
+          ],
+          thinking: { type: 'disabled' },
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Recovery assessment timed out')), VERIFY_TIMEOUT_MS),
+        ),
+      ]);
+      const content = res?.choices?.[0]?.message?.content ?? '';
+      const cleaned = content.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+      const start = cleaned.indexOf('{');
+      const end = cleaned.lastIndexOf('}');
+      if (start !== -1 && end > start) {
+        const parsed = JSON.parse(cleaned.slice(start, end + 1)) as { resolved?: unknown; recoverable?: unknown; reason?: unknown };
+        const reason = typeof parsed.reason === 'string' ? parsed.reason.slice(0, 300) : 'Observer recovery assessment.';
+        return {
+          resolved: parsed.resolved === true,
+          recoverable: parsed.recoverable !== false,
+          reason,
+          engine: 'llm-core',
+        };
+      }
+    } catch (err) {
+      console.error('[observer] recovery assessment failed, conservative fallback:', err);
+      void emitEvent({
+        taskId,
+        type: 'observer.verify_fallback',
+        source: 'observer',
+        message: 'LLM recovery assessment unavailable — conservative fallback used (step re-queued for real verification).',
+        priority: 8,
+      });
+    }
+  }
+  return {
+    resolved: false,
+    recoverable: true,
+    reason: 'Assessment unavailable — the failed step is re-queued; its re-execution provides the verification.',
+    engine: 'heuristic-fallback',
+  };
 }

@@ -28,8 +28,10 @@ export interface PortableTool {
   description: string;
   purpose?: string;
   category: string;
-  /** v1.0.5: "nodejs" joins the portable set (§3.10) — validated on import. */
-  environment: 'js-function' | 'nodejs' | 'dynamic' | string;
+  /** v1.0.5: "nodejs" joins the portable set (§3.10) — validated on import.
+   *  v1.0.11: "freedom-node" joins too — the environment string round-trips
+   *  EXACTLY (§30); runtime authorization stays configuration-gated. */
+  environment: 'js-function' | 'nodejs' | 'dynamic' | 'freedom-node' | string;
   toolVersion?: string;
   enabled?: boolean;
   /** The project's actual tool input schema (ToolParamDef[] wrapped). */
@@ -92,8 +94,10 @@ export interface ImportValidationResult {
 
 const TOOL_NAME_RE = /^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*$/;
 const PARAM_TYPES = ['string', 'number', 'boolean', 'object', 'array'];
-/** v1.0.5 §3.10 — environments a portable tool file may declare. */
-const IMPORTABLE_ENVIRONMENTS = ['js-function', 'dynamic', 'nodejs'] as const;
+/** v1.0.5 §3.10 — environments a portable tool file may declare.
+ *  v1.0.11 §30 — freedom-node joins the set (import/export round trips
+ *  preserve the environment exactly). */
+const IMPORTABLE_ENVIRONMENTS = ['js-function', 'dynamic', 'nodejs', 'freedom-node'] as const;
 
 /**
  * Parse + validate an imported tool JSON (§14/§15).
@@ -124,10 +128,10 @@ export function validateImportedTool(raw: unknown): ImportValidationResult {
     errors.push(`"environment" must be one of ${IMPORTABLE_ENVIRONMENTS.join(', ')} — got "${environment}". Read-only registry tools (builtin/virtual-env) cannot be imported; duplicate them into a function tool instead.`);
   }
 
-  // function code — REQUIRED for both function environments (§12: source as text)
+  // function code — REQUIRED for all function environments (§12: source as text)
   const fnRaw = obj.functionSource ?? (obj as { function?: unknown }).function;
   const functionSource = typeof fnRaw === 'string' ? fnRaw : undefined;
-  if (environment === 'js-function' || environment === 'nodejs') {
+  if (environment === 'js-function' || environment === 'nodejs' || environment === 'freedom-node') {
     if (!functionSource || !functionSource.trim()) {
       errors.push(`"functionSource" is required for ${environment} tools (the JavaScript source code as text).`);
     } else if (functionSource.length > 64_000) {

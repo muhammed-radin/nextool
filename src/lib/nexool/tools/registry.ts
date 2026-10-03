@@ -15,6 +15,12 @@ import { notificationSend } from './notify';
 import { imageGenerate } from './image';
 import { runJsTool, validateFunctionSource, JS_TOOL_TIMEOUT_MS } from './js-runner';
 import { runNodeTool, validateNodeFunctionSource, NODE_TOOL_TIMEOUT_MS } from './node-runner';
+import {
+  runFreedomNodeTool,
+  validateFreedomNodeSource,
+  isFreedomNodeAuthorized,
+  freedomDisabledError,
+} from './freedom-node-runner';
 import { resolveNetworkRequestTimeoutForExecution, clampNetworkTimeoutMs } from './network-timeout';
 import { openVirtualFs } from './vfs';
 import { createNetworkAccounting } from './sandbox-net';
@@ -27,6 +33,17 @@ function validateFunctionSourceCached(source: string): { ok: true } | { ok: fals
   const cached = syntaxCache.get(key);
   if (cached) return cached;
   const result = validateFunctionSource(source);
+  if (syntaxCache.size > 50) syntaxCache.clear();
+  syntaxCache.set(key, result);
+  return result;
+}
+
+/** v1.0.11 — freedom-node syntax validation (same authoring contract). */
+function validateFreedomSourceCached(source: string): { ok: true } | { ok: false; error: string } {
+  const key = `freedom:${source.length}:${source}`;
+  const cached = syntaxCache.get(key);
+  if (cached) return cached;
+  const result = validateFreedomNodeSource(source);
   if (syntaxCache.size > 50) syntaxCache.clear();
   syntaxCache.set(key, result);
   return result;
@@ -266,6 +283,15 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
     const nodeHandler = makeNodeHandler(def.name, def.functionSource, def.networkTimeoutMs);
     s.handlers.set(def.name, nodeHandler);
     return nodeHandler;
+  }
+
+  // v1.0.11 — freedom-node executes through the DEDICATED unrestricted runner
+  // (§31): the restricted js/node runners are untouched. The real-fs/network
+  // escape is gated server-side by the central `fs` configuration (fail closed).
+  if (def.environment === 'freedom-node' && typeof def.functionSource === 'string' && def.functionSource.trim()) {
+    const freedomHandler = makeFreedomNodeHandler(def.name, def.functionSource);
+    s.handlers.set(def.name, freedomHandler);
+    return freedomHandler;
   }
 
   if (def.environment === 'dynamic' && def.handlerKind) {
@@ -575,7 +601,7 @@ export interface JsToolRegistration {
   functionSource: string;
   toolVersion?: string;
   /** v1.0.5: function-sandbox environment — js-function (default) or nodejs. */
-  environment?: 'js-function' | 'nodejs';
+  environment?: 'js-function' | 'nodejs' | 'freedom-node';
   /** v1.0.5: structured user metadata key/value pairs. */
   metadata?: Record<string, string>;
   /** v1.0.6 §9.2: per-tool auto-execute configuration (persists with the tool). */
@@ -588,13 +614,19 @@ export interface JsToolRegistration {
 }
 
 /**
- * Register a function-sandbox tool (js-function or nodejs — Tool IDE "Save").
- * Validates name uniqueness, schema shape and function syntax per environment;
- * broken definitions never become active tools (v1.0.2 §24/§25).
+ * Register a function-sandbox tool (js-function | nodejs | freedom-node —
+ * Tool IDE "Save"). Validates name uniqueness, schema shape and function
+ * syntax per environment; broken definitions never become active tools
+ * (v1.0.2 §24/§25). freedom-node registers like the other function
+ * environments; its RUNTIME escape stays gated by the central fs config.
  */
 export async function registerJsTool(input: JsToolRegistration): Promise<ToolEntryFull> {
   await ensureToolsSeeded();
-  const environment = input.environment === 'nodejs' ? 'nodejs' : 'js-function';
+  const environment = input.environment === 'nodejs'
+    ? 'nodejs'
+    : input.environment === 'freedom-node'
+      ? 'freedom-node'
+      : 'js-function';
   if (!TOOL_NAME_RE.test(input.name)) {
     throw new ToolFailure('Tool name must match pattern "namespace.action" (lowercase, dots/dashes allowed).', 'INVALID_PARAMS');
   }
@@ -606,7 +638,9 @@ export async function registerJsTool(input: JsToolRegistration): Promise<ToolEnt
   }
   const syntax = environment === 'nodejs'
     ? validateNodeSourceCached(input.functionSource)
-    : validateFunctionSourceCached(input.functionSource);
+    : environment === 'freedom-node'
+      ? validateFreedomSourceCached(input.functionSource)
+      : validateFunctionSourceCached(input.functionSource);
   if (!syntax.ok) throw new ToolFailure(`Function source rejected: ${syntax.error}`, 'INVALID_FUNCTION');
   if (!input.schema || !Array.isArray(input.schema.properties)) {
     throw new ToolFailure('schema with a properties array is required.', 'INVALID_PARAMS');
@@ -622,7 +656,10 @@ export async function registerJsTool(input: JsToolRegistration): Promise<ToolEnt
     functionSource: input.functionSource,
     toolVersion: input.toolVersion?.trim() || undefined,
     ...(input.metadata && Object.keys(input.metadata).length > 0 ? { metadata: input.metadata } : {}),
-    autoExecute: input.autoExecute === true, // §9.1 documented default false
+    // v1.0.11 §40 — tri-state auto-execution: undefined = INHERIT (the tool
+    // does not force a decision; the hierarchy resolves it). An explicit
+    // boolean persists as the tool-level config.
+    ...(input.autoExecute !== undefined ? { autoExecute: input.autoExecute === true } : {}),
     // v1.0.7 §1 — tool-specific execution timeout (runtime also clamps).
     ...(typeof input.timeoutMs === 'number' && Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
       ? { timeoutMs: Math.min(Math.max(Math.round(input.timeoutMs), 1_000), 3_600_000) }
@@ -674,10 +711,11 @@ export async function updateTool(
 
   const currentDef = JSON.parse(current.definition) as ToolDefinition;
   const currentEnvironment = current.environment as ToolDefinition['environment'];
-  // v1.0.5 — js-function ⇄ nodejs switches are allowed for user function tools
-  // (both store functionSource); dynamic/builtin/virtual-env keep their env.
+  // v1.0.5 — js-function ⇄ nodejs ⇄ freedom-node switches are allowed for
+  // user function tools (all store functionSource); dynamic/builtin/virtual-env
+  // keep their env.
   const nextEnvironment: ToolDefinition['environment'] =
-    input.environment !== undefined && (currentEnvironment === 'js-function' || currentEnvironment === 'nodejs')
+    input.environment !== undefined && (currentEnvironment === 'js-function' || currentEnvironment === 'nodejs' || currentEnvironment === 'freedom-node')
       ? input.environment
       : currentEnvironment;
   const nextSchema = input.schema && Array.isArray(input.schema.properties) ? input.schema : currentDef.schema;
@@ -690,8 +728,11 @@ export async function updateTool(
   const storedMetadata = currentDef.metadata ?? {};
   const nextMetadata = input.metadata !== undefined ? input.metadata : storedMetadata;
   if (input.metadata !== undefined) assertStringRecord(input.metadata, 'metadata');
-  // v1.0.6 §9.2 — autoExecute persists with the tool (undefined keeps stored value).
-  const nextAutoExecute = input.autoExecute !== undefined ? input.autoExecute === true : currentDef.autoExecute === true;
+  // v1.0.6 §9.2/v1.0.11 §40 — autoExecute persists with the tool. An explicit
+  // boolean replaces it; undefined KEEPS the inherit state (no coercion).
+  const nextAutoExecute = input.autoExecute !== undefined
+    ? input.autoExecute === true
+    : currentDef.autoExecute;
   // v1.0.7 §1 — per-tool execution timeout (undefined keeps stored value; the
   // runtime clamps the stored definition as defense in depth).
   const nextTimeoutMs = input.timeoutMs !== undefined
@@ -708,13 +749,15 @@ export async function updateTool(
       : undefined)
     : (typeof currentDef.networkTimeoutMs === 'number' && currentDef.networkTimeoutMs > 0 ? currentDef.networkTimeoutMs : undefined);
 
-  if (nextEnvironment === 'js-function' || nextEnvironment === 'nodejs') {
+  if (nextEnvironment === 'js-function' || nextEnvironment === 'nodejs' || nextEnvironment === 'freedom-node') {
     if (typeof nextSource !== 'string' || nextSource.trim().length === 0) {
       throw new ToolFailure(`${nextEnvironment} tools require functionSource.`, 'INVALID_PARAMS');
     }
     const syntax = nextEnvironment === 'nodejs'
       ? validateNodeSourceCached(nextSource)
-      : validateFunctionSourceCached(nextSource);
+      : nextEnvironment === 'freedom-node'
+        ? validateFreedomSourceCached(nextSource)
+        : validateFunctionSourceCached(nextSource);
     if (!syntax.ok) throw new ToolFailure(`Function source rejected: ${syntax.error}`, 'INVALID_FUNCTION');
   }
 
@@ -744,7 +787,7 @@ export async function updateTool(
     category: nextCategory,
     environment: nextEnvironment,
     schema: nextSchema,
-    functionSource: nextEnvironment === 'js-function' || nextEnvironment === 'nodejs' ? nextSource ?? undefined : undefined,
+    functionSource: nextEnvironment === 'js-function' || nextEnvironment === 'nodejs' || nextEnvironment === 'freedom-node' ? nextSource ?? undefined : undefined,
     toolVersion: nextVersion ?? undefined,
     autoExecute: nextAutoExecute,
     ...(nextTimeoutMs !== undefined ? { timeoutMs: nextTimeoutMs } : {}),
@@ -763,7 +806,7 @@ export async function updateTool(
       category: nextCategory,
       environment: nextEnvironment,
       definition: JSON.stringify(nextDef),
-      functionSource: nextEnvironment === 'js-function' || nextEnvironment === 'nodejs' ? nextSource : null,
+      functionSource: nextEnvironment === 'js-function' || nextEnvironment === 'nodejs' || nextEnvironment === 'freedom-node' ? nextSource : null,
       toolVersion: nextVersion,
       ...(currentEnvironment === 'dynamic' ? { handlerKind: nextHandlerKind ?? null, handlerConfig: JSON.stringify(nextHandlerConfig ?? {}) } : {}),
       ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
@@ -879,6 +922,35 @@ function makeNodeHandler(name: string, source: string, networkTimeoutMs?: number
 }
 
 /**
+ * v1.0.11 — freedom-node handler: the DEDICATED unrestricted runtime (§31).
+ * No VFS session, no Network Policy accounting — REAL fs/network/process.
+ * The executor-level timeout/cancellation still wraps this handler (§32).
+ */
+function makeFreedomNodeHandler(name: string, source: string): ToolHandler {
+  return async (params, ctx) => {
+    const run = await runFreedomNodeTool(
+      source,
+      params,
+      {
+        executionId: ctx.executionId,
+        taskId: ctx.taskId,
+        mode: 'production',
+        now: new Date().toISOString(),
+        log: () => {}, // production logs are intentionally discarded (kept capped in tests)
+      },
+      {
+        toolId: name,
+        timeoutMs: ctx.timeoutMs,
+      },
+    );
+    if (!run.ok) {
+      throw new ToolFailure(run.error?.message ?? 'freedom-node tool failed', run.error?.code ?? 'TOOL_FAILURE');
+    }
+    return run.result;
+  };
+}
+
+/**
  * Test-only execution of a function tool source (Tool IDE "Test Tool").
  * v1.0.5: `environment` routes the source to the matching sandbox —
  * "js-function" (default) or "nodejs". The runner is the SAME one production
@@ -893,7 +965,7 @@ export async function testToolSource(
   params: Record<string, unknown>,
   opts: {
     taskId?: string;
-    environment?: 'js-function' | 'nodejs';
+    environment?: 'js-function' | 'nodejs' | 'freedom-node';
     /** v1.0.7 §1 — effective test execution timeout (ms). */
     timeoutMs?: number;
     /** v1.0.9 §14 — Network Policy request timeout for the test run (ms). */
@@ -918,6 +990,21 @@ export async function testToolSource(
     log: () => {},
   };
   try {
+    // v1.0.11 — freedom-node test runs go through the DEDICATED freedom
+    // runner with the same server-side fs gate as production (fail closed).
+    // The gate is checked BEFORE the sandbox is built; a denied test reports
+    // FREEDOM_DISABLED honestly instead of silently degrading the sandbox.
+    if (opts.environment === 'freedom-node') {
+      if (!isFreedomNodeAuthorized()) {
+        return { ok: false, error: freedomDisabledError(), logs: [], durationMs: Date.now() - started };
+      }
+      const run = await runFreedomNodeTool(source, params, ctx, {
+        toolId: scratchToolId,
+        interactions: createTestInteractions(),
+        timeoutMs: opts.timeoutMs,
+      });
+      return { ...run, durationMs: Date.now() - started };
+    }
     const run = opts.environment === 'nodejs'
       ? await runNodeTool(source, params, ctx, {
         toolId: scratchToolId,

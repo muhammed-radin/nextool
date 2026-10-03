@@ -50,7 +50,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { JsonTree } from '../json-tree';
 import {
-  ApiClientError, deleteTool, getToolEnvironmentInfo, registerJsTool, registerTool, testTool, updateTool,
+  ApiClientError, deleteTool, getSettings, getToolEnvironmentInfo, registerJsTool, registerTool, testTool, updateTool,
   type HandlerKindDescriptor, type ToolEnvironmentInfo,
 } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
@@ -98,7 +98,9 @@ const NODEJS_DEFAULT_SOURCE = `async function execute(params, context) {
 }
 `;
 
-type AuthorableEnv = 'js-function' | 'nodejs' | 'dynamic';
+type AuthorableEnv = 'js-function' | 'nodejs' | 'dynamic' | 'freedom-node';
+/** v1.0.11 §40 — tri-state tool-level auto-execution. */
+type AutoExecuteChoice = 'inherit' | 'enabled' | 'disabled';
 
 interface ToolTestState {
   running: boolean;
@@ -133,8 +135,9 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   const [category, setCategory] = useState(initial?.category ?? 'utility');
   const [toolVersion, setToolVersion] = useState(initial?.toolVersion ?? '1.0.0');
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
-  // v1.0.6 §9.2 — per-tool auto-execute (default FALSE: approval required).
-  const [autoExecute, setAutoExecute] = useState<boolean>(initial?.autoExecute ?? false);
+  // v1.0.6 §9.2 / v1.0.11 §40 — tri-state per-tool auto-execution:
+  // undefined = INHERIT (the hierarchy decides), true = force ON, false = OFF.
+  const [autoExecute, setAutoExecute] = useState<boolean | undefined>(initial?.autoExecute);
   // v1.0.7 §1 — tool-specific execution timeout (ms). Empty string = use the
   // global default (10 s). Stored value round-trips through edit/duplicate.
   const [timeoutMsInput, setTimeoutMsInput] = useState<string>(
@@ -146,7 +149,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   // never reach this editor (read-only), so the fallback is the authorable default.
   const [environment, setEnvironment] = useState<AuthorableEnv>(() => {
     const env = initial?.environment;
-    return env === 'nodejs' || env === 'dynamic' ? env : 'js-function';
+    return env === 'nodejs' || env === 'dynamic' || env === 'freedom-node' ? env : 'js-function';
   });
   /** dynamic tools can only ever be dynamic (handler-based storage). */
   const envLockedDynamic = initial?.environment === 'dynamic';
@@ -191,6 +194,16 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     getToolEnvironmentInfo()
       .then((d) => { if (alive) { setEnvInfo(d); setEnvInfoError(null); } })
       .catch((e) => { if (alive) setEnvInfoError(e instanceof ApiClientError ? e.message : 'Environment config unavailable'); });
+    return () => { alive = false; };
+  }, []);
+
+  // ---- v1.0.11 §40 — effective auto-execution display needs the GLOBAL layer.
+  const [globalAutoExec, setGlobalAutoExec] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getSettings()
+      .then((s) => { if (alive) setGlobalAutoExec(s.autoExecuteTools === true); })
+      .catch(() => { if (alive) setGlobalAutoExec(null); });
     return () => { alive = false; };
   }, []);
 
@@ -328,7 +341,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           schema: parsed.schema,
           functionSource: code,
           metadata,
-          autoExecute,
+          ...(autoExecute !== undefined ? { autoExecute } : {}),
           timeoutMs,
           enabled,
         });
@@ -343,7 +356,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           schema: parsed.schema,
           functionSource: code,
           metadata,
-          autoExecute,
+          ...(autoExecute !== undefined ? { autoExecute } : {}),
           timeoutMs,
           enabled,
         });
@@ -406,7 +419,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     try {
       const result = await testTool({
         functionSource: code,
-        environment: environment === 'nodejs' ? 'nodejs' : undefined,
+        environment: environment === 'nodejs' ? 'nodejs' : environment === 'freedom-node' ? 'freedom-node' : undefined,
         params,
       });
       setTest({
@@ -463,7 +476,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   // ---- Monaco setup (schema-driven IntelliSense §18-21, nodejs §3.7) ----
 
   const extraLib = useMemo(
-    () => environment === 'nodejs'
+    () => environment === 'nodejs' || environment === 'freedom-node'
       ? buildNodeExtraLib(parsedSchema, envInfo?.node)
       : buildToolExtraLib(parsedSchema),
     [parsedSchema, environment, envInfo],
@@ -569,15 +582,42 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
         </div>
         <Switch id="tool-enabled" checked={enabled} onCheckedChange={(v) => { setEnabled(v); markDirty(); }} aria-label="Tool enabled" />
       </div>
-      {/* v1.0.6 §9.2/§17 — per-tool Auto-Execute (default false = approval required) */}
-      <div className="flex items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
-        <div className="min-w-0">
-          <Label htmlFor="tool-autoexecute" className="text-sm">Auto-Execute Tools</Label>
-          <p className="text-[11px] text-muted-foreground">
-            When OFF (default) tasks ask for approval before running this tool. A global/task-level override may still allow it.
-          </p>
+      {/* v1.0.6 §9.2 / v1.0.11 §40 — tri-state per-tool Auto-Execution with
+          a visible effective-source display (§40: make the precedence visible). */}
+      <div className="rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <Label htmlFor="tool-autoexecute" className="text-sm">Auto-execution</Label>
+            <p className="text-[11px] text-muted-foreground">
+              Hierarchy: Global (highest) → this tool → Task Console (lowest).
+            </p>
+          </div>
+          <Select
+            value={autoExecute === true ? 'enabled' : autoExecute === false ? 'disabled' : 'inherit'}
+            onValueChange={(v: AutoExecuteChoice) => {
+              setAutoExecute(v === 'enabled' ? true : v === 'disabled' ? false : undefined);
+              markDirty();
+            }}
+          >
+            <SelectTrigger id="tool-autoexecute" className="min-h-11 w-[150px] shrink-0 border-white/[0.09] bg-white/[0.04] text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="glass-strong">
+              <SelectItem value="inherit">Inherit</SelectItem>
+              <SelectItem value="enabled">Enabled</SelectItem>
+              <SelectItem value="disabled">Disabled</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-        <Switch id="tool-autoexecute" checked={autoExecute} onCheckedChange={(v) => { setAutoExecute(v); markDirty(); }} aria-label="Auto-execute this tool in tasks" />
+        <p aria-live="polite" className="mt-2 font-mono text-[10px] text-muted-foreground/80">
+          {globalAutoExec === true
+            ? 'Effective auto-execution: GLOBAL ENABLED — this setting cannot override the global switch.'
+            : autoExecute === true
+              ? 'Effective auto-execution: TOOL ENABLED — runs without approval unless the global switch forces a decision.'
+              : autoExecute === false
+                ? 'Effective auto-execution: TOOL DISABLED — approval required unless the Task Console enables it.'
+                : 'Effective auto-execution: INHERIT — approval required unless the Task Console enables it.'}
+        </p>
       </div>
       {!isNew && sessionToolName ? (
         <p className="font-mono text-[10px] text-muted-foreground">
@@ -630,6 +670,17 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
       ) : null}
       {environment === 'nodejs' ? (
         <p className="font-mono text-[10px] text-slate-500">sandbox: node:vm + module allowlist · require()/import() restricted · {envInfo ? `${Object.keys(envInfo.node.modules).length} modules allowed` : 'loading allowlist…'}</p>
+      ) : null}
+      {/* v1.0.11 §29 — the freedom-node warning, exactly as specified. */}
+      {environment === 'freedom-node' ? (
+        <div className="space-y-1.5" role="alert">
+          <p className="rounded-md border border-amber-400/30 bg-amber-400/[0.07] p-2.5 text-[11px] font-medium text-amber-300">
+            <span className="font-mono">freedom-node</span> — Full host Node.js access. File system, network, processes, and host-level capabilities may be available.
+          </p>
+          <p className="font-mono text-[10px] text-slate-500">
+            NOT the restricted js-function sandbox · real fs/network/child_process/process · authorized only by the fs section of config/configuration-limits.json (configuration-file gate; Settings cannot enable it) · gate now: {envInfo?.freedomNode ? (envInfo.freedomNode.enabled ? 'AUTHORIZED' : 'DENIED (fail closed)') : 'checking…'}
+          </p>
+        </div>
       ) : null}
 
       {/* v1.0.7 §1 + v1.0.8 §9.5 — tool-specific execution timeout (overrides
@@ -1022,7 +1073,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
 
   const referencesPanel = (
     <div className="space-y-2">
-      <TechLabel>{environment === 'nodejs' ? 'runtime references — restricted Node.js sandbox' : 'runtime references — the real sandbox API'}</TechLabel>
+      <TechLabel>{environment === 'freedom-node' ? 'runtime references — freedom Node.js (unrestricted)' : environment === 'nodejs' ? 'runtime references — restricted Node.js sandbox' : 'runtime references — the real sandbox API'}</TechLabel>
       <div className="space-y-1.5">
         {references.map((r) => (
           <div key={r.name} className="glass-card rounded-md px-3 py-2">
@@ -1031,7 +1082,16 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           </div>
         ))}
       </div>
-      {environment === 'nodejs' ? nodeEnvPanel : (
+      {environment === 'freedom-node' ? (
+        <div className="space-y-2">
+          <p className="rounded-md border border-amber-400/30 bg-amber-400/[0.07] p-2.5 text-[11px] text-amber-300">
+            Unrestricted runtime: REAL <span className="font-mono">require()</span>/<span className="font-mono">import()</span> of Node builtins (fs, path, os, child_process, process …) and npm packages, the REAL global fetch (no Network Policy caps), the real <span className="font-mono">process</span> object and <span className="font-mono">Buffer</span>. Only the task-lifecycle bounds (deadline, sync cap, result transport) still apply. Never dump <span className="font-mono">process.env</span> secrets into logs.
+          </p>
+          {envInfo?.freedomNode ? (
+            <p className="font-mono text-[10px] text-slate-500">fs gate: {envInfo.freedomNode.enabled ? 'AUTHORIZED' : 'DENIED (fail closed)'} · fs.enabled {String(envInfo.freedomNode.fsConfig.enabled)} · fs.restricted {String(envInfo.freedomNode.fsConfig.restricted)}</p>
+          ) : null}
+        </div>
+      ) : environment === 'nodejs' ? nodeEnvPanel : (
         <p className="text-[11px] text-muted-foreground">
           Lightweight restricted runtime: standard JS, controlled fetch, async alert/prompt and timers — no Node modules.
           See docs/tool-development.md for the full guide.
@@ -1047,7 +1107,8 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
                 <tr className="border-b border-white/[0.08]">
                   <th scope="col" className="py-1.5 pr-2 font-mono text-[9px] font-normal uppercase tracking-wider text-muted-foreground">Capability</th>
                   <th scope="col" className="py-1.5 pr-2 font-mono text-[9px] font-normal uppercase tracking-wider text-muted-foreground">js-function</th>
-                  <th scope="col" className="py-1.5 font-mono text-[9px] font-normal uppercase tracking-wider text-muted-foreground">nodejs</th>
+                  <th scope="col" className="py-1.5 pr-2 font-mono text-[9px] font-normal uppercase tracking-wider text-muted-foreground">nodejs</th>
+                  <th scope="col" className="py-1.5 font-mono text-[9px] font-normal uppercase tracking-wider text-muted-foreground">freedom-node</th>
                 </tr>
               </thead>
               <tbody>
@@ -1055,7 +1116,8 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
                   <tr key={c.capability} className="border-b border-white/[0.04]">
                     <td className="py-1.5 pr-2 align-top font-mono text-[10px] text-sky-100/90">{c.capability}</td>
                     <td className="py-1.5 pr-2 align-top text-[10px] text-muted-foreground">{c.jsFunction}</td>
-                    <td className="py-1.5 align-top text-[10px] text-muted-foreground">{c.nodejs}</td>
+                    <td className="py-1.5 pr-2 align-top text-[10px] text-muted-foreground">{c.nodejs}</td>
+                    <td className="py-1.5 align-top text-[10px] text-muted-foreground">{c.freedomNode ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1080,7 +1142,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
         <p className="text-[11px] text-muted-foreground">
           {environment === 'dynamic'
             ? 'Runs the REGISTERED handler in the sandbox with mode:"test".'
-            : <>Runs the <span className="text-foreground/80">current editor source</span> in the {environment === 'nodejs' ? 'Node.js' : 'js'} sandbox with <span className="font-mono text-foreground/80">mode:&quot;test&quot;</span>.</>}
+            : <>Runs the <span className="text-foreground/80">current editor source</span> in the {environment === 'freedom-node' ? 'freedom Node.js (unrestricted — fs-gated)' : environment === 'nodejs' ? 'Node.js' : 'js'} sandbox with <span className="font-mono text-foreground/80">mode:&quot;test&quot;</span>.</>}
         </p>
       </div>
 
@@ -1178,7 +1240,9 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
     ? 'Dynamic tools run a registered handler — configure it here; no custom code.'
     : environment === 'nodejs'
       ? 'async function execute(params, context) — restricted Node.js sandbox (allowlisted modules only).'
-      : 'async function execute(params, context) — IntelliSense comes from your schema.';
+      : environment === 'freedom-node'
+        ? 'async function execute(params, context) — UNRESTRICTED runtime: real fs/network/process/npm (configuration-file fs gate).'
+        : 'async function execute(params, context) — IntelliSense comes from your schema.';
 
   return (
     <div className="space-y-4">
@@ -1193,7 +1257,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
               {isNew ? (sessionToolName === null && dirty ? 'Duplicate Tool' : 'New Tool') : `Edit ${sessionToolName}`}
             </h2>
             <p className="text-xs text-muted-foreground">
-              Tool IDE — {environment === 'nodejs' ? 'restricted Node.js sandbox' : environment === 'dynamic' ? 'dynamic handler tool' : 'sandboxed JavaScript function editor'}
+              Tool IDE — {environment === 'freedom-node' ? 'freedom Node.js (unrestricted, fs-gated)' : environment === 'nodejs' ? 'restricted Node.js sandbox' : environment === 'dynamic' ? 'dynamic handler tool' : 'sandboxed JavaScript function editor'}
             </p>
           </div>
           <Badge variant="outline" className="ml-1 shrink-0 border-sky-400/30 bg-sky-400/[0.07] font-mono text-[10px] text-sky-300">{environment}</Badge>

@@ -159,7 +159,7 @@ export interface JsToolPayload {
   category?: string;
   toolVersion?: string;
   /** v1.0.5: js-function (default) or nodejs — the restricted sandboxes. */
-  environment?: 'js-function' | 'nodejs';
+  environment?: 'js-function' | 'nodejs' | 'freedom-node';
   schema: ToolDefinition['schema'];
   functionSource: string;
   /** v1.0.5: structured metadata key/value pairs. */
@@ -211,7 +211,7 @@ export const testTool = (payload: {
   name?: string;
   functionSource?: string;
   /** v1.0.5: sandbox for an unsaved source — js-function (default) | nodejs. */
-  environment?: 'js-function' | 'nodejs';
+  environment?: 'js-function' | 'nodejs' | 'freedom-node';
   params?: Record<string, unknown>;
   /** v1.0.7 §1: effective execution timeout for the test run (ms). */
   timeoutMs?: number;
@@ -354,8 +354,16 @@ export interface ToolEnvironmentInfo {
     limits: { timeoutMs: number; maxOutputBytes: number; maxProcessesPerExecution: number; maxPipeStages: number; maxArgs: number; npmMaxPackages: number };
     virtualCommands: string[];
   };
-  /** v1.0.6 §8 — capability matrix generated from the real runtime config. */
-  capabilities?: { capability: string; jsFunction: string; nodejs: string }[];
+  /** v1.0.6 §8 — capability matrix generated from the real runtime config.
+   *  v1.0.11 — the freedomNode column describes the unrestricted environment. */
+  capabilities?: { capability: string; jsFunction: string; nodejs: string; freedomNode?: string }[];
+  /** v1.0.11 §20/§29 — freedom-node runtime reference (honest gate state). */
+  freedomNode?: {
+    enabled: boolean;
+    fsConfig: { enabled: boolean; restricted: boolean };
+    note: string;
+    preservedLimits: Record<string, unknown>;
+  };
   node: NodeEnvironmentInfo;
 }
 

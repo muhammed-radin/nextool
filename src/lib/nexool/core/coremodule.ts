@@ -84,6 +84,45 @@ function buildUserMessage(input: DecideInput): string {
   });
 }
 
+/**
+ * v1.0.11 §50 — inference-path optimization. The system prompt is CONSTANT:
+ * build it once (module-level) instead of per call. The ZAI client is cached
+ * process-wide (a stateless HTTP wrapper) with a mutex so concurrent
+ * decisions share one initialization; a failed creation clears the cache so
+ * the next call retries honestly.
+ */
+let cachedSystemPrompt: string | null = null;
+function getSystemPrompt(): string {
+  if (cachedSystemPrompt === null) cachedSystemPrompt = buildSystemPrompt();
+  return cachedSystemPrompt;
+}
+
+const gZai = globalThis as unknown as { __nextoolZai?: Promise<Awaited<ReturnType<typeof ZAI.create>>> | null };
+/**
+ * v1.0.11 §50 — the shared, cached ZAI client for EVERY inference path
+ * (CoreModule decisions, Observer verifications, recovery assessments,
+ * planner subgoal proposals). One initialization per process instead of one
+ * per call; a failed init clears the cache so the next call retries.
+ */
+export async function getZai(): Promise<Awaited<ReturnType<typeof ZAI.create>>> {
+  const existing = gZai.__nextoolZai;
+  if (existing) {
+    try {
+      return await existing;
+    } catch {
+      gZai.__nextoolZai = null; // previous init failed — retry below
+    }
+  }
+  const creating = ZAI.create()
+    .then((client) => client)
+    .catch((err) => {
+      gZai.__nextoolZai = null;
+      throw err;
+    });
+  gZai.__nextoolZai = creating;
+  return creating;
+}
+
 function extractJson(text: string): Record<string, unknown> | null {
   const cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
   const start = cleaned.indexOf('{');
@@ -134,9 +173,9 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
   let output: CoreModuleOutput | null = null;
 
   try {
-    const zai = await ZAI.create();
+    const zai = await getZai();
     const messages = [
-      { role: 'assistant' as const, content: buildSystemPrompt() },
+      { role: 'assistant' as const, content: getSystemPrompt() },
       { role: 'user' as const, content: buildUserMessage(input) },
     ];
 

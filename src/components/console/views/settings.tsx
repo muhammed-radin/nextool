@@ -59,6 +59,8 @@ const DEFAULTS: Draft = {
   // v1.0.10 §12.1/§16 — global default planner strategy + pre-plan step limit
   defaultPlannerType: 'pre-plan',
   prePlanMaxSteps: 10,
+  // v1.0.11 — global default recovery attempts per failed pre-plan step
+  recoveryMaxAttempts: 4,
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -639,7 +641,20 @@ export default function SettingsView() {
                 min={limitProps?.['task.prePlanMaxSteps']?.min}
                 max={limitProps?.['task.prePlanMaxSteps']?.max}
               />
+              {/* v1.0.11 §8 — recovery attempts per failed pre-plan step (2..4). */}
+              <NumberField
+                id="set-recovery-attempts"
+                label="Recovery attempts per failed pre-plan step"
+                value={draft.recoveryMaxAttempts}
+                onChange={(v) => set('recoveryMaxAttempts', v)}
+                hint={limitsHint(limitProps?.['task.recoveryMaxAttempts'])}
+                min={limitProps?.['task.recoveryMaxAttempts']?.min}
+                max={limitProps?.['task.recoveryMaxAttempts']?.max}
+              />
             </div>
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              Recovery (v1.0.11): when a pre-planned step fails, the runtime creates a recovery subgoal with its own pre-plan, executes it (attempts bounded here), then resumes the main plan. One-by-one planning replans by design and does not use this limit.
+            </p>
           </section>
 
           {/* Execution limits — v1.0.8 §8: constraints derive from the central limits */}
@@ -710,9 +725,12 @@ export default function SettingsView() {
             <div className="mt-4 grid gap-4 rounded-md border border-white/[0.08] bg-white/[0.03] p-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <Label htmlFor="set-autoexecute" className="text-sm">Auto-Execute Tools</Label>
+                  <Label htmlFor="set-autoexecute" className="text-sm">
+                    Auto-Execute Tools
+                    <span className="ml-2 rounded border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 align-middle font-mono text-[10px] uppercase tracking-wide text-emerald-300">Global — Highest priority</span>
+                  </Label>
                   <p className="text-[11px] text-muted-foreground">
-                    Global override — when ON, tools run without approval. When OFF, each task/tool config decides (per-tool default: approval required).
+                    Hierarchy (v1.0.11): 1. Global (here) → 2. Tool (Create/Edit) → 3. Task Console. When ON, every tool auto-executes regardless of the lower layers. When OFF (not forcing), the tool config wins over the task console; otherwise approval is required.
                   </p>
                 </div>
                 <Switch id="set-autoexecute" checked={draft.autoExecuteTools} onCheckedChange={(v) => set('autoExecuteTools', v)} aria-label="Auto-Execute Tools globally" />

@@ -116,6 +116,10 @@ export const taskConfigSchema = z
     // (shipped 1..122). Invalid values are REJECTED (never clamped here).
     plannerType: z.enum(['pre-plan', 'one-by-one']).optional(),
     prePlanMaxSteps: intLimit('prePlanMaxSteps', 1, 122).optional(),
+    // v1.0.11 §8 — per-task recovery attempt cap, bounded by the central
+    // task.recoveryMaxAttempts limits (shipped 2..4). REJECTED (not clamped)
+    // when out of range — same contract as prePlanMaxSteps.
+    recoveryMaxAttempts: intLimit('recoveryMaxAttempts', 2, 4).optional(),
     sessionId: z.string().trim().max(200).optional(),
     context: jsonObject.optional(),
   })
@@ -125,7 +129,9 @@ export const taskConfigSchema = z
 /** POST /api/tasks — accepts { request, config? }; legacy flat mode/reasoningLevel still tolerated. */
 export const createTaskSchema = z
   .object({
-    request: nonEmpty(8000),
+    // v1.0.11 §45 — large task descriptions: the cap moves 8 000 → 32 000
+    // chars so Markdown-heavy, multi-section requests are not truncated.
+    request: nonEmpty(32000),
     config: taskConfigSchema.optional(),
     mode: z.enum(['goal', 'live']).optional(),
     reasoningLevel: z.number().int().min(1).max(6).optional(),
@@ -189,9 +195,10 @@ export const toolDefinitionSchema = z
     description: nonEmpty(1000),
     purpose: z.string().trim().max(1000).optional(),
     category: nonEmpty(60),
-    // v1.0.5: nodejs joins the set (rejected by registerDynamicTool with a
-    // pointed message — nodejs tools register via /api/tools/js instead).
-    environment: z.enum(['builtin', 'virtual-env', 'dynamic', 'js-function', 'nodejs']),
+    // v1.0.11 — freedom-node joins the environment set (rejected by
+    // registerDynamicTool with a pointed message — freedom-node tools
+    // register via /api/tools/js like the other function environments).
+    environment: z.enum(['builtin', 'virtual-env', 'dynamic', 'js-function', 'nodejs', 'freedom-node']),
     schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }).strict(),
   })
   .strict();
@@ -225,7 +232,9 @@ export const memorySchema = z
 export const datasetExampleSchema = z
   .object({
     category: nonEmpty(80),
-    request: nonEmpty(8000),
+    // v1.0.11 §46 — training examples may carry large Markdown documents:
+    // cap moves 8 000 → 32 000 chars (mirrors the task request cap).
+    request: nonEmpty(32000),
     expectedTool: z.string().trim().max(160).optional(),
     expectedParams: jsonObject.optional(),
     split: z.enum(['train', 'validation', 'test']).optional(),
@@ -292,6 +301,8 @@ export const settingsSchema = z
     // v1.0.10 §12.1/§16 — global default planner strategy + pre-plan max steps
     defaultPlannerType: z.enum(['pre-plan', 'one-by-one']),
     prePlanMaxSteps: intLimit('prePlanMaxSteps', 1, 122),
+    // v1.0.11 — global default recovery attempt cap (2..4, default 4)
+    recoveryMaxAttempts: intLimit('recoveryMaxAttempts', 2, 4),
     logLevel: z.enum(['info', 'debug', 'error']),
     realTimeTransport: z.literal('sse'),
   })
@@ -322,7 +333,9 @@ export const registerJsToolSchema = z
     toolVersion: z.string().trim().max(40).optional(),
     // v1.0.5 §3: the restricted Node.js environment registers through the same
     // endpoint — one registration system, two function sandboxes.
-    environment: z.enum(['js-function', 'nodejs']).optional(),
+    // v1.0.11: freedom-node (INTENTIONALLY unrestricted) registers here too;
+    // runtime execution is gated server-side by the central fs config.
+    environment: z.enum(['js-function', 'nodejs', 'freedom-node']).optional(),
     schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }),
     functionSource: z.string().min(1).max(maxSourceChars()),
     metadata: metadataRecordSchema.optional(),
@@ -352,8 +365,9 @@ export const updateToolSchema = z
     purpose: z.string().trim().max(1000).optional(),
     category: z.string().trim().max(60).optional(),
     toolVersion: z.string().trim().max(40).optional(),
-    /** v1.0.5: js-function ⇄ nodejs switch for user function tools. */
-    environment: z.enum(['js-function', 'nodejs']).optional(),
+    /** v1.0.5: js-function ⇄ nodejs switch for user function tools.
+     *  v1.0.11: ⇄ freedom-node switch too (see /api/tools/js). */
+    environment: z.enum(['js-function', 'nodejs', 'freedom-node']).optional(),
     schema: z.object({ type: z.literal('object'), properties: z.array(toolParamDefSchema).max(40) }).optional(),
     functionSource: z.string().min(1).max(maxSourceChars()).optional(),
     metadata: metadataRecordSchema.optional(),
@@ -375,8 +389,10 @@ export const testToolSchema = z
   .object({
     name: z.string().trim().min(1).max(160).optional(),
     functionSource: z.string().max(maxSourceChars()).optional(),
-    /** v1.0.5 §1.2/§4.5: which sandbox executes an UNSAVED editor source. */
-    environment: z.enum(['js-function', 'nodejs']).optional(),
+    /** v1.0.5 §1.2/§4.5: which sandbox executes an UNSAVED editor source.
+     *  v1.0.11: freedom-node test runs go through the freedom runner with the
+     *  same server-side fs gate as production. */
+    environment: z.enum(['js-function', 'nodejs', 'freedom-node']).optional(),
     params: jsonObject.optional(),
     /** v1.0.7 §1 — effective execution timeout for the test run (ms). */
     timeoutMs: toolTimeoutValidator().optional(),

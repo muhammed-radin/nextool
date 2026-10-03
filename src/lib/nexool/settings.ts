@@ -40,6 +40,9 @@ export const DEFAULT_SETTINGS: NexToolSettings = {
   // the global default pre-plan step limit (default 10, hard max 122).
   defaultPlannerType: 'pre-plan',
   prePlanMaxSteps: limitsDefault('task', 'prePlanMaxSteps', 10),
+  // v1.0.11 — global default recovery attempts per failed pre-plan step
+  // (2..4 via the central task.recoveryMaxAttempts limits, default 4).
+  recoveryMaxAttempts: limitsDefault('task', 'recoveryMaxAttempts', 4),
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -108,6 +111,8 @@ export async function updateSettings(partial: Partial<NexToolSettings>): Promise
     next.defaultPlannerType = 'pre-plan';
   }
   next.prePlanMaxSteps = clampToLimit('task', 'prePlanMaxSteps', next.prePlanMaxSteps);
+  // v1.0.11 — recovery attempt cap clamps into the central bounds (2..4).
+  next.recoveryMaxAttempts = clampToLimit('task', 'recoveryMaxAttempts', next.recoveryMaxAttempts);
   if (next.defaultMode !== 'goal' && next.defaultMode !== 'live') next.defaultMode = 'goal';
   next.defaultReasoningLevel = clampNum(next.defaultReasoningLevel, 1, 6) as NexToolSettings['defaultReasoningLevel'];
   if (next.logLevel !== 'info' && next.logLevel !== 'debug' && next.logLevel !== 'error') next.logLevel = 'info';

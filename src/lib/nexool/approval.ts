@@ -1,15 +1,18 @@
 /**
  * NexTool v1.0.6 — Tool Auto-Execution Approval (spec §9).
+ * v1.0.11 — the resolution becomes an EXPLICIT HIERARCHY (§34–§42):
  *
- * Resolution precedence (§9.4) — ONE model, enforced here, consumed by the
- * runtime loop (never a separate frontend interpretation):
+ *   1. GLOBAL auto-execution (Settings)   — highest priority
+ *   2. TOOL auto-execution (Create/Edit)  — overrides the task console
+ *   3. TASK CONSOLE preference            — lowest task-specific preference
+ *   4. default OFF                        — approval required
  *
- *   Global Setting (settings.autoExecuteTools)
- *       ↓ true  → every tool executes automatically
- *       ↓ false → Per-Task configuration (config.autoExecuteTools)
- *                 ↓ true  → tools in this task execute automatically
- *                 ↓ false → Per-Tool configuration (tool.autoExecute, default false)
- *                           ↓ false → APPROVAL REQUIRED → WAIT
+ * Global ENABLED forces auto-execution for every tool regardless of the
+ * lower layers. When global does not force the enable, the tool config wins
+ * over the task console; the task console never overrides a higher layer.
+ * One centralized resolver (resolveAutoExecution) produces the decision AND
+ * its effective source; every auto-execution decision in the runtime goes
+ * through it (no accidental boolean merging).
  *
  * An approval is a runtime event (§9.14): tool.approval.required →
  * allowed/denied/timeout → tool.execution.blocked on rejection. The waiting
@@ -28,6 +31,57 @@ export const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
 export type ApprovalOutcome = 'allowed' | 'denied' | 'timeout' | 'cancelled';
 
+/** v1.0.11 §38 — where an auto-execution decision came from. */
+export type AutoExecutionSource = 'global' | 'tool' | 'task' | 'default';
+
+export interface AutoExecutionDecision {
+  enabled: boolean;
+  source: AutoExecutionSource;
+}
+
+/**
+ * v1.0.11 §34–§39 — THE one auto-execution resolver. Precedence:
+ *   1. global === true                      → { enabled: true,  source: 'global' }
+ *   2. tool === true                        → { enabled: true,  source: 'tool' }
+ *   3. task === true                        → { enabled: true,  source: 'task' }
+ *   4. otherwise                            → { enabled: false, source: 'default' }
+ *
+ * `undefined` (inherit / not set) never forces a decision. A lower layer can
+ * NEVER override a higher-priority enable. Test matrix (§39):
+ *   Global ON  / Tool OFF / Task OFF → ON  (global)
+ *   Global ON  / Tool ON  / Task OFF → ON  (global)
+ *   Global OFF / Tool ON  / Task OFF → ON  (tool)
+ *   Global OFF / Tool OFF / Task ON  → ON  (task)
+ *   Global OFF / Tool OFF / Task OFF → OFF (default)
+ */
+export function resolveAutoExecution(
+  global: boolean | undefined,
+  tool: boolean | undefined,
+  task: boolean | undefined,
+): AutoExecutionDecision {
+  if (global === true) return { enabled: true, source: 'global' };
+  if (tool === true) return { enabled: true, source: 'tool' };
+  if (task === true) return { enabled: true, source: 'task' };
+  return { enabled: false, source: 'default' };
+}
+
+/**
+ * §9.4 — back-compat boolean view over resolveAutoExecution (same signature
+ * as v1.0.6). The runtime itself uses resolveAutoExecution so the effective
+ * source stays observable; tests share this single interpretation.
+ */
+export function resolveAutoExecute(
+  tool: Pick<ToolDefinition, 'autoExecute'>,
+  taskConfig: Pick<TaskConfig, 'autoExecuteTools'> | undefined,
+  settings: Pick<NexToolSettings, 'autoExecuteTools'>,
+): boolean {
+  return resolveAutoExecution(
+    settings.autoExecuteTools,
+    tool.autoExecute,
+    taskConfig?.autoExecuteTools,
+  ).enabled;
+}
+
 interface PendingApprovalEntry extends PendingApproval {
   taskId: string;
   resolve: (outcome: ApprovalOutcome) => void;
@@ -39,23 +93,6 @@ const g = globalThis as unknown as { __nextoolApprovals?: Map<string, PendingApp
 function approvalRegistry(): Map<string, PendingApprovalEntry> {
   if (!g.__nextoolApprovals) g.__nextoolApprovals = new Map();
   return g.__nextoolApprovals;
-}
-
-/**
- * §9.4 — the single precedence resolution. Exported so the runtime and tests
- * share exactly one interpretation.
- */
-export function resolveAutoExecute(
-  tool: Pick<ToolDefinition, 'autoExecute'>,
-  taskConfig: Pick<TaskConfig, 'autoExecuteTools'> | undefined,
-  settings: Pick<NexToolSettings, 'autoExecuteTools'>,
-): boolean {
-  // 1) Global override
-  if (settings.autoExecuteTools === true) return true;
-  // 2) Per-task configuration (when explicitly set)
-  if (taskConfig?.autoExecuteTools === true) return true;
-  // 3) Per-tool configuration — documented default false (§9.1/§23)
-  return tool.autoExecute === true;
 }
 
 /** List pending approvals (optionally scoped to a task) — powers the console UI. */
