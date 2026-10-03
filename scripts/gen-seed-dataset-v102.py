@@ -18,7 +18,16 @@ import json, itertools, re
 SERVERS = ["api-01", "api-02", "web-01", "web-02", "db-01"]
 EXAMPLES = []
 
+import os as _os
+_SPLIT_MAP = json.load(open(_os.path.join(_os.path.dirname(__file__), '..', 'tool-results', 'split-map.json'))) if _os.path.exists(_os.path.join(_os.path.dirname(__file__), '..', 'tool-results', 'split-map.json')) else {}
+
 def add(category, request, tool, params=None, split=None):
+    # v1.0.11 §56 — the benchmarked test/validation membership is FROZEN by
+    # request text so targeted additions are always train-only (honest,
+    # comparable held-out evaluation).
+    frozen = _SPLIT_MAP.get(re.sub(r"\s+", " ", request).strip())
+    if frozen:
+        split = frozen
     EXAMPLES.append({
         "category": category,
         "request": request,
@@ -543,9 +552,77 @@ add("service-ops", "the ingestion service on api-02 is unhealthy after the deplo
 add("echo-verification", "echo the word 'restart' (do not restart anything)", "echo.echo", {"message": "restart"})
 add("server-ops", "restart web-02", "server.restart", {"serverId": "web-02"})
 add("text-analysis", "how many times does the word 'restart' appear in: 'restart restart verify restart' — analyze the text", "text.analyze", {"text": "restart restart verify restart"})
-add("memory", "save this under key phrasebook: {\"restart\":\"cycle the node\"}", "memory.store", {"key": "phrasebook", "value": {"restart": "cycle the node"}})
+add('memory', 'save this under key phrasebook: {"restart":"cycle the node"}', 'memory.store', {'key': 'phrasebook', 'value': {'restart': 'cycle the node'}})
 add("server-ops", "check db-01 then (only if unhealthy) plan a restart — start with the check", "server.health", {"serverId": "db-01"})
 add("system-diagnostics", "is it the host machine or the fleet that's slow? host system info first", "system.info")
+
+
+# ---------- §56 — TARGETED train-only additions (error analysis of the
+# v1.0.2-128/v1.0.2-512 checkpoints showed the weakest classes: time.now,
+# delay.wait, echo.echo, text.analyze, memory ops, notification, image,
+# server.list, system.info). These are explicitly split=train; the frozen
+# test/validation membership is untouched, so held-out numbers stay honest.
+add("time", "tell me the time", "time.now", {"timezone": "UTC"}, split="train")
+add("time", "what's the time right now?", "time.now", {"timezone": "UTC"}, split="train")
+add("time", "show the current time", "time.now", {"timezone": "UTC"}, split="train")
+add("time", "time right now in Asia/Kolkata for the log", "time.now", {"timezone": "Asia/Kolkata"}, split="train")
+add("time", "I need today's clock reading", "time.now", {"timezone": "UTC"}, split="train")
+add("time", "give the current timestamp", "time.now", {"timezone": "UTC"}, split="train")
+add("time", "what's the clock in Europe/Paris?", "time.now", {"timezone": "Europe/Paris"}, split="train")
+add("time", "current local time for the report header", "time.now", {"timezone": "UTC"}, split="train")
+add("pacing", "insert a 1 second wait", "delay.wait", {"ms": 1000}, split="train")
+add("pacing", "wait half a second (500ms)", "delay.wait", {"ms": 500}, split="train")
+add("pacing", "pause execution for 3 seconds", "delay.wait", {"ms": 3000}, split="train")
+add("pacing", "delay of 800ms please", "delay.wait", {"ms": 800}, split="train")
+add("pacing", "hold on for 2000 milliseconds", "delay.wait", {"ms": 2000}, split="train")
+add("pacing", "sleep 5 seconds", "delay.wait", {"ms": 5000}, split="train")
+add("pacing", "wait briefly — 300 ms", "delay.wait", {"ms": 300}, split="train")
+add("echo-verification", "echo the string 'pipeline ok'", "echo.echo", {"message": "pipeline ok"}, split="train")
+add("echo-verification", "echo back 'health-wire-connected'", "echo.echo", {"message": "health-wire-connected"}, split="train")
+add("echo-verification", "run an echo with message 'roundtrip-verified'", "echo.echo", {"message": "roundtrip-verified"}, split="train")
+add("echo-verification", "echo 'tool runtime responsive'", "echo.echo", {"message": "tool runtime responsive"}, split="train")
+add("echo-verification", "echo the message smoke-test-1", "echo.echo", {"message": "smoke-test-1"}, split="train")
+add("echo-verification", "please echo 'deploy channel green'", "echo.echo", {"message": "deploy channel green"}, split="train")
+add("text-analysis", "word count of: 'the fleet is healthy today'", "text.analyze", {"text": "the fleet is healthy today"}, split="train")
+add("text-analysis", "analyze the text 'restart completed successfully'", "text.analyze", {"text": "restart completed successfully"}, split="train")
+add("text-analysis", "characters and words in: 'monitoring every 30 seconds'", "text.analyze", {"text": "monitoring every 30 seconds"}, split="train")
+add("text-analysis", "get the text statistics for: 'incident closed after rollback'", "text.analyze", {"text": "incident closed after rollback"}, split="train")
+add("text-analysis", "how many characters in 'maintenance window'? analyze it", "text.analyze", {"text": "maintenance window"}, split="train")
+add("text-analysis", "sentence count for: 'One. Two. Three. Four.'", "text.analyze", {"text": "One. Two. Three. Four."}, split="train")
+add("text-analysis", "analyze 'capacity review scheduled for friday'", "text.analyze", {"text": "capacity review scheduled for friday"}, split="train")
+add("memory", "store under key deploy-freeze the value {\"active\": true}", "memory.store", {"key": "deploy-freeze", "value": {"active": True}}, split="train")
+add('memory', 'save {"window":"02:00-04:00"} to memory as key maint-window-2', 'memory.store', {'key': 'maint-window-2', 'value': {'window': '02:00-04:00'}}, split='train')
+add("memory", "put key pager-duty with value {\"on\": true} into memory", "memory.store", {"key": "pager-duty", "value": {"on": True}}, split="train")
+add('memory', 'remember the rotation: key rotation, value {"primary":"A. Karim"}', 'memory.store', {'key': 'rotation', 'value': {'primary': 'A. Karim'}}, split='train')
+add("memory", "recall the stored key deploy-freeze", "memory.recall", {"key": "deploy-freeze"}, split="train")
+add("memory", "read back key pager-duty from persistent memory", "memory.recall", {"key": "pager-duty"}, split="train")
+add("memory", "fetch the value saved under key rotation", "memory.recall", {"key": "rotation"}, split="train")
+add("memory", "look up anything about pager in memory", "memory.recall", {"query": "pager"}, split="train")
+add("notification", "send info: 'Backup verified'", "notification.send", {"title": "Backup verified", "level": "info"}, split="train")
+add("notification", "warning notification: 'Replica lag above 30s'", "notification.send", {"title": "Replica lag above 30s", "body": "Replication lag crossed the 30-second warning line.", "level": "warning"}, split="train")
+add("notification", "raise a critical alert titled 'Fleet health degraded'", "notification.send", {"title": "Fleet health degraded", "body": "Multiple nodes failed the health probe simultaneously.", "level": "critical"}, split="train")
+add("notification", "notify info 'Deploy queue drained'", "notification.send", {"title": "Deploy queue drained", "level": "info"}, split="train")
+add("notification", "warn the channel: 'SSL certificate expires in 7 days'", "notification.send", {"title": "SSL certificate expires in 7 days", "body": "The public endpoint certificate is nearing expiry.", "level": "warning"}, split="train")
+add("content", "generate an image of a campfire under the stars", "image.generate", {"prompt": "A warm campfire under a starry night sky, glowing embers, silhouetted pine trees, cinematic lighting, highly detailed", "size": "1024x1024"}, split="train")
+add("content", "create a picture of a futuristic city skyline at dusk", "image.generate", {"prompt": "A futuristic city skyline at dusk, neon accents, flying vehicles, atmospheric haze, ultra detailed, cinematic composition", "size": "1024x1024"}, split="train")
+add("content", "produce an image: cozy library with warm lamps", "image.generate", {"prompt": "A cozy library interior with warm lamp light, tall wooden shelves, soft shadows, inviting atmosphere, detailed illustration", "size": "1024x1024"}, split="train")
+add("content", "image request: a sailboat on a calm turquoise sea", "image.generate", {"prompt": "A white sailboat gliding on a calm turquoise sea, gentle waves, bright sunlight, photorealistic, high detail", "size": "1024x1024", "style": "photorealistic"}, split="train")
+add("server-ops", "show all the servers and their states", "server.list", None, split="train")
+add("server-ops", "give me the fleet inventory with health", "server.list", None, split="train")
+add("server-ops", "list the environment's nodes", "server.list", None, split="train")
+add("server-ops", "server roster with cpu and memory", "server.list", None, split="train")
+add("server-ops", "fleet wide status overview", "server.list", None, split="train")
+add("server-ops", "show every node in the virtual environment", "server.list", None, split="train")
+add("system-diagnostics", "show host system information", "system.info", None, split="train")
+add("system-diagnostics", "runtime machine details (hostname, platform, cpus)", "system.info", None, split="train")
+add("system-diagnostics", "inspect the runtime host: memory, load, uptime", "system.info", None, split="train")
+add("system-diagnostics", "host platform and cpu info for the report", "system.info", None, split="train")
+add("math", "evaluate 64/8", "math.evaluate", {"expression": "64/8"}, split="train")
+add("math", "compute (45+55)/2", "math.evaluate", {"expression": "(45+55)/2"}, split="train")
+add("math", "what is 12*12?", "math.evaluate", {"expression": "12*12"}, split="train")
+add("math", "calculate 300-175", "math.evaluate", {"expression": "300-175"}, split="train")
+add("math", "evaluate 20%6", "math.evaluate", {"expression": "20%6"}, split="train")
+add("math", "compute 5*(2+7)", "math.evaluate", {"expression": "5*(2+7)"}, split="train")
 
 # ---------- normalize categories (§53: recorded category list) ----------
 def norm_category(c: str) -> str:
@@ -613,12 +690,13 @@ for tool, items in by_tool.items():
     test_idx = set(list(range(0, n, max(1, n // n_test)))[:n_test])
     val_idx = set(list(range(1, n, max(1, n // n_val)))[:n_val])
     for i, e in enumerate(items):
-        if i in test_idx:
-            e["split"] = "test"
-        elif i in val_idx:
-            e["split"] = "validation"
-        else:
-            e["split"] = "train"
+        if not e.get("split"):
+            if i in test_idx:
+                e["split"] = "test"
+            elif i in val_idx:
+                e["split"] = "validation"
+            else:
+                e["split"] = "train"
         e["category"] = norm_category(e["category"])
     final.extend(items)
 

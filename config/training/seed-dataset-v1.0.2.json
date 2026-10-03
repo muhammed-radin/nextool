@@ -1012,6 +1012,42 @@
       "split": "train"
     },
     {
+      "category": "server-ops",
+      "request": "show all the servers and their states",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "give me the fleet inventory with health",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "list the environment's nodes",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "server roster with cpu and memory",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "fleet wide status overview",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
+      "category": "server-ops",
+      "request": "show every node in the virtual environment",
+      "expectedTool": "server.list",
+      "split": "train"
+    },
+    {
       "category": "system-diagnostics",
       "request": "host system information",
       "expectedTool": "system.info",
@@ -1098,6 +1134,30 @@
     {
       "category": "system-diagnostics",
       "request": "is it the host machine or the fleet that's slow? host system info first",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "show host system information",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "runtime machine details (hostname, platform, cpus)",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "inspect the runtime host: memory, load, uptime",
+      "expectedTool": "system.info",
+      "split": "train"
+    },
+    {
+      "category": "system-diagnostics",
+      "request": "host platform and cpu info for the report",
       "expectedTool": "system.info",
       "split": "train"
     },
@@ -1354,6 +1414,60 @@
       "split": "train"
     },
     {
+      "category": "math",
+      "request": "evaluate 64/8",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "64/8"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "compute (45+55)/2",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "(45+55)/2"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "what is 12*12?",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "12*12"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "calculate 300-175",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "300-175"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "evaluate 20%6",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "20%6"
+      },
+      "split": "train"
+    },
+    {
+      "category": "math",
+      "request": "compute 5*(2+7)",
+      "expectedTool": "math.evaluate",
+      "expectedParams": {
+        "expression": "5*(2+7)"
+      },
+      "split": "train"
+    },
+    {
       "category": "text-analysis",
       "request": "how many words and characters: 'The quick brown fox jumps over the lazy dog'",
       "expectedTool": "text.analyze",
@@ -1480,6 +1594,69 @@
       "split": "train"
     },
     {
+      "category": "text-analysis",
+      "request": "word count of: 'the fleet is healthy today'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "the fleet is healthy today"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "analyze the text 'restart completed successfully'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "restart completed successfully"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "characters and words in: 'monitoring every 30 seconds'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "monitoring every 30 seconds"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "get the text statistics for: 'incident closed after rollback'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "incident closed after rollback"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "how many characters in 'maintenance window'? analyze it",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "maintenance window"
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "sentence count for: 'One. Two. Three. Four.'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "One. Two. Three. Four."
+      },
+      "split": "train"
+    },
+    {
+      "category": "text-analysis",
+      "request": "analyze 'capacity review scheduled for friday'",
+      "expectedTool": "text.analyze",
+      "expectedParams": {
+        "text": "capacity review scheduled for friday"
+      },
+      "split": "train"
+    },
+    {
       "category": "time",
       "request": "what time is it?",
       "expectedTool": "time.now",
@@ -1590,6 +1767,78 @@
     {
       "category": "time",
       "request": "time check (UTC)",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "tell me the time",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "what's the time right now?",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "show the current time",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "time right now in Asia/Kolkata for the log",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Asia/Kolkata"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "I need today's clock reading",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "give the current timestamp",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "UTC"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "what's the clock in Europe/Paris?",
+      "expectedTool": "time.now",
+      "expectedParams": {
+        "timezone": "Europe/Paris"
+      },
+      "split": "train"
+    },
+    {
+      "category": "time",
+      "request": "current local time for the report header",
       "expectedTool": "time.now",
       "expectedParams": {
         "timezone": "UTC"
@@ -1786,6 +2035,60 @@
       "split": "train"
     },
     {
+      "category": "echo-verification",
+      "request": "echo the string 'pipeline ok'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "pipeline ok"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo back 'health-wire-connected'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "health-wire-connected"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "run an echo with message 'roundtrip-verified'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "roundtrip-verified"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo 'tool runtime responsive'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "tool runtime responsive"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "echo the message smoke-test-1",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "smoke-test-1"
+      },
+      "split": "train"
+    },
+    {
+      "category": "echo-verification",
+      "request": "please echo 'deploy channel green'",
+      "expectedTool": "echo.echo",
+      "expectedParams": {
+        "message": "deploy channel green"
+      },
+      "split": "train"
+    },
+    {
       "category": "pacing",
       "request": "wait 500 milliseconds",
       "expectedTool": "delay.wait",
@@ -1881,6 +2184,69 @@
       "expectedTool": "delay.wait",
       "expectedParams": {
         "ms": 1000
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "insert a 1 second wait",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 1000
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "wait half a second (500ms)",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 500
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "pause execution for 3 seconds",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 3000
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "delay of 800ms please",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 800
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "hold on for 2000 milliseconds",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 2000
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "sleep 5 seconds",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 5000
+      },
+      "split": "train"
+    },
+    {
+      "category": "pacing",
+      "request": "wait briefly — 300 ms",
+      "expectedTool": "delay.wait",
+      "expectedParams": {
+        "ms": 300
       },
       "split": "train"
     },
@@ -2020,6 +2386,54 @@
     },
     {
       "category": "memory",
+      "request": "store under key deploy-freeze the value {\"active\": true}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "deploy-freeze",
+        "value": {
+          "active": true
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "save {\"window\":\"02:00-04:00\"} to memory as key maint-window-2",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "maint-window-2",
+        "value": {
+          "window": "02:00-04:00"
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "put key pager-duty with value {\"on\": true} into memory",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "pager-duty",
+        "value": {
+          "on": true
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "remember the rotation: key rotation, value {\"primary\":\"A. Karim\"}",
+      "expectedTool": "memory.store",
+      "expectedParams": {
+        "key": "rotation",
+        "value": {
+          "primary": "A. Karim"
+        }
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
       "request": "recall the memory key maint-window",
       "expectedTool": "memory.recall",
       "expectedParams": {
@@ -2114,6 +2528,42 @@
       "expectedTool": "memory.recall",
       "expectedParams": {
         "key": "maint-window"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "recall the stored key deploy-freeze",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "deploy-freeze"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "read back key pager-duty from persistent memory",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "pager-duty"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "fetch the value saved under key rotation",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "key": "rotation"
+      },
+      "split": "train"
+    },
+    {
+      "category": "memory",
+      "request": "look up anything about pager in memory",
+      "expectedTool": "memory.recall",
+      "expectedParams": {
+        "query": "pager"
       },
       "split": "train"
     },
@@ -2245,6 +2695,59 @@
       "split": "train"
     },
     {
+      "category": "notification",
+      "request": "send info: 'Backup verified'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Backup verified",
+        "level": "info"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "warning notification: 'Replica lag above 30s'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Replica lag above 30s",
+        "body": "Replication lag crossed the 30-second warning line.",
+        "level": "warning"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "raise a critical alert titled 'Fleet health degraded'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Fleet health degraded",
+        "body": "Multiple nodes failed the health probe simultaneously.",
+        "level": "critical"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "notify info 'Deploy queue drained'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "Deploy queue drained",
+        "level": "info"
+      },
+      "split": "train"
+    },
+    {
+      "category": "notification",
+      "request": "warn the channel: 'SSL certificate expires in 7 days'",
+      "expectedTool": "notification.send",
+      "expectedParams": {
+        "title": "SSL certificate expires in 7 days",
+        "body": "The public endpoint certificate is nearing expiry.",
+        "level": "warning"
+      },
+      "split": "train"
+    },
+    {
       "category": "content",
       "request": "create an image of a lighthouse at stormy dusk",
       "expectedTool": "image.generate",
@@ -2343,6 +2846,47 @@
       "expectedParams": {
         "prompt": "An astronaut sitting on the moon reading a book, Earth visible in the starry sky, cinematic and detailed",
         "size": "864x1152"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "generate an image of a campfire under the stars",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A warm campfire under a starry night sky, glowing embers, silhouetted pine trees, cinematic lighting, highly detailed",
+        "size": "1024x1024"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "create a picture of a futuristic city skyline at dusk",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A futuristic city skyline at dusk, neon accents, flying vehicles, atmospheric haze, ultra detailed, cinematic composition",
+        "size": "1024x1024"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "produce an image: cozy library with warm lamps",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A cozy library interior with warm lamp light, tall wooden shelves, soft shadows, inviting atmosphere, detailed illustration",
+        "size": "1024x1024"
+      },
+      "split": "train"
+    },
+    {
+      "category": "content",
+      "request": "image request: a sailboat on a calm turquoise sea",
+      "expectedTool": "image.generate",
+      "expectedParams": {
+        "prompt": "A white sailboat gliding on a calm turquoise sea, gentle waves, bright sunlight, photorealistic, high detail",
+        "size": "1024x1024",
+        "style": "photorealistic"
       },
       "split": "train"
     }

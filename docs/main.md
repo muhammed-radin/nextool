@@ -14,9 +14,11 @@ machines, and the boundary between Goal Mode and Live Mode.
 | File | Exports | Role |
 | --- | --- | --- |
 | `nexool.ts` | `createTask`, `stopTask`, `injectEvent`, `getTaskDetail`, `listTasks`, `countActiveTasks`, `getGlobalState`, `toTaskDetail` | Task manager singleton: creation, cancellation, event injection, queries. |
-| `loop.ts` | `runTask`, `TaskRunHandle`, `WakePayload`, `ResolvedTaskConfig` | The per-task state machines: `runGoalMode` and `runLiveMode`, plus context building, parallel groups, repair passes and finalization. |
+| `loop.ts` | `runTask`, `TaskRunHandle`, `WakePayload`, `ResolvedTaskConfig` | The per-task state machines: `runGoalMode` and `runLiveMode`, plus context building, parallel groups, repair passes, **v1.0.11 pre-plan failure recovery delegation** and finalization. |
 | `planner.ts` | `buildPlan` | Request → ordered plan (see [Planner](planner.md)). |
-| `observer.ts` | `interpret`, `checkGoalComplete` | Execution → observation + goal verdict (see [Observer](observer.md)). |
+| `planner-strategy.ts` | `resolvePlannerType`, `planOneByOneStep` | The one-by-one strategy (v1.0.10, see [Planner](planner.md)). |
+| `recovery.ts` | `runPrePlanRecovery`, `RECOVERY_PLAN_MAX_STEPS` | **v1.0.11** — the bounded pre-plan failure-recovery state machine (frozen main plan → recovery subgoal + own pre-plan → execute → Observer verify → state-aware resume / honest abort; see [Planner](planner.md#pre-plan-failure-recovery-v1011)). |
+| `observer.ts` | `interpret`, `checkGoalComplete`, `assessRecovery` | Execution → observation + goal verdict (see [Observer](observer.md)); **v1.0.11 `assessRecovery` verifies recovery attempts.** |
 
 ## The runtime singleton
 
@@ -33,7 +35,7 @@ interface TaskRunHandle {
 
 `createTask(request, configPartial)`:
 
-1. Trims and validates the request (non-empty, ≤ 4000 chars).
+1. Trims and validates the request (non-empty, ≤ 32 000 chars — v1.0.11, raised from 8 000 for long Markdown requests).
 2. Clamps every config number against global settings (see [Configuration](../getting-started/configuration.md)).
 3. Creates the DB row with status `queued`; emits `task.created` (priority 6).
 4. Registers the handle and fire-and-forgets `runTask(id, handle)` — the HTTP response
@@ -74,7 +76,9 @@ Every iteration of the goal loop:
    dispatched through `executeParallelBatch`; all decisions must yield `tool_call`) or
    sequential `decideAndExecute`.
 5. Handles the decision status (`clarification_required` / `cannot_execute` / `stop` /
-   `no_tool` / `tool_call` with one retry on failure).
+   `no_tool` / `tool_call`; **v1.0.11 — a failed pre-plan step no longer costs a single
+   blind retry plus a hard stop: the loop hands over to the bounded recovery state
+   machine in `recovery.ts`**, while one-by-one keeps its replan-on-failure handling).
 6. Records the observation, marks plan steps, persists state, and re-verifies the goal
    after each execution.
 
@@ -118,7 +122,11 @@ wrapper marks the task `failed` with `RUNTIME_CRASH`.
 `goal`, `mode`, `plan[]` (with step statuses), `currentStepId`, `activeSubgoal`,
 `subgoals[]`, `previousActions[]` (last 30), `observations[]` (last 30),
 `iterationCount`, `toolCallCount`, `lastObservation`, `terminationStatus`,
-`errorState`.
+`errorState` — and, since **v1.0.11**, the optional `recovery` snapshot
+(`TaskRecoveryState`: `status 'recovering'|'resumed'|'exhausted'`, `reason`,
+`failedStepId`/`failedStepTitle`, `attempt`/`maxAttempts`, `subgoalId`, the recovery
+`steps[]`, `startedAt`/`updatedAt` and the `resumeNote?`) that feeds the Task Preview
+Recovery panel.
 
 ## See also
 

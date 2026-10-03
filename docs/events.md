@@ -78,8 +78,16 @@ actual call sites.
 | `planner.one_by_one_goal_reached` | **v1.0.10** | The goal verifier (which runs BEFORE every new planning call) confirmed completion — no further step is generated. In Live Mode the task CONTINUES across ticks (not torn down); `live` marks that context. | `{ plannerType, goal, live? }` |
 | `planner.parallel_batch` | 5 | v1.0.3: ≥ 2 independent same-group steps announced for concurrent execution (`"N independent tool call(s) detected — executing concurrently (cap M)"`). | `{ batchId, parallelGroup, tools, maxParallelToolCalls }` |
 | `planner.partial_failure` | 4 | v1.0.3: some but not all calls of a parallel batch failed — independent survivors continued. | `{ batchId }` |
-| `planner.retry` | 4 | Tool failed; one retry with error-as-observation. | `{ tool, error }` |
-| `subgoal.created` | 5 / 3 | Dynamic subgoal (5), recovery or feedback-revised subgoal (3). | `{ subgoal: Subgoal }` |
+| `planner.retry` | 4 | Tool failed; one retry with error-as-observation. **v1.0.11: superseded in the pre-plan failure branch** — a failed pre-plan step now enters the bounded recovery state machine (see the recovery events below). The event type itself remains in the catalog. | `{ tool, error }` |
+| `planner.recovery_started` | 3 | **v1.0.11**: a pre-plan step failed/timed out — the main plan is FROZEN and a recovery subgoal was created. | `{ failedStepId?, failedStepTitle, failedTool?, attempt, maxAttempts, reason }` |
+| `planner.recovery_plan_built` | 4 | **v1.0.11**: the recovery subgoal's OWN pre-plan was built (same `buildPlan` strategy, ≤ `RECOVERY_PLAN_MAX_STEPS` = 4 steps). | `{ attempt, maxAttempts, subgoalId, steps: [{ id, title, kind }] }` |
+| `planner.recovery_attempt` | 4 | **v1.0.11**: the recovery attempt begins executing its steps sequentially. | `{ attempt, maxAttempts, stepCount }` |
+| `planner.recovery_succeeded` | 3 | **v1.0.11**: the Observer verified the failed condition resolved (or the main goal can safely continue) — the main plan resumes state-aware. | `{ failedStepId?, attempt, maxAttempts, reason, resumeNote? }` |
+| `planner.recovery_failed` | 4 | **v1.0.11**: the recovery attempt failed (execution status, unresolved assessment or an abort reason). Further attempts follow while the budget lasts. | `{ failedStepId?, failedStepTitle?, attempt, maxAttempts, reason }` |
+| `planner.recovery_exhausted` | 2 | **v1.0.11**: all `recoveryMaxAttempts` (2–4) attempts failed — the task ends honestly (`RECOVERY_EXHAUSTED`). | `{ failedStepId?, attempts, maxAttempts, reason }` |
+| `planner.main_plan_resumed` | 3 | **v1.0.11**: recovery succeeded; the message carries the resume note (failed step marked completed OR re-queued at its original position). | `{ failedStepId?, attempt, maxAttempts, resumeNote }` |
+| `planner.main_plan_aborted` | 2 | **v1.0.11**: the main plan was aborted — recovery exhausted, or the Observer judged the failure unrecoverable (`RECOVERY_UNRECOVERABLE`), or stop/blocked (`RECOVERY_BLOCKED`). | `{ failedStepId?, attempts?, maxAttempts? }` |
+| `subgoal.created` | 5 / 3 | Dynamic subgoal (5), recovery or feedback-revised subgoal (3). A **v1.0.11** recovery subgoal carries its own pre-plan (see the recovery events above). | `{ subgoal: Subgoal }` |
 
 ### Core (`source: 'core'`)
 
@@ -117,6 +125,7 @@ actual call sites.
 | `tool.user_prompt.responded` | 4 | v1.0.6: the prompt was answered or cancelled. | `{ promptId, executionId, value?, cancelled }` |
 | `tool.confirm.requested` | 2 | **v1.0.8**: a tool called `await confirm(...)` — shows the confirmation UI and pauses that tool until answered/cancelled/120 s (expiry → `false`). | `{ confirmId, executionId, toolName?, message, hasDefault }` |
 | `tool.confirm.responded` | 3 | **v1.0.8**: the confirmation was answered — the tool ALWAYS receives a boolean. Task stop/cancellation resolves every pending confirmation as `false` (never `true`). | `{ confirmId, executionId, toolName?, accepted, cancelled, message }` |
+| `tool.auto_execution` | 6 | **v1.0.11**: a LOWER layer of the auto-execution hierarchy decided (tool config or task console — the global-forced case is the documented default and stays silent). Makes the effective source observable. Approval flows (`tool.approval.required/allowed/denied/timeout` → `tool.execution.blocked`) are unchanged. | `{ tool, enabled: true, source: 'tool' \| 'task' }` |
 | `notification.sent` | 2 / 4 / 6 | `notification.send` — priority maps to level: critical 2, warning 4, info 6. | `{ id, title, body, level }` |
 
 ### Environment (`source: 'environment'`)
@@ -157,9 +166,13 @@ actual call sites.
   (slate/cyan family); type chips use a reduced label (`tool.completed → COMPLETED`).
 - **Task Preview timeline** — events of the selected task, merged from REST backfill and
   the live SSE stream, newest last, with payload inspection. The v1.0.10 SSE refresh
-  regex includes the new planner events (`planner.mode_selected`,
-  `planner.one_by_one_step_planned/.step_completed/.replanned/.goal_reached`), so the
-  Task Preview plan/checklist refreshes the moment a one-by-one step transitions (its
+  regex includes the one-by-one planner events (`planner.mode_selected`,
+  `planner.one_by_one_step_planned/.step_completed/.replanned/.goal_reached`); **v1.0.11
+  extends it with all eight recovery events** (`planner.recovery_started`,
+  `planner.recovery_plan_built`, `planner.recovery_attempt`, `planner.recovery_succeeded`,
+  `planner.recovery_failed`, `planner.recovery_exhausted`, `planner.main_plan_resumed`,
+  `planner.main_plan_aborted`) **and `tool.auto_execution`** — the Task Preview Recovery
+  panel and plan checklist refresh the moment a recovery transition happens (its
   per-step `planner.plan` events feed the same checklist).
 - **runtime:// terminal** — source-colored lines in the terminal component.
 - **Notification bell** — driven by `NotificationRecord`s (not raw events), but the

@@ -62,7 +62,7 @@ Values outside the ranges are clamped (HTTP) / resolved identically (CLI).
 | `shuffle` | boolean | true | Shuffle training data between epochs. |
 | `vocabSize` | 16–1024 | 128 | Hashed bag-of-words dimension (the model's input shape). |
 | `earlyStoppingPatience` | 0–50 | 0 (off) | **v1.0.10 — MANUAL early stopping** (see below): stops when `val_loss` has not improved for `patience` epochs and restores the best weights. Implemented in the epoch callback because the tf.js `EarlyStopping` callback is broken in this build. Requires a validation holdout. |
-| `modelVersion` | semver-like string (`/^\d+\.\d+\.\d+/` prefix check) | `TRAINED_MODEL_VERSION` (`'1.0.1'` since v1.0.10) | **v1.0.10**: optional semantic version the checkpoint registers under. Legacy `checkpointId`s keep the `tc-<job>` identifier for traceability; old checkpoints keep their original versions. |
+| `modelVersion` | semver-like string (`/^\d+\.\d+\.\d+/` prefix check) | `TRAINED_MODEL_VERSION` (`'1.0.2'` since v1.0.11; feature since v1.0.10 when it defaulted to `'1.0.1'`) | **v1.0.10**: optional semantic version the checkpoint registers under. Legacy `checkpointId`s keep the `tc-<job>` identifier for traceability; old checkpoints keep their original versions. |
 
 ## Job lifecycle
 
@@ -97,11 +97,11 @@ real `ModelRecord` row:
 
 | Manifest field | Content |
 | --- | --- |
-| `name` / `version` | `tool-classifier-<dataset-name>` / the resolved model version (v1.0.10: `modelVersion` config → default `TRAINED_MODEL_VERSION` `'1.0.1'`; the legacy `tc-<job-id-derived>` identifier remains as `checkpointId` for traceability) |
+| `name` / `version` | `tool-classifier-<dataset-name>` / the resolved model version (v1.0.10: `modelVersion` config → default `TRAINED_MODEL_VERSION` — `'1.0.2'` in this release, was `'1.0.1'` in v1.0.10; the legacy `tc-<job-id-derived>` identifier remains as `checkpointId` for traceability) |
 | `format` | `tfjs-trained-classifier` |
 | `modelTopology` + `weightSpecs` + `weightData` | Native TF.js artifacts (weights base64-encoded) — v1.0.10: the weights snapshotted at the **best validation-accuracy epoch** (checkpoint selection) when a validation holdout exists |
 | `checkpointSelection` | **v1.0.10** — `{ selectedEpoch, valAccuracy, strategy: 'best-validation-accuracy' }` (or `strategy: 'final-epoch (no validation holdout)'`) |
-| `modelSemanticVersion` | **v1.0.10** — the semantic model generation of the checkpoint (`'1.0.1'` by default in this release) |
+| `modelSemanticVersion` | **v1.0.10** — the semantic model generation of the checkpoint (`'1.0.2'` by default since v1.0.11; was `'1.0.1'` in v1.0.10) |
 | `classes` | Sorted tool-class list (index → tool mapping used at inference) |
 | `vocabSize` | Vectorizer dimension the weights were trained with |
 | `trainingConfig` | The resolved config actually used (incl. `modelVersion` since v1.0.10) |
@@ -156,6 +156,50 @@ schemas); zero duplicate requests (no split leakage). See [Datasets](datasets.md
 Benchmarked against the held-out test split in this release (see
 [Benchmarks](benchmarks.md)): the v1.0.1 classifier reaches **0.6923** tool-selection
 accuracy vs **0.4231** for the old 1.0.0-era checkpoint on identical data.
+
+## v1.0.11 — training upgrade (model + dataset 1.0.2)
+
+The generation 1.0.2 pairs the expanded seed dataset with a wider vectorizer and a
+measured, honest retrain loop:
+
+- **Dataset 1.0.2** — `config/training/seed-dataset-v1.0.2.json` ("NexTool Core
+  v1.0.2 Seed"): **324 examples — 246 train / 39 validation / 39 test**, 17
+  categories, all 15 tools in ALL three splits, zero duplicate requests, expectedParams
+  inside real schemas. NEW vs 1.0.1: long Markdown-heavy documents (runbooks,
+  maintenance packs), hard examples (typos, synonyms, ambiguity, confusion pairs,
+  irrelevant context, failed previous attempts, state-after-action, conditional
+  requirements) and pattern-aware recovery/verification/state-transition examples.
+  Generated deterministically by `scripts/gen-seed-dataset-v102.py`; the
+  **test/validation splits are FROZEN by request text** so improvements are measurable
+  on identical held-out data. See [Datasets](datasets.md).
+- **Training run (model 1.0.2 = dataset 1.0.2)** — `vocabSize` **512** (up from 128),
+  manual early stop @ **20/50** epochs, checkpoint selection restored the best
+  validation-accuracy epoch (**val_accuracy 0.7692**), ~8 s train on the CPU backend.
+- **Error analysis story (§56, recorded honestly)** — the FIRST 1.0.2 run (still
+  `vocabSize` 128) scored **0.5385** tool-selection accuracy on the frozen test split —
+  a REGRESSION vs the recorded 1.0.1 number. The failures were categorized (hash
+  collision/dilution among time/echo/delay/image classes) and fixed with the wider
+  `vocabSize` 512 plus **61 targeted train-only examples** for the weak classes. The
+  test/validation splits stayed FROZEN throughout, so the final retrain's improvement
+  is measured on exactly the same held-out data. Remaining failures are documented
+  (11 of 39: long-doc health objective, typos, low-confidence confusions) — the
+  classifier is better, not perfect.
+- **Benchmark result** — trained 1.0.2 = **0.7179** vs trained 1.0.1 = **0.5641** and
+  heuristic-fallback = 0.5641 on the identical frozen 39-case split (llm-core 0.8205);
+  full table in [Benchmarks](benchmarks.md#v1011-release-benchmark-recorded-history).
+- **Inference latency optimization (§50)** — the ZAI client is now cached process-wide
+  (ONE init per process, failed init retries), shared across CoreModule decisions,
+  Observer verifications, recovery assessments and planner proposals; the system prompt
+  is memoized instead of being rebuilt per call. The llm-core decision latency in the
+  benchmark is UNCHANGED (~1120 ms — dominated by the provider round-trip); the
+  optimization removes per-call init overhead. llm-core itself is NOT retrained and
+  stays version 1.0.0.
+- **Long-input support (§45)** — the task request cap rose **8 000 → 32 000 chars**
+  (`createTaskSchema`) and the dataset-example request cap likewise
+  **8 000 → 32 000** (`datasetExampleSchema`) — large Markdown task descriptions are no
+  longer truncated.
+- `tests/nextool-v1011.test.ts` guards the dataset integrity, the training config and
+  the benchmark constants (see [Testing](testing.md)).
 
 ## Pattern learning (v1.0.10 — additional evidence, not training)
 

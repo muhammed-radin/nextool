@@ -108,6 +108,9 @@ start, and the fallback event makes the degradation visible in the Events view. 
 time is also visible — the `planner.plan_built` message embeds elapsed milliseconds.
 For one-by-one failure handling (no blind retries, replan with failure context,
 endless-repetition guard) see [Failure handling (v1.0.10)](#failure-handling-v1010).
+For **pre-plan** failure recovery (v1.0.11 — the failed step no longer costs a single
+blind retry followed by a hard stop; the runtime recovers instead) see
+[Pre-plan failure recovery (v1.0.11)](#pre-plan-failure-recovery-v1011) below.
 
 ## Planner modes (v1.0.10)
 
@@ -239,12 +242,80 @@ alternative approach) and **latest-observation-aware** otherwise. The emitted
 `planner.one_by_one_step_planned` marks `source: 'deterministic-fallback'` (vs
 `'llm'`) — degradation is visible, and the planner never emits zero steps.
 
+### Pre-plan failure recovery (v1.0.11)
+
+Since v1.0.11 a failed or timed-out **pre-plan** step does not cost the old single blind
+retry followed by a hard stop (`planner.retry` + `TOOL_FAILURE` in that branch are
+superseded). The runtime runs a bounded recovery state machine instead
+(`src/lib/nexool/main/recovery.ts`, one implementation, one call site in `loop.ts`):
+
+```text
+MAIN GOAL → PRE-PLAN → STEP n FAILS (failed / timeout)
+     ↓
+MAIN PLAN FROZEN — step n+1 never runs first; later steps never overtake it
+     ↓
+OBSERVE FAILURE → recovery subgoal created (subgoal.created)
+     ↓
+RECOVERY PRE-PLAN — the SAME buildPlan strategy, bounded
+                     RECOVERY_PLAN_MAX_STEPS = 4 steps
+     ↓
+EXECUTE recovery steps sequentially (normal decide/execute/approval gate)
+     ↓
+OBSERVER VERIFIES (assessRecovery — the authority)
+     ├─ resolved / main goal can safely continue → planner.main_plan_resumed
+     ├─ still broken → retry up to task.recoveryMaxAttempts (2–4, default 4)
+     └─ exhausted / unrecoverable → task ends honestly
+```
+
+- **One attempt** = observe the failure → create/revise the recovery subgoal → pre-plan
+  the recovery → execute the recovery plan → verify. UI refreshes, SSE replays and
+  ordinary planner events never increment the counter. Attempt counts are kept per
+  failed step in a Map on the task run and persist across separate recovery entries.
+- **Scope** — recovery applies ONLY to `plannerType: 'pre-plan'` goal tasks. One-by-one
+  semantics are unchanged (it already replans from the latest state after every
+  failure), and Live-Mode repair passes (`runRepairPasses`) are unchanged.
+- **State-aware resume (never a blind index)** — recovery succeeds when the Observer
+  establishes that the failed condition is resolved OR the main goal can safely
+  continue. If the failed step's objective was satisfied, the step is marked
+  `completed` (its detail gains `— resolved by recovery attempt N`); otherwise the step
+  is **re-queued at its original position** (status back to `pending`) so its REAL
+  re-execution verifies the fix. Completed steps are never repeated.
+- **Exhaustion** — when `recoveryMaxAttempts` attempts have failed:
+  `planner.recovery_exhausted` + `planner.main_plan_aborted` fire and the task ends
+  honestly failed (errorState code `RECOVERY_EXHAUSTED`, stage `recovery`) with a
+  statusDetail naming the failed step and the last failure.
+- **Unrecoverable** — when the Observer judges the failure unrecoverable
+  (recoverability `false`: `cannot_execute`, a clarification requirement, or an
+  observer verdict), recovery aborts IMMEDIATELY — `RECOVERY_UNRECOVERABLE`, no wasted
+  retry budget.
+- **Stop/approval during recovery** — an approval timeout or a user stop during
+  recovery stops the task (`RECOVERY_BLOCKED`). Pause/stop/approval gates stay
+  interactive exactly as in normal execution.
+- **Safeguards** — `taskTimeoutMs`, `safetyLimit`, `maxIterations`, stop/pause and the
+  approval gate all remain active during recovery; every recovery execution goes through
+  `recordExecution`, so safety-limit accounting includes recovery tool calls.
+- **Attempts are configured, not hard-coded** — `task.recoveryMaxAttempts` (central
+  limit: default 4, range 2–4), a Settings → Planning field and a per-task
+  `config.recoveryMaxAttempts` (zod REJECTS out-of-range values with 400 — same
+  contract as `prePlanMaxSteps`). See
+  [Configuration](configuration.md#planner-configuration-v1010).
+
+Recovery events (all `source: 'planner'`):
+`planner.recovery_started`, `planner.recovery_plan_built`, `planner.recovery_attempt`,
+`planner.recovery_succeeded`, `planner.recovery_failed`, `planner.recovery_exhausted`,
+`planner.main_plan_resumed`, `planner.main_plan_aborted` — payload shapes in
+[Events](events.md#planner-source-planner). The Task Preview renders a dedicated
+**Recovery** panel (failed step, live recovery pre-plan, attempt counter, resume note
+or honest exhausted message) — never hidden in the generic event list (see
+[Frontend](frontend.md#v1011-frontend-changes)).
+
 ### File map
 
 | File | Strategy | Contents |
 | --- | --- | --- |
 | `src/lib/nexool/main/planner.ts` | pre-plan (unchanged semantics) | `buildPlan` — the multi-step LLM decomposition + `sanitizeSteps` + fallback plan; `maxSteps` now resolved from `prePlanMaxSteps`. |
 | `src/lib/nexool/main/planner-strategy.ts` | one-by-one (new in v1.0.10) | `resolvePlannerType` (precedence), `buildOneByOneContext` (state bundle), `planOneByOneStep` (single LLM call + events), `sanitizeOneStepResponse` / `sanitizeSingleStep` (single-step contract), `buildOneByOneFallbackStep` (deterministic fallback). |
+| `src/lib/nexool/main/recovery.ts` | pre-plan recovery (**v1.0.11**) | the bounded recovery state machine: frozen main plan, recovery subgoal + own pre-plan (`RECOVERY_PLAN_MAX_STEPS = 4`), sequential execution through the normal gates, Observer `assessRecovery` verification, state-aware resume (mark-completed vs re-queue-at-position), per-failed-step attempt counting, exhaustion/unrecoverable/blocked outcomes. |
 
 ### Worked event timeline (verified acceptance run)
 

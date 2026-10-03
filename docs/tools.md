@@ -21,8 +21,9 @@ interface ToolDefinition {
   description: string;       // what it does — feeds matching + prompts
   purpose?: string;          // why it exists (prompt context)
   category: string;          // monitoring | automation | content | utility | memory | notification | general …
-  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs';
+  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs' | 'freedom-node';
   // v1.0.2: js-function · v1.0.5: nodejs (restricted Node.js environment)
+  // v1.0.11: freedom-node (INTENTIONALLY unrestricted — configuration-gated)
   schema: {
     type: 'object';
     properties: ToolParamDef[];
@@ -79,9 +80,21 @@ sandbox. A tool authored here has `environment: 'js-function'` — or, since v1.
   client) and a restricted virtual `child_process`. Full module tables, VFS guide,
   command policy and limits:
   [Tool Development](tool-development.md#the-nodejs-environment--restricted-virtualized-nodejs).
-- The **Execution environment** selector offers `js-function | nodejs | dynamic` from
-  the real runtime registry (`GET /api/tools/environments`); dynamic tools are locked
-  to dynamic in the editor.
+- **freedom-node** (**v1.0.11**) is an INTENTIONALLY UNRESTRICTED Node.js environment:
+  real `require()`/`import()` (Node builtins `fs`/`path`/`os`/`child_process`/`process`/
+  streams + installed npm packages), the REAL host filesystem (never redirected into the
+  VFS), the real global `fetch` with NO Network Policy caps, and the real `process`
+  (incl. `process.env`) and `Buffer`. It is gated ONLY by the central `fs` section of
+  `config/configuration-limits.json` — configuration-file gate, fail closed
+  (`FREEDOM_DISABLED` when closed); the Settings UI deliberately has no control for it.
+  Full contract, security implications and the preserved task-lifecycle limits:
+  [Tool Development → The freedom-node environment](tool-development.md#the-freedom-node-environment--intentionally-unrestricted-v1011)
+  and [Security](security.md).
+- The **Execution environment** selector offers `js-function | nodejs | dynamic |
+  freedom-node` from the real runtime registry (`GET /api/tools/environments`); dynamic
+  tools are locked to dynamic in the editor. Choosing freedom-node shows the exact
+  warning: *"freedom-node — Full host Node.js access. File system, network, processes,
+  and host-level capabilities may be available."*
 - **Metadata** (v1.0.5) — structured key/value rows (strings only, ≤ 50 pairs),
   stored on the ToolDefinition and round-tripped through export/import.
 - **Auto-Execute switch** (v1.0.6, General section) — the per-tool `autoExecute` flag.
@@ -92,7 +105,10 @@ sandbox. A tool authored here has `environment: 'js-function'` — or, since v1.
 - Limits (both function environments): source ≤ 64 000 chars; sync execution capped
   4 s (`vm` timeout — enforced at function invocation since v1.0.5); the whole run
   capped 10 s; results must be JSON-serializable, ≤ 64 KiB, depth ≤ 12. `nodejs` adds
-  a 256 MiB heap-growth sentinel.
+  a 256 MiB heap-growth sentinel. `freedom-node` keeps the execution deadline and sync
+  cap but relaxes the sandbox-level result/network caps — its result still travels the
+  runtime's JSON transport (5 MiB runtime cap); see
+  [Tool Development](tool-development.md#the-freedom-node-environment--intentionally-unrestricted-v1011).
 - Full guide with worked examples, limits tables and debugging checklist:
   [Tool Development](tool-development.md).
 
@@ -158,9 +174,11 @@ registered until you confirm:
 2. **Client-side validation** (human-readable errors, shown in a rejection dialog):
    - `name` — required, `namespace.action` regex (lowercase).
    - `description` — required (the CoreModule matches on it).
-   - `environment` — must be `js-function`, `nodejs` (both authorable) or `dynamic`;
-     `builtin`/`virtual-env` (read-only registry tools) are rejected with a
-     "read-only" message — duplicate them into a function tool instead.
+   - `environment` — must be `js-function`, `nodejs` (both authorable), **`freedom-node`
+     (v1.0.11 — also authorable; the environment string round-trips EXACTLY and bulk
+     import accepts it)** or `dynamic`; `builtin`/`virtual-env` (read-only registry
+     tools) are rejected with a "read-only" message — duplicate them into a function
+     tool instead.
    - `functionSource` — required for `js-function` and `nodejs` (v1.0.5), ≤ 64 000
      chars; a warning (not a rejection) fires when no `execute(params, context)`
      definition is visible.
@@ -329,7 +347,10 @@ curl -X POST http://localhost:3000/api/tools/js -H 'Content-Type: application/js
   save (`REGISTER_FAILED`). Duplicate names → `ALREADY_EXISTS` (409).
 - v1.0.5 fields: `environment` (`js-function` — the default — or `nodejs`) and
   `metadata` (flat string key/value record, ≤ 50 pairs). A `nodejs` tool's stored
-  environment drives the Node.js sandbox at run time.
+  environment drives the Node.js sandbox at run time. **v1.0.11:** the enum also
+  accepts `freedom-node` (the intentionally unrestricted environment, run by the
+  dedicated freedom runner behind the configuration gate — see
+  [Tool Development](tool-development.md#the-freedom-node-environment--intentionally-unrestricted-v1011)).
 - v1.0.6 field: `autoExecute` (boolean, default `false`). `false` (or omitted) means
   every task-driven execution of this tool passes through the approval gate unless a
   global/task override turns auto-execution on (see

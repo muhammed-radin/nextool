@@ -75,6 +75,13 @@ iterating until limits are hit; it never fabricates success.
   `data`), then finalizes the task as `completed` using the last observation as summary.
 - Live Mode repair passes use `observer.state_changed` (priority 3) when a server is
   verified healthy again after restart.
+- **v1.0.11 — `assessRecovery`**: the Observer is also the AUTHORITY for pre-plan failure
+  recovery. After a recovery attempt executes, `assessRecovery` decides whether the
+  failed condition is RESOLVED, whether the main goal can safely continue anyway, or
+  whether the failure is unrecoverable (recoverability `false` → immediate abort,
+  `RECOVERY_UNRECOVERABLE`). Its verdict drives the state-aware resume (failed step
+  marked completed vs re-queued at its original position) — see
+  [Planner → Pre-plan failure recovery](planner.md#pre-plan-failure-recovery-v1011).
 
 ## Events emitted by this module
 

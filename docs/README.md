@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.10** — release name: *"Major Planner Architecture (Pre-plan + One-by-one) & AI Training Upgrade (model 1.0.1)"* |
-| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — provider-served, NOT retrained; v1.0.2–v1.0.10 add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.1** since v1.0.10) |
+| **Application version** | **1.0.11** — release name: *"THE EMPOWERMENT — pre-plan failure recovery, freedom-node, auto-execution hierarchy (model 1.0.2)"* |
+| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — provider-served, NOT retrained; v1.0.2–v1.0.11 add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.2** since v1.0.11, **1.0.1** in v1.0.10) |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
@@ -28,7 +28,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Getting Started | [Project Structure](project-structure.md) | Every directory and file explained, with dependencies. |
 | Architecture | [Architecture](architecture.md) | Full-stack diagram, Mermaid component map, end-to-end data flow. |
 | Architecture | [Main](main.md) | Orchestrator responsibilities, lifecycle, Goal vs Live. |
-| Architecture | [Planner](planner.md) | Plan decomposition, parallel groups, fallback, events; **v1.0.10 planner modes: `pre-plan` + `one-by-one`** (per-task override, single-step contract, repetition guard). |
+| Architecture | [Planner](planner.md) | Plan decomposition, parallel groups, fallback, events; **v1.0.10 planner modes: `pre-plan` + `one-by-one`** (per-task override, single-step contract, repetition guard); **v1.0.11 pre-plan failure recovery** (frozen main plan, recovery subgoal with its own pre-plan, bounded attempts, state-aware resume). |
 | Architecture | [Observer](observer.md) | Interpretation rules and goal verification (LLM + heuristic). |
 | Architecture | [Events](events.md) | Every emitted event type with priority, payload and source. |
 | Architecture | [Scheduler](scheduler.md) | Live wait/wake machinery, wake sources, repair passes. |
@@ -38,13 +38,13 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | AI Core | [Models](models.md) | llm-core 1.0.0, fallback engine, adapter states, trained checkpoints, export/import. |
 | AI Core | [Model Format](model-format.md) | Export layouts (tfjs zip + `.nextool` package), metadata, import compatibility checks. |
 | AI Core | [Datasets](datasets.md) | JSON + Parquet import/export, splits, versioning; the real Parquet adapter (`@dsnp/parquetjs`). |
-| AI Core | [Training](training.md) | The real TF.js training engine: architecture, config ranges, job lifecycle, checkpoint output, honest limits; **v1.0.10: checkpoint selection, manual early stopping, `modelVersion` 1.0.1, deterministic pattern learning**. |
+| AI Core | [Training](training.md) | The real TF.js training engine: architecture, config ranges, job lifecycle, checkpoint output, honest limits; **v1.0.10: checkpoint selection, manual early stopping, `modelVersion` registration, deterministic pattern learning**; **v1.0.11: model + dataset generation 1.0.2 — 324-example long-context seed, vocabSize 512, honest error-analysis retrain story**. |
 | AI Core | [Evaluation](evaluation.md) | Pre-engine evaluation notes and the manual procedure (kept for history). |
 | AI Core | [Benchmarks](benchmarks.md) | The real `tool-selection` benchmark: model keys, split preference, exact metric definitions, history. |
 | Modes | [Goal Mode](goal-mode.md) | Full lifecycle with sequence diagram and a real example. |
 | Modes | [Live Mode](live-mode.md) | Activation, intervals, event-driven wake, multi-event queue (v1.0.6), pause/resume, feedback, stopping. |
-| Tools | [Tools](tools.md) | Writing tools: definitions (incl. `nodejs` environment, metadata, `autoExecute`), handler kinds, registration paths (incl. Tool IDE), JSON export/import (v1.0.4, nodejs + autoExecute round trip), full example. |
-| Tools | [Tool Development](tool-development.md) | The Tool IDE: environments (`js-function` + `nodejs` with Virtual FS, controlled network, virtual child_process — v1.0.6), metadata editor, schema form, Monaco toggle, testing, editor source-sync, worked examples. |
+| Tools | [Tools](tools.md) | Writing tools: definitions (incl. `nodejs` and the v1.0.11 `freedom-node` environments, metadata, `autoExecute`), handler kinds, registration paths (incl. Tool IDE), JSON export/import (v1.0.4, nodejs + autoExecute round trip), full example. |
+| Tools | [Tool Development](tool-development.md) | The Tool IDE: environments (`js-function` + `nodejs` with Virtual FS, controlled network, virtual child_process — v1.0.6; **`freedom-node` — intentionally unrestricted, configuration-gated — v1.0.11**), metadata editor, schema form, Monaco toggle, testing, editor source-sync, worked examples. |
 | Tools | [Tool Runtime](tool-runtime.md) | Async execution, parallel groups, timeouts, failure/cancel states; v1.0.6 approval gate, `nodejs` runner + `/api/tools/environments` capability source. |
 | Data | [Memory](memory.md) | Persistent Memory vs Live State — storage, retrieval, lifecycle. |
 | Data | [Live State](live-state.md) | Virtual server fleet, runtimeStatus, counters. |
@@ -57,14 +57,63 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Frontend | [Mobile & Responsive](mobile.md) | Bottom nav, safe areas, breakpoints, touch targets, priority layouts. |
 | Operations | [Deployment](deployment.md) | Env vars, standalone build/start, proxies, CLI availability, model/icon artifacts. |
 | Operations | [CLI](cli.md) | `nextool` reference: train, benchmark, model, dataset (JSON + Parquet), tool, runtime, **v1.0.8 config limits/validate**, version. |
-| Operations | [Testing](testing.md) | `bun test` unit suite (339 tests across 10 files) + lint + manual verification workflows. |
+| Operations | [Testing](testing.md) | `bun test` unit suite (371 tests across 11 files) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
 
-## What's new in v1.0.10
+## What's new in v1.0.11
+
+**One-line summary:** THE EMPOWERMENT — pre-plan tasks recover from failed steps
+instead of blind-retrying once and hard-stopping (frozen main plan → recovery subgoal
+with its OWN bounded pre-plan → state-aware resume), a new **intentionally
+unrestricted** `freedom-node` tool environment gated ONLY by the central configuration
+file (fail closed, no Settings control), a centralized **auto-execution hierarchy**
+(global → tool → task, with an observable effective source), and the locally trained
+classifier generation **1.0.2** (324-example long-context dataset, vocabSize 512,
+benchmarked 0.7179 on the frozen 39-case test split). llm-core stays 1.0.0
+(provider-served, never retrained).
+
+- **Pre-plan failure recovery** — a failed/timed-out pre-plan step FREEZES the main
+  plan (later steps never run first), creates a recovery subgoal, gives it its own
+  pre-plan (same `buildPlan` strategy, bounded `RECOVERY_PLAN_MAX_STEPS = 4` steps),
+  executes it through the normal decide/execute/approval gate, and lets the Observer
+  verify. Attempts are bounded by `task.recoveryMaxAttempts` (default 4, range 2–4);
+  exhaustion ends the task honestly (`RECOVERY_EXHAUSTED`), an unrecoverable failure
+  aborts immediately (`RECOVERY_UNRECOVERABLE`, no wasted retry budget). Resume is
+  state-aware: a resolved condition marks the failed step completed, otherwise the step
+  is re-queued at its original position — completed steps are never repeated. One-by-one
+  semantics and Live-Mode repair passes are untouched. See [Planner](planner.md).
+- **freedom-node environment** — `environment: "freedom-node"` tools get real
+  `require()`/`import()` (Node builtins + npm packages), the REAL host filesystem (never
+  the VFS), real network with NO Network Policy caps, and the real `process`/`Buffer` —
+  deliberately unrestricted. The escape is authorized ONLY by the `fs` section of
+  `config/configuration-limits.json` (configuration-file gate, fail closed →
+  `FREEDOM_DISABLED`; the Settings UI has no control for it). Task lifecycle limits
+  (deadline watchdog, vm sync cap, 5 MiB result transport, capped logs) are preserved;
+  js-function/nodejs behavior is byte-for-byte unchanged. See
+  [Tool Development](tool-development.md) and [Security](security.md).
+- **Auto-execution hierarchy** — ONE resolver (`resolveAutoExecution`) decides with
+  explicit precedence: global `true` → ON (global); else tool `true` → ON (tool); else
+  task `true` → ON (task); else OFF (default). A lower layer can never override a higher
+  enable; the effective source is observable via the new `tool.auto_execution` event and
+  the Tool IDE's tri-state Auto-execution select + "Effective auto-execution:" display.
+  See [Tool Runtime](tool-runtime.md) and [Configuration](configuration.md).
+- **Training upgrade (model + dataset 1.0.2)** — shipped seed
+  `config/training/seed-dataset-v1.0.2.json` (324 examples — 246/39/39, 17 categories,
+  all 15 tools in ALL three splits, long Markdown documents and hard negative
+  examples, frozen test/validation membership); trained with `vocabSize` 512 →
+  **0.7179** tool-selection accuracy on the identical frozen 39-case held-out split vs
+  **0.5641** for the 1.0.1 checkpoint and the heuristic floor (llm-core 0.8205,
+  ~1120 ms — unchanged, provider-served). The first 1.0.2 attempt (vocab 128) scored
+  **0.5385** — a regression, recorded honestly, fixed with the wider vocabulary + 61
+  targeted train-only examples. Task/dataset request caps rose to 32 000 chars for
+  large Markdown inputs. See [Training](training.md), [Benchmarks](benchmarks.md) and
+  [Datasets](datasets.md).
+
+### What's new in v1.0.10
 
 **One-line summary:** two real planner strategies — the existing `pre-plan` and the new
 `one-by-one` (plans exactly ONE next step per call from the latest state, with a

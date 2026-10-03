@@ -132,9 +132,39 @@ nextool dataset export tool-matching-core --format parquet -o ./out.parquet
 written and `--output` is **required** (there is no stdout binary mode; JSON keeps the
 stdout default).
 
-## Shipped seed dataset (v1.0.10)
+## Shipped seed dataset (v1.0.11)
 
-The repository ships a ready-to-import training seed at
+The repository ships the CURRENT training seed at
+**`config/training/seed-dataset-v1.0.2.json`** — *"NexTool Core v1.0.2 Seed"*, version
+`1.0.2`:
+
+- **324 examples** — split **246 train / 39 validation / 39 test** (~76% / 12% / 12%).
+- **All 15 registered tools covered in ALL THREE splits** (the 39-case test split is
+  the FROZEN benchmark split — every tool class is scoreable on held-out data).
+- **17 categories**, zero duplicate request strings (no split leakage).
+- **NEW vs the v1.0.1 seed**: long Markdown-heavy documents (runbooks with tables,
+  checklists, code blocks, API docs, config files — with the actionable objective at
+  the beginning, the middle AND the end), genuinely large multi-section maintenance
+  packs (`markdown-long-context` category), and hard examples: typos
+  ("chehk the helath", "servcie restart", "eco the message"), synonyms, ambiguous
+  wording, similar-tool confusion pairs (`server.restart` vs `service.restart`),
+  same-keywords-different-intent ("echo the word 'restart' — do not restart anything"),
+  irrelevant context, failed-previous-attempts, state-after-action and conditional
+  requirements — plus pattern-aware recovery / verification / state-transition
+  examples. `expectedParams` values sit inside the real tool schemas.
+- **Deterministic generator**: `scripts/gen-seed-dataset-v102.py` produced the file;
+  the test/validation membership is FROZEN by request text, so benchmark improvements
+  are measurable on identical held-out data across training runs.
+
+Import it through `POST /api/datasets/import` (JSON body or multipart file) or the CLI
+(`nextool dataset import config/training/seed-dataset-v1.0.2.json`). The v1.0.11
+training generation (model 1.0.2) and the recorded release benchmark were built on this
+dataset — see [Training](training.md) and [Benchmarks](benchmarks.md).
+
+## Shipped seed dataset (v1.0.10 — historical generation)
+
+The v1.0.10 release shipped this seed — it remains importable and is kept as history
+(the current seed is the v1.0.2 one above):
 **`config/training/seed-dataset-v1.0.1.json`** — *"NexTool Core v1.0.1 Seed"*, version
 `1.0.1`:
 

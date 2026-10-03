@@ -92,6 +92,9 @@ changes shape without changing its safeguards:
 - **Repair passes are unchanged** — environment-driven repair
   (`runRepairPasses` on crash/degrade wakes) behaves identically for BOTH planner
   types; the planner strategy only governs how the next autonomous action is chosen.
+  **v1.0.11 note:** the new pre-plan failure-recovery state machine applies to GOAL
+  tasks on the pre-plan strategy only — one-by-one live/live tasks keep exactly the
+  failure handling above, and repair passes are untouched by it.
 - **Safeguards still bound the loop** — `maxIterations`, `safetyLimit` and
   `taskTimeoutMs` apply to one-by-one exactly as to pre-plan (a verification task hit
   `SAFETY_LIMIT` at `maxIterations=12` as designed).

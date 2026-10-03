@@ -29,6 +29,7 @@ clamp ranges enforced by `updateSettings`.
 | `defaultMode` | `'goal' \| 'live'` | `goal` | — | — | Mode used when a task does not specify one. Invalid values fall back to `goal`. |
 | `defaultPlannerType` | `'pre-plan' \| 'one-by-one'` | `pre-plan` | — | — | **v1.0.10**: default planner strategy for tasks that do not override it. Resolved AND persisted into the task's config at creation (later Settings changes never switch an existing task). Invalid values fall back to `pre-plan`. |
 | `prePlanMaxSteps` | number | `10` | 1 | 122 | **v1.0.10**: maximum steps the pre-plan planner may generate (replaces the old hard-coded 8). Governed by the central limit `task.prePlanMaxSteps`; used by the pre-plan strategy only. |
+| `recoveryMaxAttempts` | number | `4` | 2 | 4 | **v1.0.11**: maximum recovery attempts per failed pre-plan step (one attempt = observe → recovery subgoal → recovery pre-plan → execute → verify). Governed by the central limit `task.recoveryMaxAttempts` (range 2–4). Shown in Settings → **Planning**. |
 | `defaultReasoningLevel` | `1..6` | `4` | 1 | 6 | Default L1–L6 reasoning level. |
 | `maxSubtoolCalls` | number | `20` | 1 | 200 | Cap on tool calls per parallel group slice / subtool auto-execution. |
 | `safetyLimit` | number | `100` | 1 | 500 | Hard cap on total tool calls per task. |
@@ -38,7 +39,7 @@ clamp ranges enforced by `updateSettings`.
 | `liveIntervalMs` | number (ms) | `60000` | 1000 | 3600000 | Scheduled tick interval for Live Mode. |
 | `parallelToolCalls` | boolean | `true` | — | — | v1.0.3: runtime default for concurrent execution of independent tool calls (task config overrides). |
 | `maxParallelToolCalls` | number | `4` | 1 | 8 | v1.0.3: hard cap on concurrently executing tool calls (waves handle the rest). |
-| `autoExecuteTools` | boolean | `false` | — | — | v1.0.6: global auto-execution override. `true` → every tool in every task executes without approval (overrides per-task and per-tool settings). `false` (default) → the per-task config and per-tool `autoExecute` flags decide. |
+| `autoExecuteTools` | boolean | `false` | — | — | v1.0.6: global auto-execution override — **v1.0.11: the top of the hierarchy ("Global — Highest priority")**. `true` → every tool in every task executes without approval (no lower layer can override it). `false` (default) → the per-tool `autoExecute` config wins over the per-task console preference (see the hierarchy below). |
 | `allowMultipleEvents` | boolean | `false` | — | — | v1.0.6: multi-event live processing ("Read & Act All Events"). `true` → events arriving while busy/paused/waiting are queued (max 50) and processed one-by-one (priority → arrival). `false` (default) = v1.0.5 single-event behavior. |
 | `useMemory` | boolean | `true` | — | — | Whether the context bundle loads persistent memory entries. |
 | `logLevel` | `'info' \| 'debug' \| 'error'` | `info` | — | — | Coarse log level; invalid values revert to `info`. |
@@ -92,32 +93,49 @@ Semantics live in [Planner](planner.md) (group batching) and
 [Tool Runtime](../tools/tool-runtime.md) (`executeParallelBatch`: waves, caps, failure
 isolation).
 
-### Tool auto-execution approval (v1.0.6)
+### Tool auto-execution approval (v1.0.6, hierarchy redefined in v1.0.11)
 
-One precedence model decides whether a task-driven tool execution runs immediately or
-waits for an Allow/Deny decision (`resolveAutoExecute` in `src/lib/nexool/approval.ts`;
-see [Tool Runtime](../tools/tool-runtime.md#the-approval-gate-v106)):
+One centralized resolver decides whether a task-driven tool execution runs immediately
+or waits for an Allow/Deny decision — **v1.0.11 replaces the old boolean-merging
+precedence with an explicit hierarchy** (`resolveAutoExecution` in
+`src/lib/nexool/approval.ts`; see
+[Tool Runtime](../tools/tool-runtime.md#the-approval-gate-v106)):
 
 ```
-Global setting autoExecuteTools (default false)
-  ↓ true  → every tool executes automatically (overrides everything)
-  ↓ false → task config autoExecuteTools
-            ↓ true  → tools in this task execute automatically
-            ↓ false → tool definition autoExecute (default false)
-                      ↓ false → APPROVAL REQUIRED → task waits in awaiting_approval
+1. GLOBAL auto-execution (Settings autoExecuteTools)  — highest priority
+     ↓ global === true → ON (source: 'global') — nothing below can override it
+2. TOOL auto-execution (ToolDefinition.autoExecute, tri-state in the IDE)
+     ↓ tool === true → ON (source: 'tool') — wins over the task console
+3. TASK CONSOLE preference (config.autoExecuteTools)   — lowest priority
+     ↓ task === true → ON (source: 'task')
+4. otherwise → OFF (source: 'default') → APPROVAL REQUIRED
 ```
+
+- `undefined` means **inherit / never forces** — a layer without a value never decides;
+  a lower layer can NEVER override a higher-priority enable. Test matrix: global ON +
+  tool OFF + task OFF → ON (global); global ON + tool ON + task OFF → ON (global);
+  global OFF + tool ON + task OFF → ON (tool); global OFF + tool OFF + task ON → ON
+  (task); all OFF → OFF (default). The back-compat `resolveAutoExecute` delegates to it.
+- **The effective source is observable**: when a lower layer decides, the runtime emits
+  `tool.auto_execution` with `{ tool, enabled, source }`; the Tool IDE shows an
+  "Effective auto-execution:" display (e.g. `GLOBAL ENABLED — this setting cannot
+  override the global switch`). The approval flow itself
+  (`tool.approval.required/allowed/denied/timeout` → `tool.execution.blocked`) is
+  unchanged.
 
 Where to configure:
 
-- **Global** — Settings switch **"Auto-Execute Tools"** (or `PUT /api/settings` with
+- **Global (highest priority)** — Settings switch **"Auto-Execute Tools"**, labeled
+  **"Global — Highest priority"** since v1.0.11 (or `PUT /api/settings` with
   `autoExecuteTools`).
-- **Per task** — `config.autoExecuteTools` in `POST /api/tasks`; the Task Console
-  renders the per-task **Auto-Execute Tools** toggle.
-- **Per tool** — the `autoExecute` field on the ToolDefinition (default `false`),
-  edited via the Tool IDE **Auto-Execute Tools** switch (General section),
-  `POST /api/tools/js`, or `PUT /api/tools/{name}`. Persists with the tool and
-  round-trips export/import; tools without the field default to approval-required
-  without invalidating anything.
+- **Per tool** — the `autoExecute` field on the ToolDefinition, now a **tri-state**
+  **Auto-execution** select in the Tool IDE (Enabled / Disabled / **Inherit** — stored
+  as `boolean | undefined`, where `undefined` = inherit), via `POST /api/tools/js` or
+  `PUT /api/tools/{name}`. Persists with the tool and round-trips export/import.
+- **Per task (lowest priority)** — `config.autoExecuteTools` in `POST /api/tasks`; the
+  Task Console renders the per-task **Auto-Execute Tools** switch labeled **"Task —
+  lowest priority"** and shows "Controlled by global auto-execution setting — this task
+  preference cannot override it." whenever the global switch is ON.
 
 While an approval is pending the task status is `awaiting_approval`; the decision UIs
 are the pending-approval cards in Task Preview / Live Monitor (`GET/POST /api/approvals`).
@@ -156,6 +174,23 @@ latest state — semantics in [Planner](planner.md#planner-modes-v1010)).
   `"expected number to be <=122"`); see [API](api.md#post-apitasks). Old tasks/configs
   without the fields keep working unchanged (backward compatible).
 
+### Recovery configuration (v1.0.11)
+
+A failed pre-plan step is RECOVERED (not blind-retried once and hard-stopped) — the
+attempt budget is configurable, never hard-coded:
+
+- **Central limit** — `task.recoveryMaxAttempts`: integer, **default 4, min 2, max 4**.
+  One attempt = observe failure → recovery subgoal → recovery pre-plan → execute →
+  verify (see [Planner](planner.md#pre-plan-failure-recovery-v1011)).
+- **Global** — Settings → **Planning** section: "Recovery attempts per failed step"
+  (`recoveryMaxAttempts`, min/max derived from the central limit like every other
+  numeric field), persisted via `PUT /api/settings`.
+- **Per task** — `config.recoveryMaxAttempts` in `POST /api/tasks`. Out-of-range values
+  are **rejected with 400 `INVALID_REQUEST`** (zod, same contract as
+  `prePlanMaxSteps`) — never silently clamped at the route boundary.
+- Applies to **pre-plan goal tasks only**; one-by-one tasks already replan and
+  Live-Mode repair passes are unchanged.
+
 ## Per-task config (TaskConfig)
 
 Sent as `config` in `POST /api/tasks` (or `body.config`). `mode` is used **exactly as
@@ -178,10 +213,11 @@ provided** — it defaults to `settings.defaultMode` but is never auto-switched 
 | `liveIntervalMs` | number | `settings.liveIntervalMs` | 1000–3600000. |
 | `parallelToolCalls` | boolean | `settings.parallelToolCalls` | v1.0.3: `false` forces strictly sequential execution. |
 | `maxParallelToolCalls` | number | `settings.maxParallelToolCalls` | v1.0.3: clamped 1–8 at merge time. |
-| `autoExecuteTools` | boolean | `false` | v1.0.6: per-task auto-execution override (see the precedence model above; the global setting, when `true`, still wins). |
+| `autoExecuteTools` | boolean | `false` | v1.0.6: per-task auto-execution preference — **v1.0.11: the LOWEST layer of the hierarchy**; a `true` here enables auto-execution only when neither the global switch nor the tool config did. |
 | `allowMultipleEvents` | boolean | `settings.allowMultipleEvents` (default `false`) | v1.0.6: enables the multi-event live queue for this task ("Read & Act All Events"). |
 | `plannerType` | `'pre-plan' \| 'one-by-one'` | `settings.defaultPlannerType` (then `'pre-plan'`) | **v1.0.10**: planner strategy override for this task. Resolved AND persisted in the stored config JSON at creation — later Settings changes never switch an existing task. |
 | `prePlanMaxSteps` | number | `settings.prePlanMaxSteps` (default 10) | **v1.0.10**: max steps for the pre-plan planner (1–122, central limit `task.prePlanMaxSteps`); governs the pre-plan strategy only. Persisted with the task config at creation. |
+| `recoveryMaxAttempts` | number | `settings.recoveryMaxAttempts` (default 4) | **v1.0.11**: recovery attempt budget per failed pre-plan step (2–4, central limit `task.recoveryMaxAttempts`; out-of-range values rejected with 400). Pre-plan tasks only. |
 | `sessionId` | string? | — | Free-form session correlation. |
 | `context` | object? | — | Arbitrary initial context. |
 
@@ -259,6 +295,21 @@ Typed Resolved Limits  ──→  Settings · Backend (schemas) · Runtime
 | `maxDepth` | 56 | 128 | levels | Maximum directory nesting depth. |
 | `maxPathLength` | 512 | 4096 | chars | Maximum normalized virtual path length. |
 
+### Filesystem freedom gate (fs.* — v1.0.11, freedom-node only)
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | true | Authorizes the **freedom-node** environment's unrestricted host capabilities (real filesystem, real network, real processes, `process.env`). **Configuration-file ONLY**: the Settings UI deliberately exposes no control for this switch. Fail closed — when `false` (or the file is unreadable) every freedom-node execution is rejected with `FREEDOM_DISABLED` and nothing runs. |
+| `restricted` | false | `false` (default) = freedom-node uses the REAL host filesystem and is never redirected into the restricted tool VFS; `true` would re-enable restrictions for freedom-node. |
+
+**`fs.*` vs `vfs.*` are separate on purpose**: `vfs.*` governs the restricted Virtual
+File System used by `js-function`/`nodejs` tools (unchanged); `fs.*` governs ONLY the
+unrestricted freedom-node mode. The gate is read server-side on every freedom-node
+execution (`getFreedomFsConfig()` in `config-limits.ts`); no API route and no Settings
+field can flip it — editing this file on the host is the only way. See
+[Tool Development](tool-development.md#the-freedom-node-environment--intentionally-unrestricted-v1011)
+and [Security](security.md#freedom-node-threat-model-v1011).
+
 ### Execution (execution.*)
 
 | Property | Default | Shipped max | Unit | Meaning |
@@ -289,7 +340,9 @@ Typed Resolved Limits  ──→  Settings · Backend (schemas) · Runtime
 `liveIntervalMs` 60000 (1000–3600000 ms) · `maxParallelToolCalls` 4 (1–8) ·
 `eventQueueCap` 50 (1–500) · **v1.0.10** `task.prePlanMaxSteps` — integer, default 10,
 min 1, max **122** (the single source of truth for the pre-plan planner's step cap;
-replaces the old hard-coded 8).
+replaces the old hard-coded 8) · **v1.0.11** `task.recoveryMaxAttempts` — integer,
+default **4**, allowed range **2–4** (the recovery attempt budget per failed pre-plan
+step; out-of-range API values are rejected, not clamped).
 
 These bound both the Settings defaults and per-task configuration values —
 `updateSettings` clamps with them, the zod schemas validate with them and

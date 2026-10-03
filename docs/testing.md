@@ -10,7 +10,7 @@ NexTool Q1 ships a focused **bun test** unit suite alongside `bun run lint`
 and the manual verification workflows below.
 
 ```bash
-bun test                     # runs tests/*.test.ts (339 tests across 10 files, 0 failing)
+bun test                     # runs tests/*.test.ts (371 tests across 11 files, 0 failing)
 bun run lint                 # eslint over the repo
 bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ```
@@ -26,7 +26,8 @@ core), `tests/nextool-v103.test.ts` (v1.0.3 additions), `tests/nextool-v104.test
 `tests/nextool-v109.test.ts` (v1.0.9 additions — 19 tests).
 `tests/nextool-v1091.test.ts` (v1.0.91 additions — 30 tests).
 `tests/nextool-v1010.test.ts` (v1.0.10 additions — 45 tests, ~1484 expects).
-Full suite: **339 tests / 0 fail across 10 files**.
+`tests/nextool-v1011.test.ts` (v1.0.11 additions — 32 tests).
+Full suite: **371 tests / 0 fail across 11 files**.
 
 | Area | What is verified |
 | --- | --- |
@@ -79,6 +80,12 @@ Full suite: **339 tests / 0 fail across 10 files**.
 | **v1.0.10 pattern → example conversion** | `patternsToDatasetExamples` converts reliable single-action patterns (`early-completion:<tool>`, `outcome:unhealthy-detected->restart`) at `minConfidence` 0.5; multi-tool transitions are deliberately NOT converted; `?format=examples` endpoint shape verified |
 | **v1.0.10 training `modelVersion`** | optional semver-validated config registers the checkpoint under the given version (default `TRAINED_MODEL_VERSION` `'1.0.1'`); `checkpointSelection` (best-val-accuracy strategy) and `modelSemanticVersion` land in the manifest; legacy `tc-<job>` `checkpointId` preserved |
 | **v1.0.10 seed dataset integrity** | `config/training/seed-dataset-v1.0.1.json`: valid JSON, strict shape, 170 examples — 121/23/26 splits, all 15 tools in train AND test, zero duplicate requests (no split leakage), `expectedParams` conform to the real tool schemas |
+| **v1.0.11 pre-plan recovery state machine** | a failed pre-plan step FREEZES the main plan (later steps never run first), creates a recovery subgoal and pre-plans it with `RECOVERY_PLAN_MAX_STEPS = 4`; the resume is STATE-AWARE — a resolved condition marks the failed step completed (detail gains `resolved by recovery attempt N`), otherwise the step is re-queued at its original position; completed steps are never repeated; attempt counts persist per failed step across entries (Map on the task run); exhaustion → `RECOVERY_EXHAUSTED` abort, unrecoverable → immediate `RECOVERY_UNRECOVERABLE` abort (no wasted budget), stop/approval-timeout → `RECOVERY_BLOCKED`; the eight `planner.recovery_*`/`main_plan_*` events carry the documented payloads |
+| **v1.0.11 recovery attempt budget** | `task.recoveryMaxAttempts` {integer, default 4, min 2, max 4} validates in the central limits; settings + task zod schemas REJECT out-of-range values (400, not clamped); the recovery engine resolves the budget from the task config, never hard-codes it |
+| **v1.0.11 freedom-node gate** | `isFreedomNodeAuthorized()`/`getFreedomFsConfig()` read the central `fs` section live ({enabled: true, restricted: false}); the gate FAILS CLOSED — a closed gate (or unreadable config) rejects every freedom-node execution with `FREEDOM_DISABLED` before anything runs; test runs route through the same runner + gate; `registerJsToolSchema`/`updateToolSchema`/`testToolSchema` accept `freedom-node`; portable import/export round-trips the environment string EXACTLY (`IMPORTABLE_ENVIRONMENTS` includes it) |
+| **v1.0.11 auto-execution hierarchy** | `resolveAutoExecution(global, tool, task)` test matrix: G=T/O=F/Tk=F → ON (global); G=T/O=T/Tk=F → ON (global); G=F/O=T/Tk=F → ON (tool); G=F/O=F/Tk=T → ON (task); G=F/O=F/Tk=F → OFF (default); `undefined` never forces and a lower layer can never override a higher enable; back-compat `resolveAutoExecute` delegates to it; `tool.auto_execution` is emitted with `{ tool, enabled, source }` when a lower layer decides (global-forced stays silent) |
+| **v1.0.11 seed dataset 1.0.2 integrity** | `config/training/seed-dataset-v1.0.2.json`: valid JSON, strict shape, 324 examples — 246/39/39 splits, 17 categories, all 15 tools in ALL THREE splits, zero duplicate requests, `expectedParams` conform to the real tool schemas, frozen test/validation membership |
+| **v1.0.11 long-input caps** | `createTaskSchema.request` accepts 32 000 chars and rejects beyond; `datasetExampleSchema.request` likewise (8 000 → 32 000) |
 
 The `tests/` directory also contains shell scripts that verify the **sandbox
 infrastructure** (fake-`bun` harness around `db:push`, python-runtime
@@ -193,7 +200,7 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 12. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
     connection pill reflects real SSE state when you kill the dev server mid-session.
 
-## Regression checklist (v1.0.2 focus areas, still valid in v1.0.10)
+## Regression checklist (v1.0.2 focus areas, still valid in v1.0.11)
 
 - Dynamic runtime status: no hardcoded `nextool@runtime:~$` prompt or static "Running";
   `[running]: Tool called <tool>` cursor behavior matches actual executions.
@@ -207,8 +214,8 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Benchmark honesty: `paramAccuracy` `-`/null without `expectedParams` or for
   classifiers; suite fixed to `tool-selection`.
 - Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
-  version` all read 1.0.10; engine stays llm-core 1.0.0 (not retrained); trained
-  checkpoints register under 1.0.1.
+  version` all read 1.0.11; engine stays llm-core 1.0.0 (not retrained); trained
+  checkpoints register under 1.0.2.
 - Parallel batching (v1.0.3): a multi-step plan with independent steps emits
   `planner.parallel_batch`, executions share a `batchId` (grouped card in Task Preview),
   a failing sibling does not cancel the others (`planner.partial_failure`), and
@@ -322,6 +329,34 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
   <=122"); `plannerType: 'fast-forward'` → 400; `PUT /api/settings` validates both
   fields the same way; `prePlanMaxSteps: 10` (the default) is accepted and visible in
   the Task Console Planning controls.
+- Pre-plan recovery acceptance (v1.0.11): run a pre-plan goal task whose step fails —
+  the event timeline shows the main plan FROZEN (`planner.recovery_started`), a
+  recovery subgoal with its OWN pre-plan (`planner.recovery_plan_built`, ≤ 4 steps),
+  sequential recovery execution through the normal gates, then EITHER
+  `planner.recovery_succeeded` + `planner.main_plan_resumed` (the failed step completed
+  with "resolved by recovery attempt N" in its detail, or re-queued at its original
+  position and re-executed for real) OR honest exhaustion (`planner.recovery_exhausted`
+  + `planner.main_plan_aborted`, task failed with `RECOVERY_EXHAUSTED`). Completed
+  steps are never repeated; later steps never run first.
+- Recovery budget validation (v1.0.11): `POST /api/tasks` with
+  `config.recoveryMaxAttempts: 5` → 400 `INVALID_REQUEST` (range 2–4, never clamped);
+  `recoveryMaxAttempts: 1` → 400; the Settings → Planning field clamps within 2–4 from
+  the central limit; exhausting the budget ends the task with the failed step named in
+  the statusDetail.
+- freedom-node gate (v1.0.11): with the shipped config (`fs.enabled: true`) a
+  freedom-node tool reaches the real host fs / network; set `fs.enabled: false` in
+  `config/configuration-limits.json` (the ONLY way — the Settings UI has no control,
+  no API flips it) → every freedom-node execution AND Tool-IDE test run is rejected
+  with `FREEDOM_DISABLED` and nothing executes; existing js-function/nodejs tools keep
+  byte-for-byte behavior; export → import of a freedom-node tool round-trips the
+  environment string exactly.
+- Auto-execution hierarchy (v1.0.11): with the global switch OFF and a tool set to
+  Enabled, a task-driven execution auto-runs and emits `tool.auto_execution` with
+  `source: 'tool'`; with the global switch ON, the Task Console switch shows
+  "Controlled by global auto-execution setting" and the emitted source (if any lower
+  layer is involved) is `'global'`-forced behavior; the Tool IDE tri-state select with
+  Inherit keeps approval-required unless a higher layer enables; `tool.approval.*`
+  flows are unchanged.
 
 ## Known gaps (by design)
 

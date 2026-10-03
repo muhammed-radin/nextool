@@ -2,9 +2,9 @@
   "version": 1,
   "$meta": {
     "name": "NexTool Q1 configuration limits",
-    "description": "Single authoritative source for every configurable NexTool limit. A self-hosted administrator can customize the allowed range, default, type, unit and nullability of each setting by editing THIS file — no source-code modification or rebuild is required. The application validates min <= default <= max for every numeric property at startup and fails clearly when the file is invalid. Changing a limit requires no rebuild: new values are picked up after a reload/restart (see docs/configuration.md).",
+    "description": "Single authoritative source for every configurable NexTool limit. A self-hosted administrator can customize the allowed range, default, type, unit and nullability of each setting by editing THIS file \u2014 no source-code modification or rebuild is required. The application validates min <= default <= max for every numeric property at startup and fails clearly when the file is invalid. Changing a limit requires no rebuild: new values are picked up after a reload/restart (see docs/configuration.md).",
     "notes": [
-      "null means 'no explicit limit' ONLY for properties explicitly marked nullable — each nullable property documents exactly what null does. null is never interpreted as unlimited automatically.",
+      "null means 'no explicit limit' ONLY for properties explicitly marked nullable \u2014 each nullable property documents exactly what null does. null is never interpreted as unlimited automatically.",
       "The security boundaries (virtual filesystem isolation, network host policy, sandbox escapes) are NOT controlled by this file and can never be weakened by raising a limit.",
       "Timeouts are intentionally separate properties: execution.timeoutMs governs the whole tool execution; network.timeoutMs governs one network request; childProcess.timeoutMs is the per-command default ceiling (the effective tool execution timeout raises it); task.toolTimeoutMs is the global tool default; task.taskTimeoutMs governs the whole task. Tool approval (300000 ms) and interactive prompts (120000 ms) are fixed runtime semantics, not configurable here."
     ]
@@ -48,7 +48,7 @@
       "max": 56,
       "unit": "count",
       "category": "network",
-      "description": "Maximum network requests per tool execution (default 56). Counts fetch, XMLHttpRequest, virtual http/https requests, URL imports and npm registry/tarball downloads — every request goes through the same accounting."
+      "description": "Maximum network requests per tool execution (default 56). Counts fetch, XMLHttpRequest, virtual http/https requests, URL imports and npm registry/tarball downloads \u2014 every request goes through the same accounting."
     },
     "allowUrlImports": {
       "type": "boolean",
@@ -74,7 +74,7 @@
       "max": 734003200,
       "unit": "bytes",
       "category": "vfs",
-      "description": "Maximum size of ONE file in a tool's Virtual FS workspace (default 2 MiB). Also caps single reads/writes. Files that already exceed a lowered limit are preserved — new violating operations fail clearly."
+      "description": "Maximum size of ONE file in a tool's Virtual FS workspace (default 2 MiB). Also caps single reads/writes. Files that already exceed a lowered limit are preserved \u2014 new violating operations fail clearly."
     },
     "maxTotalBytes": {
       "type": "integer",
@@ -126,7 +126,7 @@
       "max": 3600000,
       "unit": "ms",
       "category": "execution",
-      "description": "Tool execution timeout — default 10 seconds. Tool-specific timeoutMs overrides the global default; the max here (1 hour shipped) is the hard runtime ceiling no tool may bypass. Self-hosted administrators may raise the ceiling by editing THIS file."
+      "description": "Tool execution timeout \u2014 default 10 seconds. Tool-specific timeoutMs overrides the global default; the max here (1 hour shipped) is the hard runtime ceiling no tool may bypass. Self-hosted administrators may raise the ceiling by editing THIS file."
     },
     "syncTimeoutMs": {
       "type": "integer",
@@ -136,7 +136,7 @@
       "max": 1800000,
       "unit": "ms",
       "category": "execution",
-      "description": "Synchronous (non-awaiting) execution cap inside the sandbox — protects the server event loop from runaway synchronous loops (default 4 s, maximum 30 minutes)."
+      "description": "Synchronous (non-awaiting) execution cap inside the sandbox \u2014 protects the server event loop from runaway synchronous loops (default 4 s, maximum 30 minutes)."
     },
     "heapSentinelBytes": {
       "type": "integer",
@@ -146,7 +146,7 @@
       "max": 763363328,
       "unit": "bytes",
       "category": "execution",
-      "description": "Heap-growth sentinel for nodejs tool executions (default 256 MiB, shipped maximum 728 MiB). This is a MONITOR, not an operating-system memory limit: it aborts the tool result when observed heap growth exceeds the value — memory already allocated is not revoked."
+      "description": "Heap-growth sentinel for nodejs tool executions (default 256 MiB, shipped maximum 728 MiB). This is a MONITOR, not an operating-system memory limit: it aborts the tool result when observed heap growth exceeds the value \u2014 memory already allocated is not revoked."
     },
     "maxSourceChars": {
       "type": "integer",
@@ -218,7 +218,7 @@
       "max": 512,
       "unit": "count",
       "category": "child-process",
-      "description": "Maximum virtual command invocations (pipe stages count individually) per tool execution (default 64 — realistic multi-command workflows like npm init/install/run need far more than one digit; v1.0.6 shipped 4)."
+      "description": "Maximum virtual command invocations (pipe stages count individually) per tool execution (default 64 \u2014 realistic multi-command workflows like npm init/install/run need far more than one digit; v1.0.6 shipped 4)."
     },
     "maxPipeStages": {
       "type": "integer",
@@ -280,7 +280,7 @@
       "max": 500,
       "unit": "count",
       "category": "task",
-      "description": "Task safety limit — total observed runtime actions before the task is force-stopped (default 100)."
+      "description": "Task safety limit \u2014 total observed runtime actions before the task is force-stopped (default 100)."
     },
     "taskTimeoutMs": {
       "type": "integer",
@@ -340,7 +340,7 @@
       "max": 122,
       "unit": "count",
       "category": "task",
-      "description": "v1.0.10 — Maximum number of steps the pre-plan planner may generate (default 10, hard maximum 122). Bounds the Settings default and per-task configuration. Relevant to pre-plan planning only — one-by-one planning generates exactly one step per call."
+      "description": "v1.0.10 \u2014 Maximum number of steps the pre-plan planner may generate (default 10, hard maximum 122). Bounds the Settings default and per-task configuration. Relevant to pre-plan planning only \u2014 one-by-one planning generates exactly one step per call."
     },
     "recoveryMaxAttempts": {
       "type": "integer",
@@ -350,7 +350,7 @@
       "max": 4,
       "unit": "count",
       "category": "task",
-      "description": "v1.0.11 — Maximum recovery attempts per failed pre-plan step (default 4, allowed range 2..4). One attempt = observe failure → recovery subgoal → recovery pre-plan → execute recovery steps → verify. Exhausted recovery ends the task honestly; one-by-one planning replans by design and does not consume recovery attempts."
+      "description": "v1.0.11 \u2014 Maximum recovery attempts per failed pre-plan step (default 4, allowed range 2..4). One attempt = observe failure \u2192 recovery subgoal \u2192 recovery pre-plan \u2192 execute recovery steps \u2192 verify. Exhausted recovery ends the task honestly; one-by-one planning replans by design and does not consume recovery attempts."
     }
   },
   "fs": {
@@ -359,14 +359,14 @@
       "nullable": false,
       "default": true,
       "category": "freedom-node",
-      "description": "v1.0.11 — Authorizes the freedom-node environment's unrestricted host capabilities (real filesystem, real network, child processes, process env). Configuration-file ONLY: the Settings UI deliberately exposes no control for this switch (fail closed when false — freedom-node executions are rejected)."
+      "description": "v1.0.11 \u2014 Authorizes the freedom-node environment's unrestricted host capabilities (real filesystem, real network, child processes, process env). Configuration-file ONLY: the Settings UI deliberately exposes no control for this switch (fail closed when false \u2014 freedom-node executions are rejected)."
     },
     "restricted": {
       "type": "boolean",
       "nullable": false,
       "default": false,
       "category": "freedom-node",
-      "description": "v1.0.11 — Marks the freedom-node filesystem mode as restricted or not. false (default) = freedom-node uses the REAL host filesystem and is never redirected into the restricted tool VFS; true would re-enable restrictions. Distinct from the vfs.* section, which governs the restricted virtual filesystem used by js-function/nodejs tools."
+      "description": "v1.0.11 \u2014 Marks the freedom-node filesystem mode as restricted or not. false (default) = freedom-node uses the REAL host filesystem and is never redirected into the restricted tool VFS; true would re-enable restrictions. Distinct from the vfs.* section, which governs the restricted virtual filesystem used by js-function/nodejs tools."
     }
   }
 }

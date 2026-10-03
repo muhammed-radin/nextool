@@ -35,7 +35,7 @@ console/entity references match the actual UI.
 | `tool.failed` with `UNKNOWN_TOOL` | Tool name not in registry (typo, or registered in a different process) | `GET /api/tools` to list actual names; dynamic tools must be registered in the running instance. |
 | `tool.failed` with `INVALID_PARAMS` | Params failed coercion/validation (missing required, wrong type, out of min/max, bad enum) | Read the joined message on the event/execution; it names each violation. |
 | `tool.failed` with `NO_HANDLER` | Definition exists but no handler bound (e.g. dynamic tool whose kind was dropped) | Re-register with a valid `handlerKind`. |
-| Task failed `TOOL_FAILURE` after retry | Tool failed twice (Goal Mode retries once) | Check `planner.retry` + `tool.failed` events for the root cause; fix the tool or environment, then re-run. |
+| Task failed `TOOL_FAILURE` after retry (pre-v1.0.11 path; since v1.0.11 a failed pre-plan step enters RECOVERY first) | Tool failed twice (Goal Mode retries once) | Check `planner.retry` + `tool.failed` events — and since v1.0.11 the `planner.recovery_*` events — for the root cause; fix the tool or environment, then re-run. See the [Recovery issues](#recovery-issues-v1011) table. |
 | Execution ends `timeout` (`TIMEOUT`) | Handler exceeded `toolTimeoutMs` (default 30 s, executor floor 250 ms) | Raise the task's `toolTimeoutMs` (max 300 000) or fix the slow handler; `delay.wait` caps at 10 s. |
 | Tool won't toggle | Wrong name encoding | Tool names contain dots — URL-encode the path segment: `/api/tools/server.health/toggle`. |
 | CoreModule says `cannot_execute` | Chosen tool disabled or excluded by the task's `enabledTools` allow-list | Re-enable the tool or widen the allow-list in Task Console. |
@@ -83,6 +83,23 @@ console/entity references match the actual UI.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | One-by-one task failed with `SAFETY_LIMIT` / `limit_reached` | Expected safeguard, not a bug — the one-by-one loop is bounded by the same `maxIterations` / `safetyLimit` / `taskTimeoutMs` as pre-plan (a verification task hit `SAFETY_LIMIT` at `maxIterations=12` as designed); the goal may be unfinishable or need more cycles | Raise `maxIterations` / `safetyLimit` (within their 1–200 / 1–500 bounds) or `taskTimeoutMs`, or make the goal more finite/verifiable; check the `planner.one_by_one_*` events to see whether the loop was repeating (the endless-repetition guard replaces a third identical proposal with the failure-aware fallback). |
+
+## Recovery issues (v1.0.11)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Task failed with `RECOVERY_EXHAUSTED` and the statusDetail names a failed step | All `recoveryMaxAttempts` (2–4, default 4) recovery attempts for that pre-plan step failed — this is the honest-end path, not a crash | Read the `planner.recovery_failed` payloads for the last failure reason; fix the underlying tool/environment problem; raise `recoveryMaxAttempts` (Settings → Planning or per-task config, max 4) or make the step more robust; re-run the task. |
+| Task failed with `RECOVERY_UNRECOVERABLE` after ONE failed step | By design — the Observer judged the failure unrecoverable (`cannot_execute`, a clarification requirement, or an unrecoverable verdict), so the retry budget was NOT wasted | Give the task the missing tool/parameter or clarify the request; `RECOVERY_UNRECOVERABLE` is immediate by design. |
+| Task stopped during recovery with `RECOVERY_BLOCKED` | A user stop or an approval timeout landed while a recovery attempt was executing | Expected safeguard behavior — recovery never outlives the task's stop/approval gates; re-run when ready. |
+| Recovery events flood the timeline but the plan looks unchanged | `planner.recovery_*` events are expected during recovery; the Task Preview Recovery panel is the intended surface (failed step, recovery pre-plan with live glyphs, attempt counter, resume note / exhausted message) | Open Task Preview — the dedicated **Recovery** panel renders whenever `state.recovery` is present; the plan checklist updates on every recovery event via the SSE refresh regex. |
+
+## Freedom-node / tool environment issues (v1.0.11)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Freedom-node execution fails with `FREEDOM_DISABLED` before anything runs | The configuration gate is closed (or `config/configuration-limits.json` is unreadable): `fs.enabled` must be `true` and `fs.restricted` `false` for freedom-node to execute — the gate is read server-side on EVERY execution and FAILS CLOSED | Edit `config/configuration-limits.json` on the HOST (`fs.enabled: true`, `fs.restricted: false`) — **NOT Settings**: the Settings UI deliberately has no control for the `fs`/`vfs` gate and no API can flip it. `GET /api/tools/environments` → `freedomNode.enabled` shows the live gate state. |
+| Freedom-node tool cannot be registered / imported | Registration, editing, import (single + bulk v1.0.91 pipeline) all ACCEPT `freedom-node` — a rejection here means a different validation failed (name, source, schema) | Fix the reported validation problem; the environment string round-trips export/import exactly. Note: importing/registration succeeds even with the gate closed — the gate only blocks EXECUTION. |
+| js-function/nodejs tool started reaching the host fs after v1.0.11 | Should be impossible — freedom-node is EXPLICIT-ONLY: existing environments keep byte-for-byte behavior and a dedicated runner (`freedom-node-runner.ts`) serves the unrestricted path | Verify the tool's `environment` field; if it truly says `js-function`/`nodejs` and still escapes the sandbox, report it (the runners and their caps are unchanged and unit-tested). |
 
 ## Parquet dataset problems (v1.0.3)
 

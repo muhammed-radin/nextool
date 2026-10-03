@@ -99,6 +99,31 @@ prints the aggregate metrics block (see
 [CLI](../operations/cli.md#benchmark--score-a-decision-unit-against-a-dataset)); the run
 is persisted identically to a console run.
 
+## v1.0.11 release benchmark (recorded history)
+
+Recorded in this release as `BenchmarkRunRecord` rows labeled **`v1011-bench-*`**, on
+the **FROZEN held-out test split (39 cases)** of the shipped seed dataset
+`config/training/seed-dataset-v1.0.2.json` — the same 39 cases for every generation
+(the test/validation membership is frozen by request text, so the numbers are directly
+comparable):
+
+| Model key | Tool-selection accuracy | Param accuracy | noTool | Avg latency | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Trained classifier **v1.0.2** (this release) | **0.7179** | `null` | 0 | ~0–1 ms/case | Tool selector only — no parameter generation (documented classifier limit). Trained on dataset 1.0.2 with `vocabSize` 512, best val_accuracy 0.7692. |
+| Trained classifier **v1.0.1** (same split) | 0.5641 | `null` | — | ~1 ms/case | The v1.0.10 generation scored on the NEW frozen 39-case split — a harder, long-context split than its own 26-case one. |
+| `heuristic-fallback` | 0.5641 | 0.45 | — | instant | Deterministic floor / regression tripwire. |
+| `llm-core` | **0.8205** | 0.6552 | — | ~1120 ms/case | `schemaValidity` 0.9167. The provider-served decision unit — **NOT retrained in v1.0.11**, model version stays **1.0.0**; the v1.0.11 ZAI-client caching/prompt memoization removes per-call init overhead but the benchmark latency is dominated by the provider round-trip (~1120 ms, unchanged). |
+
+**The retrain story is part of the record:** the first 1.0.2 attempt (still `vocabSize`
+128) scored **0.5385** — a regression vs 1.0.1, documented honestly in
+[Training](training.md#v1011--training-upgrade-model--dataset-102) — and was fixed with
+the wider vocabulary + 61 targeted train-only examples while the test/validation splits
+stayed FROZEN. 11 of the 39 cases still fail (long-doc health objective, typos,
+low-confidence confusions) — recorded, not hidden.
+
+**Historical v1.0.10 numbers (26-case split of seed 1.0.1) stay recorded below —
+different split, different dataset; do not mix the columns.**
+
 ## v1.0.10 release benchmark (recorded history)
 
 Recorded in this release as `BenchmarkRunRecord` rows labeled **`v1010-bench-*`**, on

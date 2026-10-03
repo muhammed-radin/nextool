@@ -14,7 +14,7 @@ What "model" means in NexTool, what is actually installed, and how the Models sc
 | Attribute | Value (from `version.ts` / `/api/models`) |
 | --- | --- |
 | Name | `llm-core` |
-| Version | `1.0.0` — **unchanged through v1.0.10**; llm-core is a provider-served model (`z-ai-web-dev-sdk`) and was **NOT retrained locally** — every release so far (v1.0.2–v1.0.10) adds tooling around it, never a new decision unit. |
+| Version | `1.0.0` — **unchanged through v1.0.11**; llm-core is a provider-served model (`z-ai-web-dev-sdk`) and was **NOT retrained locally** — every release so far (v1.0.2–v1.0.11) adds tooling around it, never a new decision unit. |
 | Architecture | "LLM CoreModule (tool-matching + parameter generation heads via structured prompting)" |
 | Backend | `z-ai-web-dev-sdk` (server-side only — never imported in client code) |
 | Status | `active` |
@@ -65,13 +65,13 @@ NexTool keeps three version concepts deliberately separate (`src/lib/nexool/vers
 
 | Version | Current value | Meaning |
 | --- | --- | --- |
-| **Application** (`APP_VERSION`) | **1.0.10** (release: *"Major Planner Architecture (Pre-plan + One-by-one) & AI Training Upgrade (model 1.0.1)"*) | The application release; bumped per release, read by the UI badges, `/api/system` and the CLI. |
-| **CoreModule model** (`CORE_MODULE_VERSION`) | **1.0.0** | The llm-core decision unit. Provider-served through `z-ai-web-dev-sdk`; **never retrained locally** — v1.0.10 explicitly does NOT change it. |
-| **Trained classifier generation** (`TRAINED_MODEL_VERSION`, since v1.0.10) | **1.0.1** | The semantic version LOCALLY TRAINED tool-selection checkpoints register under (expanded seed dataset + validation-based checkpoint selection). Historical checkpoints keep their original versions; nothing is re-versioned in place. |
+| **Application** (`APP_VERSION`) | **1.0.11** (release: *"THE EMPOWERMENT — pre-plan failure recovery, freedom-node, auto-execution hierarchy (model 1.0.2)"*) | The application release; bumped per release, read by the UI badges, `/api/system` and the CLI. |
+| **CoreModule model** (`CORE_MODULE_VERSION`) | **1.0.0** | The llm-core decision unit. Provider-served through `z-ai-web-dev-sdk`; **never retrained locally** — v1.0.11 explicitly does NOT change it (inference latency is dominated by the provider round-trip; the v1.0.11 ZAI-client caching + prompt memoization only remove per-call init overhead). |
+| **Trained classifier generation** (`TRAINED_MODEL_VERSION`, since v1.0.10) | **1.0.2** | The semantic version LOCALLY TRAINED tool-selection checkpoints register under — **1.0.2 in this release** (expanded long-context dataset, `vocabSize` 512, checkpoint selection on the best validation epoch); 1.0.1 was the v1.0.10 generation. Historical checkpoints (1.0.0, 1.0.1) keep their original versions; nothing is re-versioned in place. |
 
 A completed training job therefore records BOTH identifiers: the manifest's
-`modelSemanticVersion` (the generation, default `'1.0.1'` for jobs created in
-v1.0.10) and the legacy `checkpointId` (`tc-<job>`) for traceability — see
+`modelSemanticVersion` (the generation, default `'1.0.2'` for jobs created in
+v1.0.11) and the legacy `checkpointId` (`tc-<job>`) for traceability — see
 [Training](training.md#v1010--training-engine-upgrade-model-version-101).
 
 ## Trained classifier checkpoints (v1.0.2)
@@ -87,10 +87,24 @@ engine. See [Training](training.md).
 **v1.0.10 manifest additions** — two new fields appear on newly trained manifests:
 `checkpointSelection` (`{ selectedEpoch, valAccuracy, strategy }` — the weights were
 snapshotted at the best validation-accuracy epoch and restored before saving) and
-`modelSemanticVersion` (the classifier generation, `'1.0.1'` by default in this
-release). The `trainingConfig` may carry an explicit `modelVersion` (semver-checked);
+`modelSemanticVersion` (the classifier generation — `'1.0.2'` by default since
+v1.0.11). The `trainingConfig` may carry an explicit `modelVersion` (semver-checked);
 when absent the engine defaults to `TRAINED_MODEL_VERSION`. Existing checkpoints are
 untouched.
+
+**v1.0.11 — generation 1.0.2** — the shipped seed moved to
+`config/training/seed-dataset-v1.0.2.json` ("NexTool Core v1.0.2 Seed", 324 examples —
+246/39/39, 17 categories, long Markdown-heavy documents, hard negative examples) and
+the new checkpoint registered under `1.0.2` with `vocabSize` 512. Benchmarks on the
+FROZEN 39-case held-out test split (identical data for every generation):
+**1.0.2 = 0.7179** tool-selection accuracy vs **0.5641** for the 1.0.1 checkpoint and
+the heuristic floor; llm-core **0.8205** (~1120 ms — provider round-trip, unchanged,
+NOT retrained, still 1.0.0). The first 1.0.2 training attempt (`vocabSize` 128) scored
+**0.5385** — a regression vs 1.0.1, recorded honestly and fixed with the wider
+vocabulary + 61 targeted train-only examples; the test/validation splits were FROZEN so
+the improvement is measurable on identical held-out data. Full numbers in
+[Benchmarks](benchmarks.md#v1011-release-benchmark-recorded-history), the retrain
+story in [Training](training.md#v1011--training-upgrade-model--dataset-102).
 
 ## Export & import (v1.0.2)
 

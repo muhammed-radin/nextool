@@ -6,7 +6,7 @@ order: 1
 
 # API Reference
 
-Every HTTP endpoint in NexTool Q1 v1.0.10. All routes are Next.js route handlers
+Every HTTP endpoint in NexTool Q1 v1.0.11. All routes are Next.js route handlers
 (`runtime = 'nodejs'`, `dynamic = 'force-dynamic'`) under `src/app/api/`. JSON in/out,
 except the SSE stream, the model export download (zip), the dataset Parquet export
 (binary), the icons upload (multipart) and the multipart dataset import variant.
@@ -71,18 +71,22 @@ queued/running/waiting/awaiting_approval/paused/completed/failed/stopped (v1.0.6
 `awaiting_approval` and `paused`); `mode` goal|live.
 
 ### POST /api/tasks
-Create + start a task (async). Request: `{ "request": string (≤4000 chars),
+Create + start a task (async). Request: `{ "request": string (≤ 32 000 chars — raised
+from 8 000 in v1.0.11 so large Markdown task descriptions are never truncated),
 "config"?: Partial<TaskConfig>, "mode"?, "reasoningLevel"? }` — top-level
 `mode`/`reasoningLevel` merge into config. `config` is zod-validated and may include
 the v1.0.3 parallel policy fields `parallelToolCalls` (boolean) and
 `maxParallelToolCalls` (int 1–8), the v1.0.6 fields `autoExecuteTools` (boolean)
-and `allowMultipleEvents` (boolean), and the **v1.0.10 planner fields
-`plannerType` (`'pre-plan' | 'one-by-one'`) and `prePlanMaxSteps` (int 1–122)**.
-The server validates both planner fields: an invalid `plannerType` or an out-of-range
-`prePlanMaxSteps` (e.g. `123`) is rejected with 400 `INVALID_REQUEST`
+and `allowMultipleEvents` (boolean), the **v1.0.10 planner fields
+`plannerType` (`'pre-plan' | 'one-by-one'`) and `prePlanMaxSteps` (int 1–122)**, and
+the **v1.0.11 `recoveryMaxAttempts` (int 2–4)** field.
+The server validates the bounded fields: an invalid `plannerType`, an out-of-range
+`prePlanMaxSteps` (e.g. `123`) or an out-of-range `recoveryMaxAttempts` (outside 2–4)
+is rejected with 400 `INVALID_REQUEST`
 (`"expected number to be <=122"` / enum wording) — nothing is silently clamped at the
 route boundary. Resolved values (`plannerType` following the precedence
-task → global `defaultPlannerType` → `'pre-plan'`, plus `prePlanMaxSteps`) are
+task → global `defaultPlannerType` → `'pre-plan'`, plus `prePlanMaxSteps` and
+`recoveryMaxAttempts`) are
 **persisted into the stored config JSON at creation**, so later Settings changes never
 switch an existing task's strategy; old configs without the fields keep working.
 **v1.0.4: `config.enabledTools` is required and must
@@ -92,9 +96,9 @@ be a non-empty array of tool names** — the zod schema rejects an explicit empt
 always sends `config.enabledTools: [...]`. Response: 201 `TaskDetail`
 (summary + config, state, plan, finalResult, error, sessionId).
 Errors: `INVALID_REQUEST` (empty request, empty `enabledTools` array, invalid
-`plannerType` / out-of-range `prePlanMaxSteps`),
-`TOOLS_REQUIRED` (missing/empty tool selection), `TASK_CREATE_FAILED` (validation,
-e.g. too long).
+`plannerType` / out-of-range `prePlanMaxSteps` / out-of-range `recoveryMaxAttempts`,
+request longer than 32 000 chars),
+`TOOLS_REQUIRED` (missing/empty tool selection), `TASK_CREATE_FAILED` (validation).
 
 ```bash
 curl -X POST http://localhost:3000/api/tasks -H 'Content-Type: application/json' \
@@ -266,10 +270,14 @@ References panel and IntelliSense all read (no hardcoded frontend copy). Respons
 {
   "environments": [
     // authorable: js-function ("JavaScript sandbox"), nodejs ("Node.js sandbox"),
-    // dynamic ("Dynamic handler"); read-only: builtin, virtual-env.
+    // dynamic ("Dynamic handler") AND — v1.0.11 — freedom-node ("Freedom Node
+    // (unrestricted)"); read-only: builtin, virtual-env.
     { "id": "nodejs", "label": "Node.js sandbox",
       "description": "Restricted Node.js environment — same execute contract plus the Virtual FS, controlled http/https, a virtual child_process layer and require()/import() through the centralized import resolver.",
-      "authorable": true, "execution": "node-vm" }
+      "authorable": true, "execution": "node-vm" },
+    { "id": "freedom-node", "label": "Freedom Node (unrestricted)",
+      "description": "Full host Node.js access. File system, network, processes, and host-level capabilities may be available. Requires the configuration-file fs gate (the Settings UI cannot grant it).",
+      "authorable": true, "execution": "freedom-node" }
   ],
   "handlerKinds": [
     // the real runtime registry: echo, delay, http_get, uuid — each with label,
@@ -299,11 +307,22 @@ References panel and IntelliSense all read (no hardcoded frontend copy). Respons
                         "mv", "basename", "dirname", "env", "true", "false"]
   },
   "capabilities": [                  // v1.0.6 — capability × environment matrix
-    { "capability": "fetch", "jsFunction": "Yes (policy-controlled)", "nodejs": "Yes (policy-controlled)" },
-    { "capability": "Virtual FS", "jsFunction": "VFS modules via require() only", "nodejs": "Full VFS API (fs module)" }
+                                    // v1.0.11 — every row gains a `freedomNode` column
+                                    // (the honest unrestricted-environment state,
+                                    // e.g. fetch: "Yes (REAL network — no policy caps)",
+                                    // Virtual FS: "No — freedom-node uses the REAL
+                                    // filesystem", fs: "REAL host filesystem (fs config gate)")
+    { "capability": "fetch", "jsFunction": "Yes (policy-controlled)", "nodejs": "Yes (policy-controlled)", "freedomNode": "Yes (REAL network — no policy caps)" },
+    { "capability": "Virtual FS", "jsFunction": "VFS modules via require() only", "nodejs": "Full VFS API (fs module)", "freedomNode": "No — freedom-node uses the REAL filesystem" }
     // … JavaScript standard APIs, XMLHttpRequest, alert/prompt, timers, require(),
     // ESM, URL imports, fs, http/https, child_process …
   ],
+  "freedomNode": {                   // v1.0.11 — the freedom-node runtime reference
+    "enabled": true,                 // LIVE gate state (isFreedomNodeAuthorized())
+    "fsConfig": { "enabled": true, "restricted": false },
+    "note": "Intentionally unrestricted. Authorized ONLY by the fs section of config/configuration-limits.json (configuration-file gate — the Settings UI cannot enable it; fail closed).",
+    "preservedLimits": { /* execution deadline, sync cap, result transport, log caps */ }
+  },
   "node": {
     "modules": { "crypto": { "description": "…", "methods": [ "createHash", "…" ] },
                  // 10 static modules + 7 virtual entries (fs, os, timers,
@@ -349,9 +368,11 @@ segment is URL-decoded server-side. Errors: `NOT_FOUND` (404).
 
 ### POST /api/tools/js
 Register a function tool authored in the Tool IDE (`environment` `js-function` — the
-default — or `nodejs` since v1.0.5). Request:
+default — `nodejs` since v1.0.5, or **`freedom-node` since v1.0.11** — the intentionally
+unrestricted environment run by the dedicated freedom runner behind the configuration
+gate). Request:
 `{ name (namespace.action, required), description?, purpose?, category?, toolVersion?,
-environment?: "js-function" | "nodejs", metadata?: Record<string,string> (≤ 50 pairs),
+environment?: "js-function" | "nodejs" | "freedom-node", metadata?: Record<string,string> (≤ 50 pairs),
 autoExecute?: boolean (v1.0.6 — default false → approval required),
 timeoutMs?: int (v1.0.7 — tool-specific execution timeout, 1000–3600000; values above
 1 hour are rejected),
@@ -362,12 +383,13 @@ is written (validated with the runner of the chosen environment). Response: 201
 be strings), `ALREADY_EXISTS` (409), `REGISTER_FAILED` (500 wrapper).
 
 ### PUT /api/tools/{name}
-Partial update of a user-editable tool (`dynamic` | `js-function` | `nodejs`; built-ins
+Partial update of a user-editable tool (`dynamic` | `js-function` | `nodejs` |
+`freedom-node`; built-ins
 and virtual-env are read-only). Body is any subset of `{ name (rename), description,
 purpose, category, toolVersion, schema, functionSource, enabled, environment
-(v1.0.5 — js-function ⇄ nodejs switch), metadata (v1.0.5 — flat string record; omitted
+(v1.0.5 — js-function ⇄ nodejs switch; v1.0.11 — ⇄ freedom-node too), metadata (v1.0.5 — flat string record; omitted
 keeps the stored pairs, an object replaces them), handlerKind, handlerConfig,
-autoExecute (v1.0.6 — omitted keeps the stored flag), timeoutMs (v1.0.7 — int
+autoExecute (v1.0.6 — omitted keeps the stored flag; v1.0.11 tri-state boolean|undefined), timeoutMs (v1.0.7 — int
 1000–3600000; omitted keeps the stored value) }` — at least one field required.
 Response: updated `ToolEntry`. Errors: `NOT_FOUND` (404),
 `READ_ONLY` (403), `INVALID_PARAMS`.
@@ -386,7 +408,9 @@ never mutates editor or registry state). Request: exactly one of
 `{ name, params? }` (registered tool — runs its real handler pipeline; js/nodejs tools
 run their saved source with `mode: "test"`), `{ functionSource, params?, environment? }
 (unsaved Tool IDE source, sandboxed — v1.0.5: pass `"environment": "nodejs"` to run it
-in the Node.js sandbox; default `js-function`), optional `timeoutMs` (v1.0.7 —
+in the Node.js sandbox, default `js-function`; v1.0.11: `"environment":
+"freedom-node"` routes the run through the SAME freedom runner with the SAME
+configuration gate — a closed gate rejects the test with `FREEDOM_DISABLED`), optional `timeoutMs` (v1.0.7 —
 effective execution timeout for the run, 1000–3600000; registered-tool mode uses the
 tool's own configured timeout by default) and optional `networkTimeoutMs` (v1.0.9 —
 Network Policy request timeout for the run). Response:
@@ -593,10 +617,12 @@ parallel policy fields `parallelToolCalls` (boolean) and `maxParallelToolCalls`
 (int 1–8), the v1.0.6 fields `autoExecuteTools` (boolean — global auto-execution
 override) and `allowMultipleEvents` (boolean — multi-event live processing), the
 v1.0.7 field `toolTimeoutMs` (int 1000–3600000 — the default tool execution timeout;
-**values above 1 hour are rejected** with 400 `INVALID_PARAMS`), and the **v1.0.10
+**values above 1 hour are rejected** with 400 `INVALID_PARAMS`), the **v1.0.10
 Planning fields `defaultPlannerType` (enum `'pre-plan' | 'one-by-one'` — the global
 default planner strategy) and `prePlanMaxSteps` (int 1–122, zod intLimit from the
-central `task.prePlanMaxSteps` metadata — values outside the range are rejected)**.
+central `task.prePlanMaxSteps` metadata — values outside the range are rejected)**,
+and the **v1.0.11 Planning field `recoveryMaxAttempts` (int 2–4 — the global default
+recovery attempt budget per failed pre-plan step; out-of-range values are rejected)**.
 Returns the saved settings. Note: an invalid-type body is treated as `{}`
 (no-op save).
 
@@ -642,7 +668,7 @@ severity, resource, message }] }`. Reports clear errors — never creates replac
 
 ## Documentation
 
-### GET /api/docs — `{ version: APP_VERSION ("1.0.10"), count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: APP_VERSION ("1.0.11"), count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`
@@ -681,6 +707,7 @@ enveloped). Not used by the console.
 | `allowMultipleEvents` | boolean | v1.0.6 — "Read & Act All Events"; enables the live event queue for this task; default false |
 | `plannerType` | `'pre-plan' \| 'one-by-one'` | v1.0.10 — planner strategy override; precedence task → global `defaultPlannerType` → `'pre-plan'`; resolved AND persisted in the stored config JSON at creation (invalid values → 400 `INVALID_REQUEST`) |
 | `prePlanMaxSteps` | 1–122 | v1.0.10 — max steps for the pre-plan planner (default 10); `123` → 400 `INVALID_REQUEST` (`"expected number to be <=122"`); persisted with the task config at creation |
+| `recoveryMaxAttempts` | 2–4 | v1.0.11 — recovery attempt budget per failed pre-plan step (default 4, central limit `task.recoveryMaxAttempts`); values outside 2–4 → 400 `INVALID_REQUEST`; persisted with the task config at creation |
 | `sessionId`, `context` | free-form | |
 
 For payload/response schemas of the domain objects (`TaskDetail`, `NexToolEvent`,

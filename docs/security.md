@@ -133,10 +133,46 @@ resolve; every Node specifier is rejected.
   host block, so other local services (databases, metadata endpoints, sibling ports)
   remain unreachable.
 
+## Freedom-node threat model (v1.0.11)
+
+The `freedom-node` tool environment is an **intentionally unrestricted** execution
+surface (see [Tool Development](tool-development.md#the-freedom-node-environment--intentionally-unrestricted-v1011)).
+It does not weaken the sandboxes above — it sits OUTSIDE them, explicitly requested per
+tool (`environment: "freedom-node"`), and everything in this section describes that
+single, explicit, opt-in path:
+
+- **What it grants** — real `require()`/`import()` (Node builtins + npm packages), the
+  REAL host filesystem (never the VFS), real network WITHOUT the Network Policy caps
+  (no request-count/response-size/redirect/per-request-timeout/URL-import limits), real
+  `child_process` and the real `process` object including `process.env`.
+- **Configuration-only gate, fail closed** — the escape is authorized ONLY by the
+  central `fs` section of `config/configuration-limits.json` (`fs.enabled: true`,
+  `fs.restricted: false`). The runtime reads the gate server-side on EVERY execution;
+  when it is closed — or the file is unreadable — every freedom-node execution (and
+  every Tool-IDE test run of one) is rejected with `FREEDOM_DISABLED` and nothing runs.
+- **No Settings control, no API path** — the Settings UI deliberately has NO control
+  for the `fs` switch and no API route can flip the gate. Editing the configuration
+  file on the host is the only way to open or close it. This keeps the host-level
+  escape out of reach of console-only users and of any HTTP-only compromise of the
+  console surface.
+- **Explicit-only blast radius** — existing `js-function`/`nodejs`/`dynamic` tools keep
+  every restriction byte-for-byte; the gate cannot be widened for them.
+- **What is still bounded** — the TASK LIFECYCLE remains: the tool execution deadline
+  (interaction-aware watchdog), the `vm` sync cap (event-loop protection), the
+  JSON-serializable result contract with a 5 MiB runtime transport cap, capped console
+  log capture, and the approval/auto-execution hierarchy. `process.env` is never
+  auto-dumped into logs or the UI.
+- **Operational guidance** — treat a freedom-node tool like a host script: install only
+  from trusted sources, review its source, and keep `fs.enabled: false` on shared hosts
+  (a closed gate defeats even imported/registered freedom tools, fail closed).
+
 ## Tool approval & approval timeout
 
-Every tool carries an `autoExecute` flag (default **false**). With the global
-`autoExecuteTools` and per-task `autoExecuteTools` overrides false, every task-driven
+Every tool carries an `autoExecute` flag (default **false**). Since v1.0.11 the decision
+goes through the ONE auto-execution hierarchy (`resolveAutoExecution`: global → tool →
+task, `undefined` never forces, a lower layer can never override a higher enable — see
+[Configuration](configuration.md#tool-auto-execution-approval-v106-hierarchy-redefined-in-v1011)).
+With all layers unset/false, every task-driven
 execution waits for an explicit Allow/Deny decision: `tool.approval.required` →
 `awaiting_approval` → `tool.approval.allowed | .denied | .timeout`. The 5-minute
 timeout **stops the task** — a timeout never silently executes the tool, and denial
@@ -180,6 +216,11 @@ artifacts or broken references as errors instead of silently recreating anything
 - **Test-mode interactivity is simulated.** In Tool IDE test runs, `alert` resolves
   immediately and `prompt` returns its default (or `null`) — real interactivity only
   exists in production task executions.
+- **freedom-node is unrestricted BY DESIGN (v1.0.11).** The environment deliberately
+  drops the sandbox guarantees documented on this page for its tools (real fs, real
+  network, real processes). Its only gate is the configuration file, and it fails
+  closed; the safeguards that remain are the task-lifecycle limits listed in the
+  [freedom-node threat model](#freedom-node-threat-model-v1011).
 
 ## See also
 

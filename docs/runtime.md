@@ -76,7 +76,7 @@ per-request network limits from `network.*` and the virtual command caps from
 | `maxParallelToolCalls` (v1.0.3) | 4 | 1–8 | Hard cap on concurrently executing tool calls; overflow runs in later waves. `parallelToolCalls: false` disables batching entirely. |
 | `taskTimeoutMs` | 120 000 | 5 000–3 600 000 | Goal loop returns `TIMEOUT` → `failed`. Live Mode uses it as the **per-cycle** deadline for event-driven observation. |
 | `toolTimeoutMs` | 30 000 | 1 000–300 000 (executor floor 250 ms) | Single execution → status `timeout`, error code `TIMEOUT`. |
-| Request length | — | ≤ 4000 chars | Rejected at creation (`TASK_CREATE_FAILED`). |
+| Request length | — | ≤ 32 000 chars (v1.0.11, raised from 8 000) | Rejected at creation (`TASK_CREATE_FAILED`). |
 
 Checks run at the top of every goal-loop iteration, so a limit breach never lets a task
 run more than one extra step.
@@ -135,14 +135,17 @@ with statusDetail `Stopped by user.` (or `Live task stopped by user.`).
 
 - **Tool-level**: `Promise.race([handler, timeout, abort])`. A timeout produces execution
   status `timeout` with `TIMEOUT`; the observation sentence reflects it.
-- **Goal Mode retry**: exactly **one** retry per failed/timed-out call — a fresh
-  CoreModule decision with the error injected as the last observation
-  (`planner.retry`, priority 4). A second consecutive failure terminates the task with
-  `TOOL_FAILURE`.
+- **Goal Mode failure handling (v1.0.11)** — a failed/timed-out **pre-plan** step no
+  longer costs a single blind retry plus a hard stop: the main plan is FROZEN and the
+  bounded recovery state machine runs (recovery subgoal → own pre-plan ≤ 4 steps →
+  execute → Observer verify), bounded by `task.recoveryMaxAttempts` (2–4, default 4).
+  One-by-one tasks keep their no-blind-retry replan (`planner.one_by_one_replanned`).
+  See [Planner → Pre-plan failure recovery](planner.md#pre-plan-failure-recovery-v1011).
 - **LLM call budgets**: CoreModule 25 s (plus one stricter re-ask), Planner 25 s,
   Observer verify 6 s, subgoal proposal / feedback revision 10 s each.
 - **Live Mode**: no retry machine — failed cycles just log and the next tick tries again;
-  the wait loop keeps the task alive until stopped.
+  the wait loop keeps the task alive until stopped. Environment-driven repair passes are
+  unchanged by v1.0.11 recovery (recovery applies to pre-plan goal tasks only).
 
 ## Error surface (errorState codes)
 
@@ -153,7 +156,10 @@ with statusDetail `Stopped by user.` (or `Live task stopped by user.`).
 | `CLARIFICATION_REQUIRED` | core_decision | CoreModule reported missing required parameters. |
 | `NO_CAPABLE_TOOL` | core_decision | CoreModule returned `cannot_execute`. |
 | `NO_TOOL` | core_decision | `no_tool` decision that didn't look informational. |
-| `TOOL_FAILURE` | tool_execution | Tool failed after the single retry. |
+| `TOOL_FAILURE` | tool_execution | Tool failed after the single retry (legacy path; pre-plan failures now enter recovery first — v1.0.11). |
+| `RECOVERY_EXHAUSTED` | recovery | **v1.0.11** — all `recoveryMaxAttempts` (2–4) recovery attempts for a failed pre-plan step failed; the task ends honestly with a statusDetail naming the failed step and the last failure. |
+| `RECOVERY_UNRECOVERABLE` | recovery | **v1.0.11** — the Observer judged the failure unrecoverable (`cannot_execute`, a clarification requirement, or an observer verdict); recovery aborts immediately without wasting the retry budget. |
+| `RECOVERY_BLOCKED` | recovery | **v1.0.11** — the task was stopped, or an approval timed out, while recovery was executing. |
 | `RUNTIME_ERROR` | main | Unexpected exception inside the loop. |
 | `RUNTIME_CRASH` | main | Fire-and-forget wrapper caught a crash (task marked `failed`, priority-2 `task.failed`). |
 

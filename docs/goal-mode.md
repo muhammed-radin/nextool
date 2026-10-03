@@ -42,8 +42,11 @@ sequenceDiagram
             O-->>L: observation sentence
             L->>O: checkGoalComplete(goal, observation)
             O-->>L: complete? (llm-core or heuristic)
-        else failed execution
-            L->>C: re-decide with error as observation (one retry)
+        else failed execution (pre-plan)
+            L->>L: FREEZE main plan → recovery subgoal + own pre-plan →
+                  execute → verify (≤ task.recoveryMaxAttempts attempts)
+        else failed execution (one-by-one)
+            L->>C: re-decide with error as observation (replan, no blind retry)
         else plan exhausted
             L->>P: proposeNextSubgoal (LLM, 10s)
         end
@@ -55,7 +58,8 @@ sequenceDiagram
 
 ## Phase by phase
 
-1. **Understand / create** — request validated (≤ 4000 chars), config clamped, task row
+1. **Understand / create** — request validated (≤ 32 000 chars since v1.0.11, raised
+   from 8 000 for large Markdown descriptions), config clamped, task row
    created, `task.created` emitted, execution fire-and-forget.
 2. **Plan** — v1.0.10: the task's **planner strategy** decides how steps come into
    existence. `pre-plan` (default) runs the LLM decomposition below (max
@@ -73,7 +77,11 @@ sequenceDiagram
    decision per step (if any is not a `tool_call`, the group falls back to sequential
    handling), concurrency capped by `maxParallelToolCalls` (1–8, default 4), one sibling
    failing never cancels the others. Sequential execution remains the fallback and the
-   `parallelToolCalls: false` path.
+   `parallelToolCalls: false` path. **v1.0.11:** when a pre-plan step FAILS, the loop
+   no longer blind-retries once and hard-stops — the main plan is FROZEN and a bounded
+   recovery state machine runs (see
+   [Planner](planner.md#pre-plan-failure-recovery-v1011)); one-by-one tasks keep their
+   replan-from-current-state failure handling.
 5. **Observe** — `interpret` produces an operational sentence; the observation is stored
    (ring of 30), emitted (`observer.observed`) and fed into the next decision.
 6. **Update state** — plan steps marked completed/failed/skipped, counters persisted,
@@ -111,7 +119,10 @@ informational) rather than inventing an answer.
 | Non-informational `no_tool` | failed | failed | `NO_TOOL` |
 | `clarification_required` | failed | failed | `CLARIFICATION_REQUIRED` |
 | `cannot_execute` | failed | failed | `NO_CAPABLE_TOOL` |
-| Tool failed twice | failed | failed | `TOOL_FAILURE` |
+| Tool failed twice (legacy pre-v1.0.11 behavior; pre-plan failures now recover first — see the rows below) | failed | failed | `TOOL_FAILURE` |
+| Pre-plan step unrecoverable after `recoveryMaxAttempts` attempts (v1.0.11) | failed | failed | `RECOVERY_EXHAUSTED` (stage `recovery`) |
+| Observer judged the failure unrecoverable (v1.0.11) | failed | failed | `RECOVERY_UNRECOVERABLE` (immediate abort — no wasted retry budget) |
+| Stop / approval timeout during recovery (v1.0.11) | failed / stopped | failed / stopped | `RECOVERY_BLOCKED` |
 | `maxIterations` / `safetyLimit` hit | failed | limit_reached | `SAFETY_LIMIT` |
 | `taskTimeoutMs` exceeded | failed | limit_reached | `TIMEOUT` |
 | Loop crash | failed | failed | `RUNTIME_ERROR` / `RUNTIME_CRASH` |
@@ -121,9 +132,11 @@ informational) rather than inventing an answer.
 `reasoningLevel` (observer switches to heuristic verification at ≤ 2), `enabledTools`
 (allow-list enforced post-decision), `maxIterations`, `safetyLimit`, `maxSubtoolCalls`,
 `taskTimeoutMs`, `toolTimeoutMs`, `useMemory`, `autoExecuteSubtools`,
-`parallelToolCalls` + `maxParallelToolCalls` (v1.0.3 concurrency policy), and
+`parallelToolCalls` + `maxParallelToolCalls` (v1.0.3 concurrency policy),
 **v1.0.10**: `plannerType` + `prePlanMaxSteps` (planner strategy and pre-plan step cap —
-see [Planner configuration](configuration.md#planner-configuration-v1010)) — all
+see [Planner configuration](configuration.md#planner-configuration-v1010)), and
+**v1.0.11**: `recoveryMaxAttempts` (recovery attempt budget per failed pre-plan step,
+2–4 — see [Recovery configuration](configuration.md#recovery-configuration-v1011)) — all
 documented in [Configuration](../getting-started/configuration.md).
 
 ## See also

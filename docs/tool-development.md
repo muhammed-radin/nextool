@@ -355,6 +355,93 @@ with `js-function` this is a documented limitation, not a bug.
 | `MEMORY` | Heap growth exceeded the 256 MiB sentinel. |
 | `TOOL_FAILURE` | The function threw — e.g. `Module "x" is not available in the NexTool Node.js environment (…)`, `NetworkPolicyError`, `VirtualFSAccessError`, `ChildProcessPolicyError`. |
 
+## The freedom-node environment — INTENTIONALLY unrestricted (v1.0.11)
+
+**v1.0.11** adds a third authorable environment — `environment: "freedom-node"` — and
+it is deliberately the OPPOSITE of the two sandboxes above. A freedom-node tool
+(`src/lib/nexool/tools/freedom-node-runner.ts` — a DEDICATED runtime path; the
+`js-runner.ts` and `node-runner.ts` hardening is NOT weakened) receives normal Node.js
+capabilities where available to the host runtime:
+
+- **Real `require()` / `import()`** — Node built-ins (`fs`, `path`, `os`,
+  `child_process`, `process`, streams, …) AND real installed npm packages (host-realm
+  require rooted at the project; real ESM dynamic import). No allowlist, no resolver
+  shim, no blocked-module list.
+- **REAL host filesystem** — `fs` is the host `fs`, never redirected into the tool VFS
+  (§23). VFS path-safety, size caps and workspaces do not apply.
+- **REAL global `fetch`** — the Network Policy caps deliberately do NOT apply: no
+  request-count limit, no response-size cap, no redirect ceiling, no per-request
+  timeout from the policy, no URL-import restriction (§24). Host policy
+  (`HOST_BLOCKED`, `RESPONSE_TOO_LARGE`, …) is a js-function/nodejs concept.
+- **Real `process` and `Buffer`** — including `process.env` (§21).
+
+**This is intentional.** The environment exists so trusted operators can run
+host-capable automation tools; the restriction boundary moves from code to
+configuration:
+
+### The configuration-only gate (fail closed)
+
+- The whole freedom escape is authorized by the **`fs` section** of
+  `config/configuration-limits.json`: `fs.enabled` (boolean, default `true`) and
+  `fs.restricted` (boolean, default `false` = real host fs). The runtime reads this
+  gate **server-side on EVERY execution** (`getFreedomFsConfig()` /
+  `isFreedomNodeAuthorized()` in `config-limits.ts` + `ResolvedRuntimeLimits.fs`).
+- **Fail closed** — when the gate is closed, or the configuration file cannot be read,
+  every freedom-node execution is rejected with **`FREEDOM_DISABLED`**:
+  *"freedom-node is not authorized by the central configuration (fs.enabled/fs.restricted
+  in config/configuration-limits.json). The Settings UI cannot grant this escape — edit
+  the configuration file on the host."* Nothing executes.
+- **The Settings UI deliberately has NO control for `fs`/`vfs` switches** and no API
+  can flip the gate — editing the configuration file on the host (and the existing
+  mtime-based hot reload) is the only way. This is a design decision, not an omission:
+  an in-app switch would put a host-level escape one click away from any console user.
+- **`fs` vs `vfs` are DIFFERENT sections on purpose**: `vfs.*` keeps governing the
+  restricted Virtual File System used by `js-function`/`nodejs` tools (unchanged);
+  `fs.*` governs only the unrestricted freedom-node filesystem mode.
+
+### Still preserved (task lifecycle, not sandbox caps)
+
+freedom-node removes SANDBOX restrictions, not runtime accountability:
+
+| Preserved limit | Why |
+| --- | --- |
+| Tool execution deadline (interaction-aware watchdog) + `vm` sync cap | The task runtime must be able to track, stop and cancel a tool and keep the host event loop responsive. |
+| JSON-serializable result contract | Results still travel the runtime's execution/event architecture — with the 5 MiB RUNTIME TRANSPORT cap (a transport bound, not a sandbox restriction). |
+| Capped console log capture | The logging architecture stays bounded — and `process.env` is **never** auto-dumped into logs or the UI (§33). |
+
+Test runs (Tool IDE **Test Tool**) route through the SAME freedom runner with the SAME
+gate: a test of a freedom-node tool fails with `FREEDOM_DISABLED` exactly like a real
+execution when the configuration says no.
+
+### Explicit-only semantics, registration and portability
+
+- **Explicit-only**: existing `js-function`/`nodejs`/`dynamic`/`builtin`/`virtual-env`
+  behavior is byte-for-byte unchanged. ONLY tools explicitly created/imported with
+  `environment: "freedom-node"` get these semantics — nothing else drifts.
+- **Registration**: `POST /api/tools/js` (and `PUT /api/tools/{name}`) accepts the
+  `freedom-node` environment; the Tool Create/Edit selector includes it with the exact
+  warning: **"freedom-node — Full host Node.js access. File system, network, processes,
+  and host-level capabilities may be available."**
+- **Import/export**: portable tools include `freedom-node` in the importable
+  environment set — the environment string round-trips export/import EXACTLY, and the
+  bulk import (v1.0.91 pipeline) accepts it. Importing a freedom-node tool registers it;
+  it still cannot EXECUTE anywhere unless the host configuration authorizes it.
+- **Capability surface**: `GET /api/tools/environments` lists the environment
+  (authorable, `execution: 'freedom-node'`), adds a `freedomNode` column to the
+  capability matrix and a `freedomNode` block `{ enabled (live gate state), fsConfig,
+  note, preservedLimits }` — the IDE reference reflects the ACTUAL runtime including the
+  honest gate state.
+
+### Security implications (honest)
+
+A freedom-node tool can read and write the host filesystem, reach the network without
+the NexTool policy, spawn real child processes and observe the process environment.
+Treat a freedom-node tool with the same trust you give a script executed on the host:
+install one only from a source you trust, keep the `fs` gate closed on shared hosts
+(fail closed means a closed gate also defeats imported/registered freedom tools), and
+review the function source before registering it. See
+[Security](security.md#freedom-node-threat-model-v1011) for the full threat model.
+
 ## The Virtual File System (v1.0.6)
 
 `require('fs')` / `import fs from 'fs'` in a `nodejs` tool resolves to the NexTool

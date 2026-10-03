@@ -75,19 +75,33 @@ flowchart LR
    without `await` (a runaway `for(;;)` loop) is bounded by the vm timeout instead of
    hanging the host event loop until the async watchdog cap (default 10 s — v1.0.7: the effective tool timeout, configurable to 1 h).
 
-## The approval gate (v1.0.6)
+## The approval gate (v1.0.6, hierarchy redefined in v1.0.11)
 
-`src/lib/nexool/approval.ts` implements the ONE precedence model (spec §9.4), shared by
-the runtime loop and the tests:
+`src/lib/nexool/approval.ts` implements the ONE auto-execution resolver, shared by
+the runtime loop and the tests. **v1.0.11 replaces the old boolean-merging precedence
+with an explicit hierarchy** — `resolveAutoExecution(global, tool, task)` returns
+`{ enabled, source }` with source `global | tool | task | default`:
 
 ```
-Global setting (settings.autoExecuteTools, default false)
-    ↓ true  → every tool executes automatically (overrides everything)
-    ↓ false → Per-task config (config.autoExecuteTools)
-              ↓ true  → tools in this task execute automatically
-              ↓ false → Per-tool flag (definition.autoExecute, default false)
-                        ↓ false → APPROVAL REQUIRED → WAIT
+1. GLOBAL auto-execution (settings.autoExecuteTools, default false) — highest priority
+     ↓ global === true → ON (source 'global') — nothing below can override it
+2. TOOL auto-execution (definition.autoExecute — tri-state in the IDE since v1.0.11:
+     Enabled / Disabled / Inherit, stored boolean|undefined)
+     ↓ tool === true → ON (source 'tool') — wins over the task console
+3. TASK CONSOLE preference (config.autoExecuteTools)               — lowest priority
+     ↓ task === true → ON (source 'task')
+4. otherwise → OFF (source 'default') → APPROVAL REQUIRED → WAIT
 ```
+
+`undefined` means inherit / never forces; a lower layer can NEVER override a
+higher-priority enable. Test matrix: G=T,O=F,Tk=F → ON (global); G=T,O=T,Tk=F → ON
+(global); G=F,O=T,Tk=F → ON (tool); G=F,O=F,Tk=T → ON (task); G=F,O=F,Tk=F → OFF
+(default). The back-compat `resolveAutoExecute` delegates to `resolveAutoExecution`.
+
+**Observable effective source (v1.0.11):** when a lower layer decides, the runtime
+emits `tool.auto_execution` with `{ tool, enabled: true, source }` (the global-forced
+case is the documented default and stays silent). The approval flow below is
+unchanged.
 
 When approval is required (`requestApprovalIfNeeded` in the runtime loop):
 
@@ -194,7 +208,7 @@ per environment:
   table, error wording) is documented in
   [Tool Development](tool-development.md#the-nodejs-environment--restricted-virtualized-nodejs).
 
-## Runtime capability source: GET /api/tools/environments (v1.0.5 → v1.0.6)
+## Runtime capability source: GET /api/tools/environments (v1.0.5 → v1.0.6 → v1.0.11)
 
 The handler-kind registry (`HANDLER_KIND_INFO` in `tools/registry.ts`) and the
 Node.js configuration (`NODE_MODULE_ALLOWLIST`, `NODE_BLOCKED_MODULES`,
@@ -205,6 +219,11 @@ blocks served from the real runtime constants: `network` (the `NETWORK_POLICY`),
 `vfs` (`VFS_LIMITS` + workspace directories), `childProcess`
 (`CHILD_PROCESS_LIMITS` + `VIRTUAL_COMMANDS`) and `capabilities` — the
 capability × environment matrix (spec §8) generated from the real runtime config.
+**v1.0.11 adds the `freedom-node` environment (authorable, `execution:
+'freedom-node'`), a `freedomNode` column on every capability row and a `freedomNode`
+block `{ enabled (LIVE gate state), fsConfig, note, preservedLimits }` — the IDE
+reference reflects the ACTUAL unrestricted-environment runtime including the honest
+gate state.**
 The Tool IDE selector, handler-kind UI, capability matrix, IntelliSense declarations
 and References panel read THIS endpoint; there is no hardcoded frontend copy of the
 runtime capabilities.
@@ -222,7 +241,7 @@ The `http_get` handler kind's structured config — `url` (required) and `timeou
 | Unknown tool | failed | `UNKNOWN_TOOL` | `tool.failed` (5) | No |
 | Invalid params | failed | `INVALID_PARAMS` | `tool.failed` (5) | No |
 | No handler bound | failed | `NO_HANDLER` | `tool.failed` (5) | No |
-| Handler threw | failed | handler code | `tool.failed` (5) | **Once** in Goal Mode (fresh decision with the error as observation; `planner.retry` event). Second failure ends the task (`TOOL_FAILURE`). |
+| Handler threw | failed | handler code | `tool.failed` (5) | **Once** in Goal Mode (fresh decision with the error as observation; `planner.retry` event) — **v1.0.11: superseded in the pre-plan failure branch, where the bounded recovery state machine takes over** (see [Planner](planner.md#pre-plan-failure-recovery-v1011)). Second failure ends the task (`TOOL_FAILURE`). |
 | Timeout | timeout | `TIMEOUT` | `tool.timeout` (4) — the payload carries the **effective timeout** (v1.0.7) | Same single retry rule. |
 
 The timeout error reports the ACTUAL configured value — `Tool "server.health" timed
