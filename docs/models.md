@@ -14,7 +14,7 @@ What "model" means in NexTool, what is actually installed, and how the Models sc
 | Attribute | Value (from `version.ts` / `/api/models`) |
 | --- | --- |
 | Name | `llm-core` |
-| Version | `1.0.0` — **unchanged in v1.0.2**; the release added tooling (Tool IDE, training, benchmarking, packaging) around it, not a new decision unit. |
+| Version | `1.0.0` — **unchanged through v1.0.10**; llm-core is a provider-served model (`z-ai-web-dev-sdk`) and was **NOT retrained locally** — every release so far (v1.0.2–v1.0.10) adds tooling around it, never a new decision unit. |
 | Architecture | "LLM CoreModule (tool-matching + parameter generation heads via structured prompting)" |
 | Backend | `z-ai-web-dev-sdk` (server-side only — never imported in client code) |
 | Status | `active` |
@@ -59,6 +59,21 @@ times out, or returns unparseable output — every such decision is tagged with
 | `.nextool` manifest validator | Yes | `POST /api/models/load` validates and registers manifests (status `registered`); the v1.0.2 import path additionally accepts binary packages. |
 | Parquet | **Yes — since v1.0.3** (`@dsnp/parquetjs` 1.8.9, pinned; pure JS, Node/Bun). | Binary Parquet dataset import/export through `src/lib/nexool/datasets/parquet.ts`; the boolean comes from `parquetAdapterInfo()`, a real dynamic-import probe (one per process). See [Datasets](datasets.md). |
 
+## Version semantics (three independent versions)
+
+NexTool keeps three version concepts deliberately separate (`src/lib/nexool/version.ts`):
+
+| Version | Current value | Meaning |
+| --- | --- | --- |
+| **Application** (`APP_VERSION`) | **1.0.10** (release: *"Major Planner Architecture (Pre-plan + One-by-one) & AI Training Upgrade (model 1.0.1)"*) | The application release; bumped per release, read by the UI badges, `/api/system` and the CLI. |
+| **CoreModule model** (`CORE_MODULE_VERSION`) | **1.0.0** | The llm-core decision unit. Provider-served through `z-ai-web-dev-sdk`; **never retrained locally** — v1.0.10 explicitly does NOT change it. |
+| **Trained classifier generation** (`TRAINED_MODEL_VERSION`, since v1.0.10) | **1.0.1** | The semantic version LOCALLY TRAINED tool-selection checkpoints register under (expanded seed dataset + validation-based checkpoint selection). Historical checkpoints keep their original versions; nothing is re-versioned in place. |
+
+A completed training job therefore records BOTH identifiers: the manifest's
+`modelSemanticVersion` (the generation, default `'1.0.1'` for jobs created in
+v1.0.10) and the legacy `checkpointId` (`tc-<job>`) for traceability — see
+[Training](training.md#v1010--training-engine-upgrade-model-version-101).
+
 ## Trained classifier checkpoints (v1.0.2)
 
 A completed training job registers a real runnable package with
@@ -68,6 +83,14 @@ dataset lineage and `parameterCount`. Checkpoints are used by the benchmark engi
 (model key = the record id) and can be exported as binary zips. They are tool
 *selectors* — they never generate parameters and are never activated as the runtime
 engine. See [Training](training.md).
+
+**v1.0.10 manifest additions** — two new fields appear on newly trained manifests:
+`checkpointSelection` (`{ selectedEpoch, valAccuracy, strategy }` — the weights were
+snapshotted at the best validation-accuracy epoch and restored before saving) and
+`modelSemanticVersion` (the classifier generation, `'1.0.1'` by default in this
+release). The `trainingConfig` may carry an explicit `modelVersion` (semver-checked);
+when absent the engine defaults to `TRAINED_MODEL_VERSION`. Existing checkpoints are
+untouched.
 
 ## Export & import (v1.0.2)
 

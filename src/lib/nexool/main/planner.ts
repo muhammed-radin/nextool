@@ -7,7 +7,13 @@ import type { PlanStep, ToolDefinition } from '../types';
 import { emitEvent } from '../eventbus';
 
 const PLANNER_TIMEOUT_MS = 25_000;
-const MAX_STEPS = 8;
+/**
+ * v1.0.10 §16 — the pre-plan maximum is now CONFIGURABLE (central limits
+ * task.prePlanMaxSteps: default 10, hard maximum 122) instead of the old
+ * hard-coded 8. The caller passes the resolved value; the shipped default
+ * keeps pre-plan behavior intact for existing installations.
+ */
+export const DEFAULT_PRE_PLAN_MAX_STEPS = 10;
 
 export interface Plan {
   goal: string;
@@ -46,9 +52,9 @@ function stepId(i: number): string {
   return `step_${i + 1}`;
 }
 
-function sanitizeSteps(raw: RawStep[]): PlanStep[] {
+function sanitizeSteps(raw: RawStep[], maxSteps: number): PlanStep[] {
   const steps: PlanStep[] = [];
-  for (const s of raw.slice(0, MAX_STEPS)) {
+  for (const s of raw.slice(0, Math.max(1, maxSteps))) {
     const title = typeof s.title === 'string' && s.title.trim() ? s.title.trim().slice(0, 200) : '';
     if (!title) continue;
     const kind = s.kind === 'observation' || s.kind === 'verification' ? s.kind : 'action';
@@ -71,7 +77,9 @@ export async function buildPlan(
   toolDefs: ToolDefinition[],
   reasoningLevel: number,
   taskId?: string,
+  maxSteps: number = DEFAULT_PRE_PLAN_MAX_STEPS,
 ): Promise<Plan> {
+  const effectiveMaxSteps = Math.min(Math.max(Math.round(Number(maxSteps) || DEFAULT_PRE_PLAN_MAX_STEPS), 1), 122);
   const started = Date.now();
   try {
     const zai = await ZAI.create();
@@ -80,14 +88,14 @@ export async function buildPlan(
       'Decompose the request into minimal ordered steps. Each step is one concrete operational action.',
       'Each step: {"title": short imperative objective, "detail": one sentence, "kind": "action"|"observation"|"verification", "parallelGroup": number}',
       'Mark truly independent steps with the same parallelGroup number (1,2,...). Dependent steps must NOT share a group.',
-      'Maximum 8 steps. Output STRICT JSON only: {"goal":"<refined goal>", "steps":[...]}',
+      `Maximum ${effectiveMaxSteps} steps. Output STRICT JSON only: {"goal":"<refined goal>", "steps":[...]}`,
     ].join('\n');
     const user = JSON.stringify({
       request,
       goal,
       availableTools: toolDefs.map((t) => ({ name: t.name, description: t.description, category: t.category })),
       reasoningLevel,
-      maxSteps: MAX_STEPS,
+      maxSteps: effectiveMaxSteps,
     });
 
     const res = await Promise.race([
@@ -110,7 +118,7 @@ export async function buildPlan(
     if (startIdx !== -1 && endIdx > startIdx) {
       const parsed = JSON.parse(cleaned.slice(startIdx, endIdx + 1)) as { goal?: unknown; steps?: unknown };
       const refinedGoal = typeof parsed.goal === 'string' && parsed.goal.trim() ? parsed.goal.trim().slice(0, 300) : goal;
-      const steps = Array.isArray(parsed.steps) ? sanitizeSteps(parsed.steps as RawStep[]) : [];
+      const steps = Array.isArray(parsed.steps) ? sanitizeSteps(parsed.steps as RawStep[], effectiveMaxSteps) : [];
       if (steps.length > 0) {
         void emitEvent({
           taskId,

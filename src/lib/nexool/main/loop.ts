@@ -9,11 +9,16 @@ import { getEnabledToolDefs } from '../tools/registry';
 import { executeTool, executeParallelBatch } from '../tools/executor';
 import { clampNetworkTimeoutMs } from '../tools/network-timeout';
 import { decide } from '../core/coremodule';
-import { buildPlan } from './planner';
+import { buildPlan, DEFAULT_PRE_PLAN_MAX_STEPS } from './planner';
+import {
+  buildOneByOneContext, buildOneByOneFallbackStep, planOneByOneStep,
+} from './planner-strategy';
+import type { PlannerType } from '../types';
 import { interpret, checkGoalComplete } from './observer';
 import { listServers } from '../environment';
 import { resolveAutoExecute, requestApproval } from '../approval';
 import { clampToLimit, getResolvedLimits } from '../config-limits';
+import { recordPatternObservation, recordTaskOutcomePatterns } from '../patterns/extractor';
 import type {
   MainState, PlanStep, Subgoal, TaskConfig, ToolDefinition, ToolExecution, NexToolEvent, FinalResult, QueuedLiveEvent,
 } from '../types';
@@ -91,6 +96,12 @@ export interface ResolvedTaskConfig extends TaskConfig {
   autoExecuteTools: boolean;
   /** v1.0.6 §10 — resolved multi-event policy (global → task). */
   allowMultipleEvents: boolean;
+  /** v1.0.10 §13 — resolved planner strategy (task override → global default
+   *  → 'pre-plan'; persisted at task creation). */
+  plannerType: PlannerType;
+  /** v1.0.10 §16 — resolved pre-plan step limit (1..122, default 10).
+   *  Relevant to pre-plan planning only. */
+  prePlanMaxSteps: number;
 }
 
 function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<typeof getSettings>>): ResolvedTaskConfig {
@@ -125,6 +136,14 @@ function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<t
     // resolved at execution time against the concrete tool definition).
     autoExecuteTools: stored.autoExecuteTools ?? settings.autoExecuteTools,
     allowMultipleEvents: stored.allowMultipleEvents ?? settings.allowMultipleEvents,
+    // v1.0.10 §13 — planner strategy: stored (persisted at creation) → global
+    // default → 'pre-plan'. Old tasks without the field keep working.
+    plannerType: stored.plannerType === 'one-by-one' || stored.plannerType === 'pre-plan'
+      ? stored.plannerType
+      : settings.defaultPlannerType === 'one-by-one' ? 'one-by-one' : 'pre-plan',
+    // v1.0.10 §16 — pre-plan step limit: task value (clamped 1..122) → global
+    // default (10).
+    prePlanMaxSteps: clampLimit('task', 'prePlanMaxSteps', stored.prePlanMaxSteps, settings.prePlanMaxSteps),
     sessionId: stored.sessionId,
     context: stored.context,
   };
@@ -156,6 +175,14 @@ interface RunContext {
   blockedStop?: { reason: string } | null;
   /** v1.0.6 §10 — monotonic queue sequence. */
   eventSeq: number;
+  /** v1.0.10 §10 — recent failure summaries (tool: message) feeding the
+   *  one-by-one planner's knownFailures (in-memory, bounded). */
+  failureLog: string[];
+  /** v1.0.10 §7 — one-by-one step id → tracked subgoal id (status sync). */
+  oneByOneSubgoalByStep: Map<string, string>;
+  /** v1.0.10 §10 — endless-repetition guard: last failed step key + streak. */
+  lastFailedStepKey?: string;
+  identicalFailureStreak: number;
 }
 
 // ---------- pause (v1.0.6 §11) ----------
@@ -427,11 +454,33 @@ function recordExecution(ctx: RunContext, tool: string, result: ActionResult): v
   ctx.state.previousActions.push({ action: tool, status: result.execution.status, at: new Date().toISOString() });
   if (ctx.state.previousActions.length > 30) ctx.state.previousActions.splice(0, ctx.state.previousActions.length - 30);
   ctx.state.toolCallCount += 1;
+  // v1.0.10 §10 — bounded in-memory failure log feeding the one-by-one
+  // planner's knownFailures (never blindly repeat a failed action).
+  if (result.execution.status === 'failed' || result.execution.status === 'timeout') {
+    const message = result.execution.error?.message ?? result.execution.status;
+    ctx.failureLog.push(`${result.execution.tool}: ${message} (${result.execution.status})`);
+    if (ctx.failureLog.length > 10) ctx.failureLog.shift();
+  }
   const r = result.execution.result as Record<string, unknown> | undefined;
   if (r && typeof r === 'object') {
     if (typeof r.imagePath === 'string') ctx.artifacts.push({ type: 'image', path: r.imagePath });
     if (typeof r.id === 'string' && typeof r.level === 'string') ctx.artifacts.push({ type: 'notification', id: r.id, level: r.level });
   }
+  // v1.0.10 §32/§35 — Observer → pattern pipeline: normalized observations
+  // feed the structured pattern store (fire-and-forget, never blocks/fails
+  // the loop; the Observer stays responsible for what actually happened).
+  void recordPatternObservation({
+    taskId: ctx.taskId,
+    taskMode: ctx.config.mode,
+    plannerType: ctx.config.plannerType,
+    request: ctx.request,
+    tool: result.execution.tool,
+    execution: result.execution,
+    observation: result.observation,
+    previousAction: ctx.state.previousActions.length >= 2
+      ? ctx.state.previousActions[ctx.state.previousActions.length - 2]
+      : undefined,
+  }).catch(() => { /* pattern extraction must never break the loop */ });
   void emitEvent({
     taskId: ctx.taskId,
     type: 'observer.observed',
@@ -525,6 +574,104 @@ async function verifyGoal(ctx: RunContext): Promise<boolean> {
   return check.complete;
 }
 
+// ---------- v1.0.10 one-by-one planner helpers ----------
+
+/** Build the known-failure / constraint inputs for the one-by-one planner. */
+function oneByOnePlannerInputs(ctx: RunContext, note?: string) {
+  const constraints: string[] = [];
+  if (ctx.config.enabledTools?.length) {
+    constraints.push(`Only these tools are enabled: ${ctx.config.enabledTools.join(', ')}`);
+  }
+  if (ctx.config.mode === 'live') {
+    constraints.push('Live mode: keep the step small, observable and safe — the task continues across ticks.');
+  }
+  return buildOneByOneContext({
+    request: ctx.request,
+    goal: ctx.goal,
+    taskMode: ctx.config.mode,
+    reasoningLevel: ctx.config.reasoningLevel,
+    state: ctx.state,
+    knownFailures: [...ctx.failureLog],
+    constraints,
+    note,
+  });
+}
+
+/**
+ * §4/§5/§6/§10 — plan exactly ONE next step from the latest state, push it to
+ * the task plan, record it as the current operational subgoal (§7) and emit
+ * the planner.plan update so the Task Preview checklist refreshes.
+ *
+ * Includes the §10 endless-repetition guard: after the SAME step failed twice
+ * in a row, a third identical proposal is replaced by the failure-aware
+ * deterministic fallback step.
+ */
+async function planAndTrackOneByOneStep(ctx: RunContext, note?: string): Promise<PlanStep> {
+  const plannerCtx = oneByOnePlannerInputs(ctx, note);
+  let planned = await planOneByOneStep(plannerCtx, ctx.toolDefs, ctx.taskId);
+
+  const key = planned.step.title.trim().toLowerCase();
+  if (ctx.lastFailedStepKey && key === ctx.lastFailedStepKey && ctx.identicalFailureStreak >= 2) {
+    const replacement = buildOneByOneFallbackStep(plannerCtx, ctx.state.plan.length);
+    void emitEvent({
+      taskId: ctx.taskId, type: 'planner.one_by_one_replanned', source: 'planner',
+      message: `Identical failed step proposed again ("${planned.step.title}") — replaced by the failure-aware fallback step.`,
+      data: { plannerType: 'one-by-one', stepId: replacement.id, stepTitle: replacement.title, reason: 'identical-failed-step-guard' },
+      priority: 4,
+    });
+    planned = { step: replacement, source: 'deterministic-fallback', discarded: 0 };
+  }
+
+  ctx.state.plan.push(planned.step);
+  const sg: Subgoal = {
+    id: subgoalId(ctx.state.subgoals.length),
+    title: planned.step.title,
+    reason: planned.step.detail ?? 'One-by-one subgoal planned from the latest observation.',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+  };
+  ctx.state.subgoals.push(sg);
+  ctx.oneByOneSubgoalByStep.set(planned.step.id, sg.id);
+
+  void emitEvent({
+    taskId: ctx.taskId, type: 'planner.plan', source: 'planner',
+    message: `One-by-one plan updated: next step "${planned.step.title}".`,
+    data: { plannerType: 'one-by-one', goal: ctx.goal, steps: [planned.step], plannerSource: planned.source },
+    priority: 5,
+  });
+  return planned.step;
+}
+
+/**
+ * §7/§21 — after a one-by-one step executed: sync the tracked subgoal status,
+ * maintain the §10 repetition guard and emit step_completed events.
+ */
+function observeOneByOneStepOutcome(ctx: RunContext, step: PlanStep | undefined, execution: ToolExecution): void {
+  if (!step) return;
+  const success = execution.status === 'completed';
+  if (success) {
+    void emitEvent({
+      taskId: ctx.taskId, type: 'planner.one_by_one_step_completed', source: 'planner',
+      message: `One-by-one step completed: ${step.title} (tool ${execution.tool}).`,
+      data: { plannerType: 'one-by-one', stepId: step.id, stepTitle: step.title, tool: execution.tool, durationMs: execution.durationMs },
+      priority: 6,
+    });
+    ctx.lastFailedStepKey = undefined;
+    ctx.identicalFailureStreak = 0;
+  } else {
+    ctx.lastFailedStepKey = step.title.trim().toLowerCase();
+    ctx.identicalFailureStreak += 1;
+  }
+  const sgId = ctx.oneByOneSubgoalByStep.get(step.id);
+  if (sgId) {
+    const sg = ctx.state.subgoals.find((s) => s.id === sgId);
+    if (sg) {
+      sg.status = success ? 'completed' : execution.status === 'cancelled' ? 'cancelled' : 'failed';
+      if (sg.id === ctx.state.activeSubgoal?.id && success) ctx.state.activeSubgoal = undefined;
+    }
+  }
+}
+
 // ---------- termination ----------
 
 interface Termination {
@@ -576,11 +723,18 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
     }
 
     // pick objective
-    const group = parallelGroupSteps(ctx.state.plan);
     const planExhausted = firstPendingIndex(ctx.state.plan) === -1;
 
     if (planExhausted && !ctx.state.activeSubgoal) {
-      // plan exhausted → dynamic subgoal
+      if (config.plannerType === 'one-by-one') {
+        // v1.0.10 §4/§5 — REPLAN: plan exactly ONE next step from the LATEST
+        // state (the previous observation is already in ctx.state — the goal
+        // verifier ran before this planning call, §9). The proposed step
+        // becomes the current operational subgoal (§7).
+        await planAndTrackOneByOneStep(ctx);
+        await persistState(ctx);
+      } else {
+      // plan exhausted → dynamic subgoal (pre-plan behavior, unchanged)
       const proposal = await proposeNextSubgoal(ctx);
       if (proposal.done) {
         return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Plan exhausted; no further subgoals identified.' };
@@ -593,7 +747,12 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
         message: `Dynamic subgoal created: ${sg.title}`, data: { subgoal: sg }, priority: 5,
       });
       await persistState(ctx);
+      }
     }
+
+    // v1.0.10 — re-evaluate pending steps AFTER a possible one-by-one replan
+    // (the freshly planned step is now the only pending one).
+    const group = parallelGroupSteps(ctx.state.plan);
 
     const objective = ctx.state.activeSubgoal
       ? ctx.state.activeSubgoal.title
@@ -762,6 +921,37 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
     }
     let finalResult = result;
     if (result.execution.status === 'failed' || result.execution.status === 'timeout') {
+      if (config.plannerType === 'one-by-one') {
+        // v1.0.10 §10 — one-by-one failure handling: NO blind retry of the
+        // identical action. Record the failure, observe it, verify the goal,
+        // then REPLAN one step with the failure context (the planner input
+        // carries knownFailures). Bounded by maxIterations/safetyLimit/timeout.
+        recordExecution(ctx, result.execution.tool, result);
+        for (const id of activeStepIds) markStepByExecution(ctx.state.plan, id, 'failed');
+        observeOneByOneStepOutcome(ctx, ctx.state.plan.find((s) => s.id === activeStepIds[0]), result.execution);
+        void emitEvent({
+          taskId: ctx.taskId, type: 'planner.one_by_one_replanned', source: 'planner',
+          message: `Step failed (${result.execution.status}) — replanning one step with the failure context.`,
+          data: {
+            plannerType: 'one-by-one',
+            stepId: activeStepIds[0],
+            failedTool: result.execution.tool,
+            error: result.execution.error?.message ?? result.execution.status,
+          },
+          priority: 4,
+        });
+        await persistState(ctx);
+        if (await verifyGoal(ctx)) {
+          void emitEvent({
+            taskId: ctx.taskId, type: 'planner.one_by_one_goal_reached', source: 'planner',
+            message: `One-by-one goal reached: ${ctx.goal}`,
+            data: { plannerType: 'one-by-one', goal: ctx.goal },
+            priority: 4,
+          });
+          return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Goal verified.' };
+        }
+        continue;
+      }
       void emitEvent({
         taskId: ctx.taskId, type: 'planner.retry', source: 'planner',
         message: `Execution failed (${result.execution.status}); retrying once with error as observation.`,
@@ -788,6 +978,11 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
 
     recordExecution(ctx, finalResult.execution.tool, finalResult);
     for (const id of activeStepIds) markStepByExecution(ctx.state.plan, id, finalResult.execution.status);
+    // v1.0.10 §7/§21 — one-by-one step outcome bookkeeping (events + subgoal
+    // status sync + repetition-guard state).
+    if (config.plannerType === 'one-by-one') {
+      observeOneByOneStepOutcome(ctx, ctx.state.plan.find((s) => s.id === activeStepIds[0]), finalResult.execution);
+    }
 
     // action fulfilled the active subgoal → mark completed
     if (ctx.state.activeSubgoal && finalResult.execution.status === 'completed') {
@@ -797,6 +992,17 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
     await persistState(ctx);
 
     if (await verifyGoal(ctx)) {
+      // v1.0.10 §9 — the goal verifier ran BEFORE requesting another plan;
+      // one-by-one emits its dedicated goal event and completes without
+      // generating any further step.
+      if (config.plannerType === 'one-by-one') {
+        void emitEvent({
+          taskId: ctx.taskId, type: 'planner.one_by_one_goal_reached', source: 'planner',
+          message: `One-by-one goal reached: ${ctx.goal}`,
+          data: { plannerType: 'one-by-one', goal: ctx.goal },
+          priority: 4,
+        });
+      }
       return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Goal verified.' };
     }
   }
@@ -901,14 +1107,43 @@ async function runRepairPasses(ctx: RunContext, serverId: string): Promise<boole
 }
 
 async function liveObserveCycle(ctx: RunContext, objective: string): Promise<void> {
-  const { decision, result } = await decideAndExecute(ctx, objective);
+  // v1.0.10 §8 — Live Mode one-by-one planning: each tick/event first plans
+  // exactly ONE next action/subgoal from the CURRENT world state, then that
+  // single step is executed and observed. No giant pre-plan is generated;
+  // the live task keeps running across future ticks/events.
+  let effectiveObjective = objective;
+  let oneByOneStep: PlanStep | undefined;
+  if (ctx.config.plannerType === 'one-by-one') {
+    oneByOneStep = await planAndTrackOneByOneStep(ctx, objective);
+    effectiveObjective = oneByOneStep.title;
+  }
+  const { decision, result } = await decideAndExecute(ctx, effectiveObjective);
   if (result) {
     recordExecution(ctx, decision.tool as string, result);
+    if (oneByOneStep) {
+      for (const s of ctx.state.plan) if (s.id === oneByOneStep.id) s.status = result.execution.status === 'completed' ? 'completed' : result.execution.status === 'cancelled' ? 'skipped' : 'failed';
+      observeOneByOneStepOutcome(ctx, oneByOneStep, result.execution);
+    }
     await persistState(ctx);
   }
   if (ctx.blockedStop) return;
 
-  // environment-driven recovery (spec §71)
+  // v1.0.10 §9 — the goal verifier runs after every executed one-by-one step.
+  // Live tasks are long-running: goal evidence is RECORDED (event + state)
+  // but the live architecture is not broken — the task continues across
+  // future ticks/events instead of being torn down on first goal evidence.
+  if (ctx.config.plannerType === 'one-by-one' && result) {
+    if (await verifyGoal(ctx)) {
+      void emitEvent({
+        taskId: ctx.taskId, type: 'planner.one_by_one_goal_reached', source: 'planner',
+        message: `One-by-one goal evidence recorded — live task continues across ticks: ${ctx.goal}`,
+        data: { plannerType: 'one-by-one', goal: ctx.goal, live: true },
+        priority: 5,
+      });
+    }
+  }
+
+  // environment-driven recovery (spec §71) — unchanged for both planner types
   const goalMentionsMonitoring = /monitor|recover|production|prod|api|server|health|web|db/i.test(ctx.goal);
   const unhealthy = listServers().filter((s) => s.health === 'unhealthy' || s.health === 'degraded');
   if (goalMentionsMonitoring && unhealthy.length > 0) {
@@ -1293,7 +1528,10 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
     paused: false,
   };
 
-  const ctx: RunContext = { taskId, request, goal: state.goal, config, toolDefs: [], state, handle, startedAtMs, artifacts: [], eventSeq: 0, blockedStop: null };
+  const ctx: RunContext = {
+    taskId, request, goal: state.goal, config, toolDefs: [], state, handle, startedAtMs, artifacts: [], eventSeq: 0, blockedStop: null,
+    failureLog: [], oneByOneSubgoalByStep: new Map(), identicalFailureStreak: 0,
+  };
 
   // v1.0.6 §11.9 — resume support: a task re-created as paused waits at the
   // first safe point; paused flag is mirrored into the persisted state.
@@ -1309,17 +1547,40 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
   try {
     // tool registry + plan
     ctx.toolDefs = await getEnabledToolDefs(config.enabledTools);
-    const plan = await buildPlan(request, state.goal, ctx.toolDefs, config.reasoningLevel, taskId);
-    state.plan = plan.steps;
-    state.goal = plan.goal;
-    ctx.goal = plan.goal;
-    await persistTask(taskId, { goal: plan.goal, plan: JSON.stringify(plan.steps), state: JSON.stringify(state) });
+
+    // v1.0.10 §2/§12/§13 — planner strategy selection. The strategy was
+    // resolved and persisted at task creation (task override → global default
+    // → 'pre-plan'); emit the selection event for the event stream/UI.
+    const taskOverride = storedConfig.plannerType === 'pre-plan' || storedConfig.plannerType === 'one-by-one';
     void emitEvent({
-      taskId, type: 'planner.plan', source: 'planner',
-      message: `Plan created: ${plan.steps.length} step(s) for goal "${plan.goal}".`,
-      data: { goal: plan.goal, steps: plan.steps },
-      priority: 5,
+      taskId, type: 'planner.mode_selected', source: 'planner',
+      message: `Planner mode selected: ${config.plannerType}${taskOverride ? ` (task override; global default: ${settings.defaultPlannerType})` : ` (global default)`}.`,
+      data: { plannerType: config.plannerType, taskOverride, globalDefault: settings.defaultPlannerType, prePlanMaxSteps: config.prePlanMaxSteps },
+      priority: 6,
     });
+
+    if (config.plannerType === 'one-by-one') {
+      // v1.0.10 §4 — ONE-BY-ONE: plan exactly ONE first step. No future list
+      // is generated; each subsequent step is planned after the latest
+      // observation (runGoalMode/runLiveMode replan hooks).
+      await planAndTrackOneByOneStep(ctx, 'Initial step of the task');
+      state.plan = ctx.state.plan;
+      await persistTask(taskId, { plan: JSON.stringify(state.plan), state: JSON.stringify(state) });
+    } else {
+      // v1.0.10 §16 — pre-plan with the configurable step limit (default 10,
+      // hard max 122; task value resolved against the global setting).
+      const plan = await buildPlan(request, state.goal, ctx.toolDefs, config.reasoningLevel, taskId, config.prePlanMaxSteps);
+      state.plan = plan.steps;
+      state.goal = plan.goal;
+      ctx.goal = plan.goal;
+      await persistTask(taskId, { goal: plan.goal, plan: JSON.stringify(plan.steps), state: JSON.stringify(state) });
+      void emitEvent({
+        taskId, type: 'planner.plan', source: 'planner',
+        message: `Plan created: ${plan.steps.length} step(s) for goal "${plan.goal}".`,
+        data: { goal: plan.goal, steps: plan.steps, plannerType: 'pre-plan' },
+        priority: 5,
+      });
+    }
 
     const term = config.mode === 'live' ? await runLiveMode(ctx) : await runGoalMode(ctx);
 
@@ -1341,6 +1602,21 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
 
 async function finalize(ctx: RunContext, term: Termination): Promise<void> {
   const durationMs = Date.now() - ctx.startedAtMs;
+  // v1.0.10 §32/§33 — task outcome feeds the pattern pipeline (e.g. the
+  // early-completion pattern: the first observation proved the goal and the
+  // remaining pre-planned steps were discarded). Fire-and-forget.
+  void recordTaskOutcomePatterns({
+    taskId: ctx.taskId,
+    taskMode: ctx.config.mode,
+    plannerType: ctx.config.plannerType,
+    outcome: term.finalStatus,
+    steps: ctx.state.iterationCount,
+    toolCalls: ctx.state.toolCallCount,
+    planStepsPlanned: ctx.state.plan.length,
+    previousActions: ctx.state.previousActions,
+    lastObservation: ctx.state.lastObservation,
+    request: ctx.request,
+  }).catch(() => { /* pattern extraction must never break finalization */ });
   const finalResult: FinalResult = {
     status: term.finalStatus,
     goal: ctx.goal,

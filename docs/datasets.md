@@ -132,6 +132,26 @@ nextool dataset export tool-matching-core --format parquet -o ./out.parquet
 written and `--output` is **required** (there is no stdout binary mode; JSON keeps the
 stdout default).
 
+## Shipped seed dataset (v1.0.10)
+
+The repository ships a ready-to-import training seed at
+**`config/training/seed-dataset-v1.0.1.json`** — *"NexTool Core v1.0.1 Seed"*, version
+`1.0.1`:
+
+- **170 examples** — split **121 train / 23 validation / 26 test** (~71% / 13.5% / 15.3%).
+- **All 15 registered tools covered in train AND test** (the test split is the
+  benchmark split, so every tool class is scoreable on held-out data).
+- **Robustness material**: paraphrases, synonyms, typos, ambiguous/confusing pairs and
+  conversational wording of the same intents.
+- **Parameter-generation examples**: `expectedParams` values sit inside the real tool
+  schemas (serverIds, timezones, uuid counts, ms durations, …).
+- **Zero duplicate request strings** — no split leakage; each phrasing appears once.
+
+Import it through `POST /api/datasets/import` (JSON body or multipart file) or the CLI
+(`nextool dataset import config/training/seed-dataset-v1.0.1.json`). The v1.0.10
+training generation (model 1.0.1) and the recorded release benchmark were built on this
+dataset — see [Training](training.md) and [Benchmarks](benchmarks.md).
+
 ## Splits
 
 The importer computes counts by `split` and stores them on the record:

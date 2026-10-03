@@ -71,6 +71,19 @@ console/entity references match the actual UI.
 | 400 `INVALID_MANIFEST` | One or more rules failed (name, semver-like version, `format:"nextool"`, architecture object, `compatibility.runtime`) | The error message lists every failed rule; fix and re-submit (see [Model Format](../ai-core/model-format.md)). |
 | Loaded but engine still llm-core | Expected — a registered package does not replace the active engine; only trained classifiers run inside training/benchmark | Honest state; packages stay `registered` (see [Models](../ai-core/models.md)). |
 
+## Training engine problems (v1.0.10)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Training job fails with `Variable with name dense_Dense1/kernel was already registered` — and every LATER job fails too | **Fixed in v1.0.10.** A previously FAILED training job leaked TF.js graph variables; each new job re-used the same layer names and crashed, poisoning every subsequent job in the same process | Update to v1.0.10 — jobs now build unique per-job model/layer names and dispose every tensor on failure, so a failed job can no longer break the next one. A server restart also clears any leaked variables from an old process. |
+| Training crashes with `restoreBestWeights = True is not implemented` or `this.getMonitorValue is not a function` | The tf.js `EarlyStopping` callback is broken in this build (unimplemented `restoreBestWeights`, missing `getMonitorValue`) | **Fixed in v1.0.10** — early stopping is implemented MANUALLY in the epoch callback (monitors `val_loss`, patience `earlyStoppingPatience`, best weights restored before saving). The broken tf.js callback is no longer used; same documented behavior, no crash. |
+
+## Planner issues (v1.0.10)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| One-by-one task failed with `SAFETY_LIMIT` / `limit_reached` | Expected safeguard, not a bug — the one-by-one loop is bounded by the same `maxIterations` / `safetyLimit` / `taskTimeoutMs` as pre-plan (a verification task hit `SAFETY_LIMIT` at `maxIterations=12` as designed); the goal may be unfinishable or need more cycles | Raise `maxIterations` / `safetyLimit` (within their 1–200 / 1–500 bounds) or `taskTimeoutMs`, or make the goal more finite/verifiable; check the `planner.one_by_one_*` events to see whether the loop was repeating (the endless-repetition guard replaces a third identical proposal with the failure-aware fallback). |
+
 ## Parquet dataset problems (v1.0.3)
 
 The Parquet adapter (`@dsnp/parquetjs` **1.8.9**, pinned) is real — most failures are
@@ -96,7 +109,7 @@ data or dependency problems, and every message says which.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `REQUEST_FAILED: Invalid response from /api/tools/test (HTTP 405)` in the Tool IDE "Test" | The `/api/tools/test` route file was missing (again) after the v1.0.8 restore — requests fell through to `/api/tools/[name]` (GET/PUT/DELETE only) and Next.js answered 405 | **Fixed in v1.0.91**: the dedicated `POST /api/tools/test` route is restored (same regression the v1.0.5 fix notes in api.md). Update to v1.0.91; the route file must exist at `src/app/api/tools/test/route.ts` |
+| `REQUEST_FAILED: Invalid response from /api/tools/test (HTTP 405)` in the Tool IDE "Test" | The `/api/tools/test` route file was missing (again) after the v1.0.8 restore — requests fell through to `/api/tools/[name]` (GET/PUT/DELETE only) and Next.js answered 405 | **Fixed in v1.0.91**: the dedicated `POST /api/tools/test` route is restored (same regression the v1.0.5 fix notes in api.md). Update to v1.0.91 or later; the route file must exist at `src/app/api/tools/test/route.ts` |
 | Tool function gets `INVALID_URL` for `fetch("/api/…")` | Relative fetch URLs resolve against the application origin only when `network.selfOriginAccess` is enabled (default `true` since v1.0.91) | Re-enable the flag in `config/configuration-limits.json`, or use an absolute `https://` URL |
 | "The file contains an array — import one tool at a time" (single importer) | An *Export all tools* bundle was fed to the legacy single-object parse path | Use **Import tools (JSON)…** (v1.0.91) — it accepts an array as a BULK import; a single object still imports as one tool |
 | "No tools found in this JSON file." | The file contains an empty JSON array `[]` | Expected honest behavior (v1.0.91): nothing was registered and no import API call was made |

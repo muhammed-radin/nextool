@@ -110,6 +110,12 @@ export const taskConfigSchema = z
     // v1.0.6 §13 — task-level overrides (undefined = inherit global → tool)
     autoExecuteTools: z.boolean().optional(),
     allowMultipleEvents: z.boolean().optional(),
+    // v1.0.10 §13/§19 — per-task planner override + pre-plan step limit.
+    // Server-side validation enforces plannerType ∈ {pre-plan, one-by-one}
+    // and prePlanMaxSteps within the central task.prePlanMaxSteps bounds
+    // (shipped 1..122). Invalid values are REJECTED (never clamped here).
+    plannerType: z.enum(['pre-plan', 'one-by-one']).optional(),
+    prePlanMaxSteps: intLimit('prePlanMaxSteps', 1, 122).optional(),
     sessionId: z.string().trim().max(200).optional(),
     context: jsonObject.optional(),
   })
@@ -283,6 +289,9 @@ export const settingsSchema = z
     // v1.0.6 §9.3/§10 — global Auto-Execute + Multi-Event switches (default false)
     autoExecuteTools: z.boolean(),
     allowMultipleEvents: z.boolean(),
+    // v1.0.10 §12.1/§16 — global default planner strategy + pre-plan max steps
+    defaultPlannerType: z.enum(['pre-plan', 'one-by-one']),
+    prePlanMaxSteps: intLimit('prePlanMaxSteps', 1, 122),
     logLevel: z.enum(['info', 'debug', 'error']),
     realTimeTransport: z.literal('sse'),
   })
@@ -389,6 +398,14 @@ export const trainingConfigSchema = z
     shuffle: z.boolean().default(true),
     earlyStoppingPatience: z.number().int().min(0).max(50).optional(),
     vocabSize: z.number().int().min(16).max(1024).optional(),
+    // v1.0.10 §29 — semantic version stamped onto the produced checkpoint
+    // (e.g. "1.0.1"). Optional; legacy tc-<job> version kept when absent.
+    modelVersion: z
+      .string()
+      .trim()
+      .max(32)
+      .regex(/^\d+\.\d+\.\d+/, 'must be semver-like (e.g. 1.0.1)')
+      .optional(),
   })
   .strict();
 

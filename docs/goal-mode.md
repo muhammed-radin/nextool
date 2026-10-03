@@ -57,8 +57,13 @@ sequenceDiagram
 
 1. **Understand / create** — request validated (≤ 4000 chars), config clamped, task row
    created, `task.created` emitted, execution fire-and-forget.
-2. **Plan** — LLM decomposition (max 8 steps, optional `parallelGroup` per step, refined
-   goal). Deterministic 2-step fallback guarantees the loop can start.
+2. **Plan** — v1.0.10: the task's **planner strategy** decides how steps come into
+   existence. `pre-plan` (default) runs the LLM decomposition below (max
+   `prePlanMaxSteps`, optional `parallelGroup` per step, refined goal; deterministic
+   2-step fallback guarantees the loop can start). `one-by-one` instead plans exactly
+   ONE next step per cycle from the latest state — see
+   [Planner modes (v1.0.10)](planner.md#planner-modes-v1010). Per-task
+   `config.plannerType` overrides the global default and is persisted at creation.
 3. **Select tool + generate params** — CoreModule picks ONE tool per objective and
    produces extractive/constructive parameters (see
    [CoreModule](../ai-core/core-module.md)).
@@ -116,7 +121,9 @@ informational) rather than inventing an answer.
 `reasoningLevel` (observer switches to heuristic verification at ≤ 2), `enabledTools`
 (allow-list enforced post-decision), `maxIterations`, `safetyLimit`, `maxSubtoolCalls`,
 `taskTimeoutMs`, `toolTimeoutMs`, `useMemory`, `autoExecuteSubtools`,
-`parallelToolCalls` + `maxParallelToolCalls` (v1.0.3 concurrency policy) — all
+`parallelToolCalls` + `maxParallelToolCalls` (v1.0.3 concurrency policy), and
+**v1.0.10**: `plannerType` + `prePlanMaxSteps` (planner strategy and pre-plan step cap —
+see [Planner configuration](configuration.md#planner-configuration-v1010)) — all
 documented in [Configuration](../getting-started/configuration.md).
 
 ## See also

@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.91** — release name: *"In-Sandbox fetch() Self-Origin Fix (POST /api/tools/test restored) & Bulk Tool JSON Import"* |
-| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — v1.0.2–v1.0.91 add tooling around it; trained classifier checkpoints carry their own versions) |
+| **Application version** | **1.0.10** — release name: *"Major Planner Architecture (Pre-plan + One-by-one) & AI Training Upgrade (model 1.0.1)"* |
+| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — provider-served, NOT retrained; v1.0.2–v1.0.10 add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.1** since v1.0.10) |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
@@ -28,7 +28,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Getting Started | [Project Structure](project-structure.md) | Every directory and file explained, with dependencies. |
 | Architecture | [Architecture](architecture.md) | Full-stack diagram, Mermaid component map, end-to-end data flow. |
 | Architecture | [Main](main.md) | Orchestrator responsibilities, lifecycle, Goal vs Live. |
-| Architecture | [Planner](planner.md) | Plan decomposition, parallel groups, fallback, events. |
+| Architecture | [Planner](planner.md) | Plan decomposition, parallel groups, fallback, events; **v1.0.10 planner modes: `pre-plan` + `one-by-one`** (per-task override, single-step contract, repetition guard). |
 | Architecture | [Observer](observer.md) | Interpretation rules and goal verification (LLM + heuristic). |
 | Architecture | [Events](events.md) | Every emitted event type with priority, payload and source. |
 | Architecture | [Scheduler](scheduler.md) | Live wait/wake machinery, wake sources, repair passes. |
@@ -38,7 +38,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | AI Core | [Models](models.md) | llm-core 1.0.0, fallback engine, adapter states, trained checkpoints, export/import. |
 | AI Core | [Model Format](model-format.md) | Export layouts (tfjs zip + `.nextool` package), metadata, import compatibility checks. |
 | AI Core | [Datasets](datasets.md) | JSON + Parquet import/export, splits, versioning; the real Parquet adapter (`@dsnp/parquetjs`). |
-| AI Core | [Training](training.md) | The real TF.js training engine: architecture, config ranges, job lifecycle, checkpoint output, honest limits. |
+| AI Core | [Training](training.md) | The real TF.js training engine: architecture, config ranges, job lifecycle, checkpoint output, honest limits; **v1.0.10: checkpoint selection, manual early stopping, `modelVersion` 1.0.1, deterministic pattern learning**. |
 | AI Core | [Evaluation](evaluation.md) | Pre-engine evaluation notes and the manual procedure (kept for history). |
 | AI Core | [Benchmarks](benchmarks.md) | The real `tool-selection` benchmark: model keys, split preference, exact metric definitions, history. |
 | Modes | [Goal Mode](goal-mode.md) | Full lifecycle with sequence diagram and a real example. |
@@ -57,14 +57,47 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Frontend | [Mobile & Responsive](mobile.md) | Bottom nav, safe areas, breakpoints, touch targets, priority layouts. |
 | Operations | [Deployment](deployment.md) | Env vars, standalone build/start, proxies, CLI availability, model/icon artifacts. |
 | Operations | [CLI](cli.md) | `nextool` reference: train, benchmark, model, dataset (JSON + Parquet), tool, runtime, **v1.0.8 config limits/validate**, version. |
-| Operations | [Testing](testing.md) | `bun test` unit suite (157 tests / 544 assertions) + lint + manual verification workflows. |
+| Operations | [Testing](testing.md) | `bun test` unit suite (339 tests across 10 files) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
 
-## What's new in v1.0.6
+## What's new in v1.0.10
+
+**One-line summary:** two real planner strategies — the existing `pre-plan` and the new
+`one-by-one` (plans exactly ONE next step per call from the latest state, with a
+single-step sanitizer, failure-aware replanning and an endless-repetition guard),
+per-task overridable and persisted at creation — plus the v1.0.1 training generation
+(expanded 170-example seed dataset, validation-based checkpoint selection, manual early
+stopping, `modelVersion` registration) and deterministic pattern learning over recorded
+executions. llm-core stays 1.0.0 (provider-served, never retrained).
+
+- **Planner modes** — `plannerType` (`pre-plan` default / `one-by-one`) on global
+  Settings + per-task config, resolved at creation and persisted with the task;
+  `prePlanMaxSteps` (1–122, default 10, central limit `task.prePlanMaxSteps`) makes the
+  old hard-coded 8-step cap configurable; new planner events
+  (`planner.mode_selected`, `planner.one_by_one_step_planned/.step_completed/
+  .replanned/.goal_reached`) and Task Preview planner badges + one-by-one panel. See
+  [Planner](planner.md) and [Configuration](configuration.md).
+- **Training upgrade (model 1.0.1)** — shipped seed dataset
+  `config/training/seed-dataset-v1.0.1.json` (170 examples — 121/23/26, all 15 tools in
+  train AND test, zero duplicates); checkpoints snapshotted at the best
+  validation-accuracy epoch; tf.js `EarlyStopping` (broken in this build) replaced by
+  manual early stopping; unique per-job layer names + dispose-on-failure fix the
+  `Variable with name dense_Dense1/kernel was already registered` crash; benchmarked
+  **0.6923** vs **0.4231** for the old checkpoint on the identical 26-case test split
+  (llm-core 0.9615, unchanged). See [Training](training.md), [Benchmarks](benchmarks.md)
+  and [Datasets](datasets.md).
+- **Pattern learning** — deterministic extraction over recorded executions into
+  `PatternRecord` rows (sequence / verification / outcome / failure-recovery / live /
+  early-completion), derived confidence (`successRate × min(1, total/3) − 0.15 ×
+  contradictions`), `GET /api/patterns` with `?format=examples` conversion — additional
+  evidence only, never a runtime dependency. See [Training](training.md) and
+  [API](api.md).
+
+### What v1.0.6 delivered (condensed)
 
 - **Common runtime APIs in BOTH tool environments** — `js-function` and `nodejs`
   share a controlled baseline: `fetch` (one policy-controlled networking layer:

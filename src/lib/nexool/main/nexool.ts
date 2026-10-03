@@ -7,6 +7,7 @@ import { emitEvent, getMetrics } from '../eventbus';
 import { getSettings } from '../settings';
 import { getGlobalLiveState } from '../environment';
 import { runTask, type TaskRunHandle, type WakePayload } from './loop';
+import { clampToLimit } from '../config-limits';
 import { cancelPendingApprovalsForTask, listPendingApprovals } from '../approval';
 import { cancelPendingPromptsForTask, cancelPendingConfirmationsForTask } from '../tools/sandbox-interactive';
 import type {
@@ -33,6 +34,18 @@ function clamp(v: unknown, def: number, min: number, max: number): number {
   return Math.min(Math.max(Math.round(n), min), max);
 }
 
+/** v1.0.10 — clamp into the CENTRAL limits' [min, max] with a fallback when
+ *  the value is absent/invalid (mirrors loop.ts clampLimit). */
+function clampLimitStatic(section: string, key: string, v: number | undefined, def: number): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  try {
+    return clampToLimit(section, key, n);
+  } catch {
+    return def;
+  }
+}
+
 /** Create + start a task. Returns the TaskDetail of the queued task. */
 export async function createTask(
   request: string,
@@ -57,6 +70,19 @@ export async function createTask(
   if (cfg.taskTimeoutMs !== undefined) cfg.taskTimeoutMs = clamp(cfg.taskTimeoutMs, settings.taskTimeoutMs, 5_000, 3_600_000);
   if (cfg.toolTimeoutMs !== undefined) cfg.toolTimeoutMs = clamp(cfg.toolTimeoutMs, settings.toolTimeoutMs, 1_000, 3_600_000);
   if (cfg.liveIntervalMs !== undefined) cfg.liveIntervalMs = clamp(cfg.liveIntervalMs, settings.liveIntervalMs, 1_000, 3_600_000);
+
+  // v1.0.10 §13 — resolve the planner strategy AT TASK CREATION and persist it
+  // in the stored config: task override → global default → fallback 'pre-plan'.
+  // A task must never unexpectedly switch planner strategy because another
+  // action changed the global Settings later.
+  if (cfg.plannerType !== 'pre-plan' && cfg.plannerType !== 'one-by-one') {
+    cfg.plannerType = settings.defaultPlannerType === 'one-by-one' ? 'one-by-one' : 'pre-plan';
+  }
+  // v1.0.10 §16/§18 — resolve the pre-plan step limit at creation too:
+  // task value (clamped into the central 1..122 bounds) → global default (10).
+  if (cfg.prePlanMaxSteps !== undefined) {
+    cfg.prePlanMaxSteps = clampLimitStatic('task', 'prePlanMaxSteps', cfg.prePlanMaxSteps, settings.prePlanMaxSteps);
+  }
 
   const id = newTaskId();
   const mode = cfg.mode ?? settings.defaultMode;

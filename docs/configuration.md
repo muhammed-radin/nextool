@@ -27,6 +27,8 @@ clamp ranges enforced by `updateSettings`.
 | Field | Type | Default | Min | Max | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `defaultMode` | `'goal' \| 'live'` | `goal` | — | — | Mode used when a task does not specify one. Invalid values fall back to `goal`. |
+| `defaultPlannerType` | `'pre-plan' \| 'one-by-one'` | `pre-plan` | — | — | **v1.0.10**: default planner strategy for tasks that do not override it. Resolved AND persisted into the task's config at creation (later Settings changes never switch an existing task). Invalid values fall back to `pre-plan`. |
+| `prePlanMaxSteps` | number | `10` | 1 | 122 | **v1.0.10**: maximum steps the pre-plan planner may generate (replaces the old hard-coded 8). Governed by the central limit `task.prePlanMaxSteps`; used by the pre-plan strategy only. |
 | `defaultReasoningLevel` | `1..6` | `4` | 1 | 6 | Default L1–L6 reasoning level. |
 | `maxSubtoolCalls` | number | `20` | 1 | 200 | Cap on tool calls per parallel group slice / subtool auto-execution. |
 | `safetyLimit` | number | `100` | 1 | 500 | Hard cap on total tool calls per task. |
@@ -131,6 +133,29 @@ priority dropped first when full) and processed one-by-one ordered by priority t
 arrival. Default `false` preserves the v1.0.5 single-event behavior. See
 [Live Mode](../modes/live-mode.md#multi-event-mode--read--act-all-events-v106).
 
+### Planner configuration (v1.0.10)
+
+Every task runs exactly ONE planner strategy: `pre-plan` (the classic multi-step
+forward plan) or the new `one-by-one` (plans exactly one next step per call from the
+latest state — semantics in [Planner](planner.md#planner-modes-v1010)).
+
+- **Global** — Settings → new **Planning** section: "Default planner" select
+  (`defaultPlannerType`, default `pre-plan`) and "Pre-plan max steps"
+  (`prePlanMaxSteps`, default 10, 1–122). Both persist via `PUT /api/settings`, which
+  validates them from the central limits (zod enum for the planner type, integer limit
+  for the max steps).
+- **Per task** — `config.plannerType` + `config.prePlanMaxSteps` in `POST /api/tasks`
+  (Task Console: planner select + max-steps input, the latter shown for the pre-plan
+  strategy only; one-by-one shows an honest "no pre-generated step list" note instead).
+  Resolution precedence: **task → global default → `'pre-plan'`**.
+- **Creation-time persistence** — the resolved `plannerType` and `prePlanMaxSteps` are
+  written into the task's stored config JSON at creation. Later Settings changes affect
+  new tasks only — an existing task never switches strategy mid-flight.
+- **Server-side validation** — an invalid `plannerType` or an out-of-range
+  `prePlanMaxSteps` is rejected by `POST /api/tasks` (400 `INVALID_REQUEST`, e.g.
+  `"expected number to be <=122"`); see [API](api.md#post-apitasks). Old tasks/configs
+  without the fields keep working unchanged (backward compatible).
+
 ## Per-task config (TaskConfig)
 
 Sent as `config` in `POST /api/tasks` (or `body.config`). `mode` is used **exactly as
@@ -155,6 +180,8 @@ provided** — it defaults to `settings.defaultMode` but is never auto-switched 
 | `maxParallelToolCalls` | number | `settings.maxParallelToolCalls` | v1.0.3: clamped 1–8 at merge time. |
 | `autoExecuteTools` | boolean | `false` | v1.0.6: per-task auto-execution override (see the precedence model above; the global setting, when `true`, still wins). |
 | `allowMultipleEvents` | boolean | `settings.allowMultipleEvents` (default `false`) | v1.0.6: enables the multi-event live queue for this task ("Read & Act All Events"). |
+| `plannerType` | `'pre-plan' \| 'one-by-one'` | `settings.defaultPlannerType` (then `'pre-plan'`) | **v1.0.10**: planner strategy override for this task. Resolved AND persisted in the stored config JSON at creation — later Settings changes never switch an existing task. |
+| `prePlanMaxSteps` | number | `settings.prePlanMaxSteps` (default 10) | **v1.0.10**: max steps for the pre-plan planner (1–122, central limit `task.prePlanMaxSteps`); governs the pre-plan strategy only. Persisted with the task config at creation. |
 | `sessionId` | string? | — | Free-form session correlation. |
 | `context` | object? | — | Arbitrary initial context. |
 
@@ -260,7 +287,9 @@ Typed Resolved Limits  ──→  Settings · Backend (schemas) · Runtime
 `maxIterations` 30 (1–200) · `maxSubtoolCalls` 20 (1–200) · `safetyLimit` 100 (1–500) ·
 `taskTimeoutMs` 120000 (5000–3600000 ms) · `toolTimeoutMs` 10000 (1000–3600000 ms) ·
 `liveIntervalMs` 60000 (1000–3600000 ms) · `maxParallelToolCalls` 4 (1–8) ·
-`eventQueueCap` 50 (1–500).
+`eventQueueCap` 50 (1–500) · **v1.0.10** `task.prePlanMaxSteps` — integer, default 10,
+min 1, max **122** (the single source of truth for the pre-plan planner's step cap;
+replaces the old hard-coded 8).
 
 These bound both the Settings defaults and per-task configuration values —
 `updateSettings` clamps with them, the zod schemas validate with them and

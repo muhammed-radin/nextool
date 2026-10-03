@@ -71,3 +71,6 @@ tool-results/
 # temporary virtual FS / runtime temp files
 .vfs-tmp/
 *.tmp
+upload/
+tool-results/
+agent-ctx/

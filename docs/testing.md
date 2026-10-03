@@ -10,7 +10,7 @@ NexTool Q1 ships a focused **bun test** unit suite alongside `bun run lint`
 and the manual verification workflows below.
 
 ```bash
-bun test                     # runs tests/*.test.ts (198 tests / 707 assertions across 6 files)
+bun test                     # runs tests/*.test.ts (339 tests across 10 files, 0 failing)
 bun run lint                 # eslint over the repo
 bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ```
@@ -25,6 +25,8 @@ core), `tests/nextool-v103.test.ts` (v1.0.3 additions), `tests/nextool-v104.test
 `tests/nextool-v108.test.ts` (v1.0.8 additions — 47 tests).
 `tests/nextool-v109.test.ts` (v1.0.9 additions — 19 tests).
 `tests/nextool-v1091.test.ts` (v1.0.91 additions — 30 tests).
+`tests/nextool-v1010.test.ts` (v1.0.10 additions — 45 tests, ~1484 expects).
+Full suite: **339 tests / 0 fail across 10 files**.
 
 | Area | What is verified |
 | --- | --- |
@@ -70,6 +72,13 @@ core), `tests/nextool-v103.test.ts` (v1.0.3 additions), `tests/nextool-v104.test
 | **v1.0.91 fetch self-origin** | `parsePolicyUrl("/api/tools/test")` resolves against the application origin (`getSelfOrigin`, `NEXTOOL_SELF_ORIGIN` override); `isSelfRelativePath` rejects `//host`; ABSOLUTE loopback/private URLs stay `HOST_BLOCKED` (SSRF guard untouched — even the app origin addressed absolutely); `selfOriginAccess: false` → honest `INVALID_URL`; `parseRedirectUrl` keeps the exemption for relative locations on self-origin requests, resolves relative locations on external hosts and blocks absolute loopback hops; `policyFetch` dispatches a relative POST with `Content-Type` + JSON body as POST (never rewritten to GET) while external `https://` requests keep their method/headers/body; **REAL loopback**: a js-function tool whose source `fetch("/api/tools/test", { method: "POST", … })` runs against a loopback server → HTTP 200, POST + JSON content-type observed server-side |
 | **v1.0.91 POST /api/tools/test route** | route-level tests import the restored handler: test-source mode returns the documented envelope (`mode/status/result/logs`); registered tool runs by name (`mode: "registered"`); unknown name → 404 `NOT_FOUND` (not 405); both/neither name+functionSource → 400 `INVALID_PARAMS`; a sandboxed source POSTing to the relative endpoint inside the route gets `status: 200` |
 | **v1.0.91 bulk import** | `parseToolsImport`: object → `single`, array → `bulk`, `[]` → honest `bulk-empty`, invalid JSON → clear `Invalid JSON file` error, `{tools:[…]}` bundle still rejected; legacy `parseToolImport` keeps its single-object contract; `buildBulkImportPlan` validates EVERY item through the same `validateImportedTool` pipeline (mixed validity → per-item reasons; non-object garbage never valid), detects duplicate names INSIDE the file (§2.9) and conflicts with existing registry names (§2.8); **export-all round trip** — `exportToolsJson` → JSON → parse → all items valid, names/source/metadata preserved; single-object import with metadata/autoExecute/timeoutMs unchanged |
+| **v1.0.10 planner strategy resolution** | `resolvePlannerType` precedence (task override → global `defaultPlannerType` → `'pre-plan'`); invalid values fall back to `pre-plan`; resolved values are what `planner.mode_selected` carries |
+| **v1.0.10 single-step sanitization** | `sanitizeOneStepResponse` keeps exactly ONE step (title/detail/kind normalization, id assignment); a `{"steps":[…]}` response retains the FIRST valid step and reports the rest as `discarded`; unparseable input → `buildOneByOneFallbackStep` (failure-aware when `knownFailures` exist, latest-observation-aware otherwise) — never zero steps |
+| **v1.0.10 central limits + validation** | `task.prePlanMaxSteps` {integer, default 10, min 1, max 122} validates in `configuration-limits.json`; settings/task zod schemas accept 1–122 and reject 123+ (`INVALID_REQUEST`, "expected number to be <=122"); `plannerType` enum rejects unknown strategies; old configs without the fields stay valid |
+| **v1.0.10 pattern confidence math** | `deriveConfidence` = `successRate × min(1, total/3) − 0.15 × contradictions` (floor 0): one observation → ≤ 0.333, repetition 0.333 → 0.667 at frequency 2, one-off patterns stay 0.333, contradictions weaken |
+| **v1.0.10 pattern → example conversion** | `patternsToDatasetExamples` converts reliable single-action patterns (`early-completion:<tool>`, `outcome:unhealthy-detected->restart`) at `minConfidence` 0.5; multi-tool transitions are deliberately NOT converted; `?format=examples` endpoint shape verified |
+| **v1.0.10 training `modelVersion`** | optional semver-validated config registers the checkpoint under the given version (default `TRAINED_MODEL_VERSION` `'1.0.1'`); `checkpointSelection` (best-val-accuracy strategy) and `modelSemanticVersion` land in the manifest; legacy `tc-<job>` `checkpointId` preserved |
+| **v1.0.10 seed dataset integrity** | `config/training/seed-dataset-v1.0.1.json`: valid JSON, strict shape, 170 examples — 121/23/26 splits, all 15 tools in train AND test, zero duplicate requests (no split leakage), `expectedParams` conform to the real tool schemas |
 
 The `tests/` directory also contains shell scripts that verify the **sandbox
 infrastructure** (fake-`bun` harness around `db:push`, python-runtime
@@ -184,7 +193,7 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 12. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
     connection pill reflects real SSE state when you kill the dev server mid-session.
 
-## Regression checklist (v1.0.2 focus areas, still valid in v1.0.7)
+## Regression checklist (v1.0.2 focus areas, still valid in v1.0.10)
 
 - Dynamic runtime status: no hardcoded `nextool@runtime:~$` prompt or static "Running";
   `[running]: Tool called <tool>` cursor behavior matches actual executions.
@@ -198,7 +207,8 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Benchmark honesty: `paramAccuracy` `-`/null without `expectedParams` or for
   classifiers; suite fixed to `tool-selection`.
 - Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
-  version` all read 1.0.6; engine stays llm-core 1.0.0.
+  version` all read 1.0.10; engine stays llm-core 1.0.0 (not retrained); trained
+  checkpoints register under 1.0.1.
 - Parallel batching (v1.0.3): a multi-step plan with independent steps emits
   `planner.parallel_batch`, executions share a `batchId` (grouped card in Task Preview),
   a failing sibling does not cancel the others (`planner.partial_failure`), and
@@ -290,6 +300,28 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Empty/invalid bulk files (v1.0.91): `[]` shows "No tools found in this JSON file."
   and registers nothing; a malformed file shows "Invalid JSON file — …" and
   registers nothing.
+- One-by-one ordering acceptance (v1.0.10, §47–§53): run a goal task with
+  `plannerType: 'one-by-one'` and verify the EVENT TIMELINE order —
+  `planner.mode_selected` → `planner.one_by_one_step_planned` (source `llm`,
+  `discarded` count) → the tool events → `planner.one_by_one_step_completed`
+  (tool + durationMs) → `planner.one_by_one_goal_reached` → `task.completed`; exactly
+  one step is planned per cycle and no hidden future list exists.
+- One-by-one live continuation (v1.0.10): with a live task on the one-by-one planner,
+  each tick/event plans ONE action from the current world state, executes, observes and
+  verifies the goal (evidence recorded); the task CONTINUES across ticks (never torn
+  down by a passing goal check), and environment-driven repair passes still run for
+  both planner types.
+- Override precedence (v1.0.10): a task created with `plannerType: 'one-by-one'`
+  keeps it after the global default is switched back to `pre-plan` (resolved AND
+  persisted at creation — `planner.mode_selected` shows `taskOverride: true,
+  globalDefault: 'pre-plan'`); a task created without the field follows the global
+  default; safeguards (`maxIterations`, `safetyLimit`, `taskTimeoutMs`) still bound
+  one-by-one loops (a test task hit `SAFETY_LIMIT` at `maxIterations=12` as designed).
+- Server-side 122/123 rejection (v1.0.10): `POST /api/tasks` with
+  `config.prePlanMaxSteps: 123` → 400 `INVALID_REQUEST` ("expected number to be
+  <=122"); `plannerType: 'fast-forward'` → 400; `PUT /api/settings` validates both
+  fields the same way; `prePlanMaxSteps: 10` (the default) is accepted and visible in
+  the Task Console Planning controls.
 
 ## Known gaps (by design)
 

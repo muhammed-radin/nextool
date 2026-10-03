@@ -56,6 +56,9 @@ const DEFAULTS: Draft = {
   maxParallelToolCalls: 4,
   autoExecuteTools: false,
   allowMultipleEvents: false,
+  // v1.0.10 §12.1/§16 — global default planner strategy + pre-plan step limit
+  defaultPlannerType: 'pre-plan',
+  prePlanMaxSteps: 10,
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -602,6 +605,40 @@ export default function SettingsView() {
                 <p className="text-[11px] text-muted-foreground">Tasks may override this in their config</p>
               </div>
               <Switch id="set-memory" checked={draft.useMemory} onCheckedChange={(v) => set('useMemory', v)} aria-label="Use persistent memory by default" />
+            </div>
+          </section>
+
+          {/* v1.0.10 §12.1/§15 — Planning: global default planner strategy +
+              pre-plan step limit. Tasks may override BOTH per task (Task
+              Console); a task override always takes precedence. */}
+          <section aria-label="Planning" className="glass-panel rounded-lg p-4 md:p-6">
+            <h3 className="text-sm font-semibold text-foreground">Planning</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">Default planner strategy for newly created tasks — individual tasks can override this in the Task Console.</p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="set-planner">Default planner</Label>
+                <Select value={draft.defaultPlannerType} onValueChange={(v) => set('defaultPlannerType', v as Draft['defaultPlannerType'])}>
+                  <SelectTrigger id="set-planner" className={inputCls}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pre-plan">pre-plan</SelectItem>
+                    <SelectItem value="one-by-one">one-by-one</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  {draft.defaultPlannerType === 'one-by-one'
+                    ? 'One-by-one: plans a single next step after each observation — adaptive subgoals, ideal for dynamic/live tasks.'
+                    : 'Pre-plan: plans multiple steps before execution — efficient for finite, well-defined tasks.'}
+                </p>
+              </div>
+              <NumberField
+                id="set-preplan-maxsteps"
+                label="Default maximum pre-plan steps"
+                value={draft.prePlanMaxSteps}
+                onChange={(v) => set('prePlanMaxSteps', v)}
+                hint={limitsHint(limitProps?.['task.prePlanMaxSteps'])}
+                min={limitProps?.['task.prePlanMaxSteps']?.min}
+                max={limitProps?.['task.prePlanMaxSteps']?.max}
+              />
             </div>
           </section>
 

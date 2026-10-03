@@ -35,6 +35,11 @@ export const DEFAULT_SETTINGS: NexToolSettings = {
   // v1.0.6 — approval + multi-event defaults (spec §9.3/§10.1: false)
   autoExecuteTools: false,
   allowMultipleEvents: false,
+  // v1.0.10 §12.1/§16 — global default planner strategy (pre-plan preserves
+  // existing behavior for existing installations, no migration needed) and
+  // the global default pre-plan step limit (default 10, hard max 122).
+  defaultPlannerType: 'pre-plan',
+  prePlanMaxSteps: limitsDefault('task', 'prePlanMaxSteps', 10),
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -96,6 +101,13 @@ export async function updateSettings(partial: Partial<NexToolSettings>): Promise
   // v1.0.6 — booleans default false when absent/garbage
   next.autoExecuteTools = next.autoExecuteTools === true;
   next.allowMultipleEvents = next.allowMultipleEvents === true;
+  // v1.0.10 §12.1/§16 — planner defaults: invalid planner type falls back to
+  // 'pre-plan'; the pre-plan step limit clamps into the central bounds
+  // [task.prePlanMaxSteps.min, task.prePlanMaxSteps.max] (1..122).
+  if (next.defaultPlannerType !== 'pre-plan' && next.defaultPlannerType !== 'one-by-one') {
+    next.defaultPlannerType = 'pre-plan';
+  }
+  next.prePlanMaxSteps = clampToLimit('task', 'prePlanMaxSteps', next.prePlanMaxSteps);
   if (next.defaultMode !== 'goal' && next.defaultMode !== 'live') next.defaultMode = 'goal';
   next.defaultReasoningLevel = clampNum(next.defaultReasoningLevel, 1, 6) as NexToolSettings['defaultReasoningLevel'];
   if (next.logLevel !== 'info' && next.logLevel !== 'debug' && next.logLevel !== 'error') next.logLevel = 'info';

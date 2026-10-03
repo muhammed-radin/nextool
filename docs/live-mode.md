@@ -70,6 +70,32 @@ manual/custom injections and console presets `user.message` / `environment.custo
 | Scheduled tick | One `liveObserveCycle` ("keep making progress on: <goal>" + serialized fleet state). Afterward, if the goal mentions monitoring (`monitor|recover|production|prod|api|server|health|web|db`) and any server is unhealthy/degraded, repair passes run for each. |
 | Generic event | One observation cycle, skipped if the per-cycle deadline (`Date.now() + taskTimeoutMs`) already passed. |
 
+## One-by-one planner in Live Mode (v1.0.10)
+
+A live task can run on either planner strategy (per-task `plannerType` / global
+`defaultPlannerType`, resolved at creation — see
+[Planner](planner.md#planner-modes-v1010)). With **`one-by-one`**, the live loop
+changes shape without changing its safeguards:
+
+- **One action per tick/event** — each scheduled tick or event wake plans exactly ONE
+  action from the CURRENT world state (never a hidden future list), executes it,
+  observes the result, and verifies the goal.
+- **Goal evidence is recorded** — the goal check runs on the latest observation and its
+  evidence is recorded; when it passes, `planner.one_by_one_goal_reached` (with
+  `live: true`) fires. **The live task CONTINUES across ticks — it is not torn down**
+  by a passing goal check (Live Mode's contract is unchanged: only Stop ends a live
+  task).
+- **Failure handling** — same as Goal Mode one-by-one: no blind retry; the failure is
+  recorded and observed, then ONE step is replanned with the failure context
+  (`planner.one_by_one_replanned`), with the endless-repetition guard and the
+  deterministic fallback (never zero steps).
+- **Repair passes are unchanged** — environment-driven repair
+  (`runRepairPasses` on crash/degrade wakes) behaves identically for BOTH planner
+  types; the planner strategy only governs how the next autonomous action is chosen.
+- **Safeguards still bound the loop** — `maxIterations`, `safetyLimit` and
+  `taskTimeoutMs` apply to one-by-one exactly as to pre-plan (a verification task hit
+  `SAFETY_LIMIT` at `maxIterations=12` as designed).
+
 ## Multi-event mode — "Read & Act All Events" (v1.0.6)
 
 By default (v1.0.5 behavior, `allowMultipleEvents: false`) a live task processes one

@@ -61,7 +61,8 @@ Values outside the ranges are clamped (HTTP) / resolved identically (CLI).
 | `validationSplit` | 0–0.5 | 0.2 | Holdout fraction when carving a validation set (only for datasets without explicit splits). |
 | `shuffle` | boolean | true | Shuffle training data between epochs. |
 | `vocabSize` | 16–1024 | 128 | Hashed bag-of-words dimension (the model's input shape). |
-| `earlyStoppingPatience` | 0–50 | 0 (off) | Stops when `val_loss` stops improving; best weights are restored (`restoreBestWeights`). Requires a validation holdout. |
+| `earlyStoppingPatience` | 0–50 | 0 (off) | **v1.0.10 — MANUAL early stopping** (see below): stops when `val_loss` has not improved for `patience` epochs and restores the best weights. Implemented in the epoch callback because the tf.js `EarlyStopping` callback is broken in this build. Requires a validation holdout. |
+| `modelVersion` | semver-like string (`/^\d+\.\d+\.\d+/` prefix check) | `TRAINED_MODEL_VERSION` (`'1.0.1'` since v1.0.10) | **v1.0.10**: optional semantic version the checkpoint registers under. Legacy `checkpointId`s keep the `tc-<job>` identifier for traceability; old checkpoints keep their original versions. |
 
 ## Job lifecycle
 
@@ -96,12 +97,14 @@ real `ModelRecord` row:
 
 | Manifest field | Content |
 | --- | --- |
-| `name` / `version` | `tool-classifier-<dataset-name>` / `tc-<job-id-derived>` |
+| `name` / `version` | `tool-classifier-<dataset-name>` / the resolved model version (v1.0.10: `modelVersion` config → default `TRAINED_MODEL_VERSION` `'1.0.1'`; the legacy `tc-<job-id-derived>` identifier remains as `checkpointId` for traceability) |
 | `format` | `tfjs-trained-classifier` |
-| `modelTopology` + `weightSpecs` + `weightData` | Native TF.js artifacts (weights base64-encoded) |
+| `modelTopology` + `weightSpecs` + `weightData` | Native TF.js artifacts (weights base64-encoded) — v1.0.10: the weights snapshotted at the **best validation-accuracy epoch** (checkpoint selection) when a validation holdout exists |
+| `checkpointSelection` | **v1.0.10** — `{ selectedEpoch, valAccuracy, strategy: 'best-validation-accuracy' }` (or `strategy: 'final-epoch (no validation holdout)'`) |
+| `modelSemanticVersion` | **v1.0.10** — the semantic model generation of the checkpoint (`'1.0.1'` by default in this release) |
 | `classes` | Sorted tool-class list (index → tool mapping used at inference) |
 | `vocabSize` | Vectorizer dimension the weights were trained with |
-| `trainingConfig` | The resolved config actually used |
+| `trainingConfig` | The resolved config actually used (incl. `modelVersion` since v1.0.10) |
 | `finalMetrics` | `{ loss, valLoss, accuracy, valAccuracy, trainMs }` |
 | `datasetId/Name/Version` | Dataset lineage |
 | `tfjsCompatibility` | TF.js version that produced the topology |
@@ -115,6 +118,73 @@ The checkpoint is `status: registered` and immediately usable: benchmark it
 (tool name) + confidence; it does **not** generate parameters (`paramAccuracy` is `null`
 when benchmarking it), plan, observe or verify goals. It does not replace llm-core as
 the active engine — the runtime's decision unit is unchanged (llm-core 1.0.0).
+
+## v1.0.10 — training engine upgrade (model version 1.0.1)
+
+The engine (`src/lib/nexool/training/engine.ts`) gained four real upgrades, each fixing
+or completing something verified broken/missing in earlier releases:
+
+1. **Checkpoint selection** — the engine tracks the best validation accuracy per epoch
+   and snapshots those weights; they are **restored before saving**, so the registered
+   checkpoint is the best-epoch model rather than whatever the LAST epoch happened to
+   produce. The strategy is recorded in the manifest as `checkpointSelection`
+   (`{ selectedEpoch, valAccuracy, strategy }`).
+2. **Manual early stopping on `val_loss`** — the tf.js `EarlyStopping` callback is
+   broken in this build (`restoreBestWeights = True is not implemented`,
+   `this.getMonitorValue is not a function`), so early stopping is implemented in the
+   epoch callback itself: after `earlyStoppingPatience` epochs without `val_loss`
+   improvement the loop stops and the best weights are restored. Behavior is identical
+   to the documented contract; the crash is gone.
+3. **Unique per-job model/layer names + dispose-on-failure** — a previously FAILED job
+   leaked TF.js variables (`Variable with name dense_Dense1/kernel was already
+   registered`) that poisoned every LATER job in the same process. Each job now builds
+   its model with unique names and disposes every tensor on failure — a failed job can
+   no longer break the next one (restart also clears leaked variables).
+4. **`modelVersion` in `trainingConfig`** (optional, semver-validated) — the checkpoint
+   registers under this semantic version. The default resolves to
+   `TRAINED_MODEL_VERSION` from `version.ts` — **`'1.0.1'` in this release** — while
+   `manifest.checkpointId` keeps the legacy `tc-<job>` identifier for traceability.
+   Checkpoints trained before v1.0.10 keep their original versions; nothing is
+   re-versioned in place.
+
+The **shipped seed dataset for this generation** is
+`config/training/seed-dataset-v1.0.1.json` ("NexTool Core v1.0.1 Seed", version 1.0.1):
+**170 examples — 121 train / 23 validation / 26 test**; all 15 registered tools covered
+in train AND test; paraphrases, synonyms, typos, ambiguous/confusing pairs,
+conversational wording; parameter-generation examples (`expectedParams` inside real tool
+schemas); zero duplicate requests (no split leakage). See [Datasets](datasets.md).
+Benchmarked against the held-out test split in this release (see
+[Benchmarks](benchmarks.md)): the v1.0.1 classifier reaches **0.6923** tool-selection
+accuracy vs **0.4231** for the old 1.0.0-era checkpoint on identical data.
+
+## Pattern learning (v1.0.10 — additional evidence, not training)
+
+Alongside training, the runtime now maintains a deterministic **pattern store**
+(`src/lib/nexool/patterns/extractor.ts`, persisted as Prisma `PatternRecord` rows,
+hooked fire-and-forget in `loop.ts` `recordExecution` + finalize):
+
+```text
+Tool Result → Observer (interpret) → Pattern Extraction (deterministic, no LLM)
+           → Pattern Store (Prisma PatternRecord) → optional Training Dataset
+```
+
+- **Pattern types**: `sequence` (A→B successful transitions), `verification` (any
+  action → `server.health`), `outcome` (unhealthy-detected→restart; restart→verified-
+  healthy), `failure-recovery` (A failed → B succeeded), `live` (one-by-one live
+  transitions), `early-completion` (task completed with ≤ 1 step / unused planned steps
+  discarded).
+- **Confidence is DERIVED, never observed**:
+  `successRate × min(1, total/3) − 0.15 × contradictions` (floor 0). ONE observation →
+  ≤ 0.333 (never high confidence); repetitions strengthen (verified: a repeated pattern
+  strengthened 0.333 → 0.667 at frequency 2; one-off patterns stayed at 0.333);
+  contradictions weaken.
+- **Read access**: `GET /api/patterns` (list + stats, `?type=`, `?minConfidence=`) and
+  `?format=examples&minConfidence=0.5` — converts reliable single-action patterns
+  (`early-completion:<tool>`, `outcome:unhealthy-detected->restart`) into
+  pattern-learned training examples; multi-tool transitions are deliberately NOT
+  converted (see [API](../api/api.md#get-apipatterns-v1010)).
+- **Status**: pattern information is **ADDITIONAL EVIDENCE** — it never becomes a
+  mandatory runtime dependency, and inference works unchanged with an empty store.
 
 ## Workflows
 

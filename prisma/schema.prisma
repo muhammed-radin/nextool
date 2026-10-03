@@ -188,6 +188,38 @@ model GeneratedImage {
   createdAt DateTime @default(now())
 }
 
+// ============ v1.0.10: Structured task/observer pattern learning ============
+
+// Structured pattern records extracted from verified Observer observations and
+// task outcomes (spec §32-§36). NOT raw logs: each row is a deterministic
+// signature (pattern type + conditions + action) with evidence counters.
+// Confidence is derived (never stored as an opinion):
+//   successRate = successCount / (successCount + failureCount)
+//   evidence    = min(1, frequency / 3)          // one event → low confidence
+//   confidence  = successRate * evidence - 0.15 * contradictionCount  (min 0)
+// A single observation therefore can never become high-confidence knowledge.
+model PatternRecord {
+  id                 String   @id @default(cuid())
+  signature          String   @unique // deterministic pattern identity (type + conditions + action)
+  patternType        String // sequence | outcome | verification | failure-recovery | live | early-completion
+  inputConditions    String   @default("{}") // JSON: conditions that trigger the pattern
+  context            String   @default("{}") // JSON: bounded context metadata (no sensitive payloads)
+  actionTool         String // tool the pattern points to
+  resultSummary      String   @default("") // bounded human-readable result note
+  outcome            String   @default("unknown") // unknown | positive | negative
+  confidence         Float    @default(0) // derived evidence score 0..1
+  frequency          Int      @default(0) // total observations folded into this signature
+  successCount       Int      @default(0)
+  failureCount       Int      @default(0)
+  contradictionCount Int     @default(0) // contradicting evidence weakens the pattern
+  source             String   @default("task-execution")
+  taskMode           String   @default("goal")
+  plannerType        String   @default("pre-plan")
+  sourceRequest      String? // bounded original request for dataset conversion (optional)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
 // ============ v1.0.6: Virtual File System (tool workspaces) ============
 
 // Persistent, per-tool isolated storage backing the sandbox `fs` module.

@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useConsoleStore } from '../console-store';
-import { ApiClientError, createTask, getConfigurationLimits, listTasks, listTools } from '@/lib/nexool/client';
+import { ApiClientError, createTask, getConfigurationLimits, getSettings, listTasks, listTools } from '@/lib/nexool/client';
 import type { LimitPropertyDTO } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import type { TaskSummary } from '@/lib/nexool/types';
@@ -74,6 +74,11 @@ export default function TaskConsoleView() {
   const [request, setRequest] = useState('');
   const [mode, setMode] = useState<'goal' | 'live'>('goal');
   const [liveConfirmed, setLiveConfirmed] = useState(false);
+  // v1.0.10 §14 — per-task planner selection (override of the global default).
+  // Defaults initialize from the global Settings once loaded (§18: default =
+  // global setting) and travel inside the submitted task config.
+  const [plannerType, setPlannerType] = useState<'pre-plan' | 'one-by-one'>('pre-plan');
+  const [prePlanMaxSteps, setPrePlanMaxSteps] = useState<number>(10);
   const [reasoningLevel, setReasoningLevel] = useState(3);
   const [useMemory, setUseMemory] = useState(true);
   // v1.0.3 §18/§24: explicit parallel tool call policy for THIS task (the
@@ -100,6 +105,22 @@ export default function TaskConsoleView() {
     listTools()
       .then((data) => alive && setTools(data))
       .catch((e) => alive && setToolsError(e instanceof ApiClientError ? e.message : 'Failed to load tools'));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // v1.0.10 §18 — the Task Console's planner fields default to the GLOBAL
+  // settings (Default planner + pre-plan step limit); the task may override.
+  useEffect(() => {
+    let alive = true;
+    getSettings()
+      .then((s) => {
+        if (!alive) return;
+        if (s.defaultPlannerType === 'one-by-one' || s.defaultPlannerType === 'pre-plan') setPlannerType(s.defaultPlannerType);
+        if (Number.isFinite(s.prePlanMaxSteps) && s.prePlanMaxSteps > 0) setPrePlanMaxSteps(Math.floor(s.prePlanMaxSteps));
+      })
+      .catch(() => { /* global settings unavailable — shipped defaults remain */ });
     return () => {
       alive = false;
     };
@@ -159,6 +180,14 @@ export default function TaskConsoleView() {
     if (parallelToolCalls && (limits.maxParallelToolCalls < 1 || limits.maxParallelToolCalls > parallelCap)) {
       return `maxParallelToolCalls must be between 1 and ${parallelCap}.`;
     }
+    // v1.0.10 §18/§19 — pre-plan step limit: 1..122 (central bounds; the
+    // server validates the same bounds — this is UX-level early feedback).
+    if (plannerType === 'pre-plan') {
+      const maxCap = limitMeta?.['task.prePlanMaxSteps']?.max ?? 122;
+      if (!Number.isFinite(prePlanMaxSteps) || prePlanMaxSteps < 1 || prePlanMaxSteps > maxCap) {
+        return `Maximum pre-plan steps must be between 1 and ${maxCap}.`;
+      }
+    }
     return null;
   };
 
@@ -195,6 +224,11 @@ export default function TaskConsoleView() {
           // separate concerns: parallelToolCalls ≠ allowMultipleEvents.
           autoExecuteTools,
           allowMultipleEvents,
+          // v1.0.10 §14/§18 — the selected planner is ALWAYS included in the
+          // submitted task configuration; prePlanMaxSteps only applies to
+          // pre-plan (one-by-one always plans exactly one step per call).
+          plannerType,
+          ...(plannerType === 'pre-plan' ? { prePlanMaxSteps } : {}),
           ...(mode === 'live' ? { liveIntervalMs: limits.liveIntervalMs } : {}),
         },
       });
@@ -289,6 +323,55 @@ export default function TaskConsoleView() {
             </div>
           </div>
         ) : null}
+
+        {/* v1.0.10 §14 — planner selection with concise descriptions. The
+            selected planner always travels in the submitted task config. */}
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="task-planner">Planner</Label>
+            <Select value={plannerType} onValueChange={(v) => setPlannerType(v as 'pre-plan' | 'one-by-one')}>
+              <SelectTrigger id="task-planner" className="min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm" aria-label="Planner strategy">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="glass-strong">
+                <SelectItem value="pre-plan">pre-plan</SelectItem>
+                <SelectItem value="one-by-one">one-by-one</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">
+              {plannerType === 'one-by-one'
+                ? 'Plans one step, observes the result, then plans the next. Useful for dynamic/live tasks and adaptive subgoals.'
+                : 'Plans several steps ahead. Efficient for finite, well-defined tasks.'}
+            </p>
+          </div>
+          {plannerType === 'pre-plan' ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="task-preplan-steps">Maximum pre-plan steps</Label>
+              <Input
+                id="task-preplan-steps"
+                type="number"
+                min={limitMeta?.['task.prePlanMaxSteps']?.min ?? 1}
+                max={limitMeta?.['task.prePlanMaxSteps']?.max ?? 122}
+                value={prePlanMaxSteps}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setPrePlanMaxSteps(Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
+                }}
+                className="min-h-11 border-white/[0.09] bg-white/[0.04] font-mono text-sm"
+                aria-label="Maximum pre-plan steps"
+              />
+              <p className="font-mono text-[10px] text-muted-foreground/70">
+                1–{limitMeta?.['task.prePlanMaxSteps']?.max ?? 122} · default from global Settings ({prePlanMaxSteps})
+              </p>
+            </div>
+          ) : (
+            <div className="self-end rounded-lg border border-white/[0.09] bg-white/[0.03] px-3 py-2.5">
+              <p className="text-[11px] text-muted-foreground">
+                One-by-one planning generates exactly ONE step per cycle from the latest observation — no pre-generated step list exists for this task.
+              </p>
+            </div>
+          )}
+        </div>
 
         <div className="space-y-1.5">
           <Label htmlFor="task-request">Request <span className="text-rose-400">*</span></Label>

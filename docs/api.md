@@ -6,7 +6,7 @@ order: 1
 
 # API Reference
 
-Every HTTP endpoint in NexTool Q1 v1.0.7. All routes are Next.js route handlers
+Every HTTP endpoint in NexTool Q1 v1.0.10. All routes are Next.js route handlers
 (`runtime = 'nodejs'`, `dynamic = 'force-dynamic'`) under `src/app/api/`. JSON in/out,
 except the SSE stream, the model export download (zip), the dataset Parquet export
 (binary), the icons upload (multipart) and the multipart dataset import variant.
@@ -75,20 +75,30 @@ Create + start a task (async). Request: `{ "request": string (≤4000 chars),
 "config"?: Partial<TaskConfig>, "mode"?, "reasoningLevel"? }` — top-level
 `mode`/`reasoningLevel` merge into config. `config` is zod-validated and may include
 the v1.0.3 parallel policy fields `parallelToolCalls` (boolean) and
-`maxParallelToolCalls` (int 1–8) plus the v1.0.6 fields `autoExecuteTools` (boolean)
-and `allowMultipleEvents` (boolean). **v1.0.4: `config.enabledTools` is required and must
+`maxParallelToolCalls` (int 1–8), the v1.0.6 fields `autoExecuteTools` (boolean)
+and `allowMultipleEvents` (boolean), and the **v1.0.10 planner fields
+`plannerType` (`'pre-plan' | 'one-by-one'`) and `prePlanMaxSteps` (int 1–122)**.
+The server validates both planner fields: an invalid `plannerType` or an out-of-range
+`prePlanMaxSteps` (e.g. `123`) is rejected with 400 `INVALID_REQUEST`
+(`"expected number to be <=122"` / enum wording) — nothing is silently clamped at the
+route boundary. Resolved values (`plannerType` following the precedence
+task → global `defaultPlannerType` → `'pre-plan'`, plus `prePlanMaxSteps`) are
+**persisted into the stored config JSON at creation**, so later Settings changes never
+switch an existing task's strategy; old configs without the fields keep working.
+**v1.0.4: `config.enabledTools` is required and must
 be a non-empty array of tool names** — the zod schema rejects an explicit empty array
 (`INVALID_REQUEST`) and the route rejects a missing/empty list with 400
 `TOOLS_REQUIRED` ("Select at least one tool before running the task."). The console
 always sends `config.enabledTools: [...]`. Response: 201 `TaskDetail`
 (summary + config, state, plan, finalResult, error, sessionId).
-Errors: `INVALID_REQUEST` (empty request, empty `enabledTools` array),
+Errors: `INVALID_REQUEST` (empty request, empty `enabledTools` array, invalid
+`plannerType` / out-of-range `prePlanMaxSteps`),
 `TOOLS_REQUIRED` (missing/empty tool selection), `TASK_CREATE_FAILED` (validation,
 e.g. too long).
 
 ```bash
 curl -X POST http://localhost:3000/api/tasks -H 'Content-Type: application/json' \
-  -d '{"request":"Check the health of server api-01","config":{"mode":"goal","enabledTools":["server.health"],"parallelToolCalls":true,"maxParallelToolCalls":4}}'
+  -d '{"request":"Check the health of server api-01","config":{"mode":"goal","enabledTools":["server.health"],"plannerType":"one-by-one"}}'
 ```
 
 ### GET /api/tasks/{id}
@@ -147,6 +157,34 @@ Answer or cancel a pending prompt. Request:
 ### GET /api/confirmations?taskId= (v1.0.8)
 
 Pending tool `confirm()` requests. `data.confirmations[]`: `{ confirmId, taskId?, toolName?, message, requestedAt }` — rendered as Confirm/Cancel cards in Task Preview and Live Monitor.
+
+### GET /api/patterns (v1.0.10)
+
+Read access to the structured **pattern store** (see the pattern-learning notes in
+[Training](../ai-core/training.md)): deterministic extraction over recorded tool
+executions (Tool Result → Observer → Pattern Extraction → `PatternRecord` rows).
+Query parameters:
+
+| Param | Effect |
+| --- | --- |
+| *(none)* | `{ patterns: PatternRow[], stats: { total, byType } }` — patterns ordered by confidence → frequency → recency (limit default 200, clamp 1–1000). |
+| `?type=` | Filter by pattern type — `sequence \| outcome \| verification \| failure-recovery \| live \| early-completion`; unknown values → 400 `INVALID_PARAMS`. |
+| `?minConfidence=` | Only patterns with `confidence >= value` (e.g. `0.5`). |
+| `?format=examples&minConfidence=0.5` | Converts reliable single-action patterns into **pattern-learned training examples** (`{ format: 'examples', count, examples }`). Only single-action patterns convert — `early-completion:<tool>` and `outcome:unhealthy-detected->restart`; multi-tool transitions are deliberately NOT converted. |
+| `?limit=` | Row cap (1–1000, default 200). |
+
+Pattern rows carry `signature` (unique), `patternType`, `inputConditions`, `actionTool`,
+`resultSummary`, `outcome`, `confidence`, `frequency`, `successCount`, `failureCount`,
+`contradictionCount`, `source`, `taskMode`, `plannerType`, `sourceRequest` (bounded
+300 chars). Patterns are **additional evidence only** — inference works unchanged when
+the store is empty (never a mandatory runtime dependency).
+
+```bash
+curl "http://localhost:3000/api/patterns?type=outcome&minConfidence=0.5"
+curl "http://localhost:3000/api/patterns?format=examples&minConfidence=0.5"
+```
+
+Errors: `INVALID_PARAMS` (unknown `type`).
 
 ### POST /api/confirmations (v1.0.8)
 
@@ -553,10 +591,13 @@ Partial update; values are clamped server-side (see
 [Configuration](../getting-started/configuration.md) for ranges). Accepts the v1.0.3
 parallel policy fields `parallelToolCalls` (boolean) and `maxParallelToolCalls`
 (int 1–8), the v1.0.6 fields `autoExecuteTools` (boolean — global auto-execution
-override) and `allowMultipleEvents` (boolean — multi-event live processing), and the
+override) and `allowMultipleEvents` (boolean — multi-event live processing), the
 v1.0.7 field `toolTimeoutMs` (int 1000–3600000 — the default tool execution timeout;
-**values above 1 hour are rejected** with 400 `INVALID_PARAMS`). Returns the saved
-settings. Note: an invalid-type body is treated as `{}`
+**values above 1 hour are rejected** with 400 `INVALID_PARAMS`), and the **v1.0.10
+Planning fields `defaultPlannerType` (enum `'pre-plan' | 'one-by-one'` — the global
+default planner strategy) and `prePlanMaxSteps` (int 1–122, zod intLimit from the
+central `task.prePlanMaxSteps` metadata — values outside the range are rejected)**.
+Returns the saved settings. Note: an invalid-type body is treated as `{}`
 (no-op save).
 
 ```bash
@@ -601,7 +642,7 @@ severity, resource, message }] }`. Reports clear errors — never creates replac
 
 ## Documentation
 
-### GET /api/docs — `{ version: "1.0.7", count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: APP_VERSION ("1.0.10"), count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`
@@ -638,6 +679,8 @@ enveloped). Not used by the console.
 | `maxParallelToolCalls` | 1–8 | v1.0.3 — default 4; calls beyond the cap run in later waves |
 | `autoExecuteTools` | boolean | v1.0.6 — per-task auto-execution override (global `settings.autoExecuteTools: true` still wins); default false |
 | `allowMultipleEvents` | boolean | v1.0.6 — "Read & Act All Events"; enables the live event queue for this task; default false |
+| `plannerType` | `'pre-plan' \| 'one-by-one'` | v1.0.10 — planner strategy override; precedence task → global `defaultPlannerType` → `'pre-plan'`; resolved AND persisted in the stored config JSON at creation (invalid values → 400 `INVALID_REQUEST`) |
+| `prePlanMaxSteps` | 1–122 | v1.0.10 — max steps for the pre-plan planner (default 10); `123` → 400 `INVALID_REQUEST` (`"expected number to be <=122"`); persisted with the task config at creation |
 | `sessionId`, `context` | free-form | |
 
 For payload/response schemas of the domain objects (`TaskDetail`, `NexToolEvent`,

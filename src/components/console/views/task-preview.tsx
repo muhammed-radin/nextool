@@ -52,8 +52,8 @@ function readTerminalPreference(): boolean {
 const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting', 'awaiting_approval', 'paused']);
 /** v1.0.3 §1: terminal states — Live Checklist/Terminal are removed once reached. */
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'stopped']);
-/** Events that should refresh task detail/plan/executions immediately (v1.0.3 §2 + v1.0.6 §16). */
-const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm)|task\.(completed|failed|cancelled|started|paused|resumed)|planner\.(plan|parallel_batch|partial_failure)|subgoal\.created|live\.event\.)/;
+/** Events that should refresh task detail/plan/executions immediately (v1.0.3 §2 + v1.0.6 §16 + v1.0.10 §21). */
+const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm)|task\.(completed|failed|cancelled|started|paused|resumed)|planner\.(plan|parallel_batch|partial_failure|mode_selected|one_by_one_step_planned|one_by_one_step_completed|one_by_one_replanned|one_by_one_goal_reached)|subgoal\.created|live\.event\.)/;
 
 function ExecutionCard({ ex }: { ex: ToolExecution }) {
   // v1.0.9 §15.1/§15.3-§15.6 — the status comes from the execution record via
@@ -472,9 +472,75 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   // failure). Never a hardcoded checked state.
   const planChecklist = deriveChecklist(planSteps, taskEvents);
 
-  const planSection = (
+  // v1.0.10 §22 — the planner mode is displayed explicitly. One-by-one tasks
+  // get the dedicated Current Subgoal / Previous / Next layout: the plan
+  // array only ever contains steps that were ACTUALLY planned (one per
+  // cycle) — the preview never pretends a complete plan existed up front.
+  const plannerType = detail.config?.plannerType === 'one-by-one' ? 'one-by-one' : 'pre-plan';
+  const currentOneByOne = planSteps.find((s) => s.status === 'in_progress' || s.status === 'pending');
+  const previousOneByOne = [...planSteps].filter((s) => s.status === 'completed' || s.status === 'failed' || s.status === 'skipped').reverse();
+  const oneByOneSection = (
+    <section aria-label="One-by-one planner" className="glass-panel rounded-lg p-4">
+      <SectionTitle
+        icon={<Play className="size-4 text-sky-300" aria-hidden />}
+        title="One-by-one Planner"
+        desc="Plans one step, observes, verifies the goal, then plans the next — generated only after the latest observation."
+        right={
+          <Badge variant="outline" className="border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-300">Planner: One-by-one</Badge>
+        }
+      />
+      <div className="mt-3 space-y-3">
+        <div>
+          <TechLabel className="text-[9px]">current subgoal</TechLabel>
+          {currentOneByOne ? (
+            <p className="mt-1 flex items-start gap-2 text-sm font-medium text-foreground">
+              <span aria-hidden className="mt-0.5 text-sky-300">→</span>
+              <span>
+                {currentOneByOne.title}
+                {currentOneByOne.detail ? <span className="block text-xs font-normal text-muted-foreground">{currentOneByOne.detail}</span> : null}
+              </span>
+            </p>
+          ) : isTerminal ? (
+            <p className="mt-1 text-xs text-muted-foreground/70">Task cycle complete — no further subgoal planned.</p>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground/70">Planning the first step…</p>
+          )}
+        </div>
+        <div>
+          <TechLabel className="text-[9px]">previous</TechLabel>
+          {previousOneByOne.length === 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground/70">No completed steps yet.</p>
+          ) : (
+            <ul className="nextool-scroll mt-1 max-h-40 space-y-1 overflow-y-auto pr-1">
+              {previousOneByOne.map((s) => (
+                <li key={s.id} className="flex items-start gap-2 text-xs text-foreground/85">
+                  <span aria-hidden className={cn('mt-0.5 shrink-0 font-mono', s.status === 'completed' ? 'text-emerald-300' : s.status === 'failed' ? 'text-rose-300' : 'text-amber-300')}>
+                    {s.status === 'completed' ? '✓' : s.status === 'failed' ? '!' : '~'}
+                  </span>
+                  <span>{s.title}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div>
+          <TechLabel className="text-[9px]">next</TechLabel>
+          <p className="mt-1 text-xs text-muted-foreground">Waiting for observation…</p>
+        </div>
+      </div>
+    </section>
+  );
+
+  const planSection = plannerType === 'one-by-one' ? oneByOneSection : (
     <section aria-label="Plan" className="glass-panel rounded-lg p-4">
-      <SectionTitle icon={<Play className="size-4 text-sky-300" aria-hidden />} title="Plan" desc="Runtime-driven checklist — steps update as the task executes." />
+      <SectionTitle
+        icon={<Play className="size-4 text-sky-300" aria-hidden />}
+        title="Plan"
+        desc="Runtime-driven checklist — steps update as the task executes."
+        right={
+          <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">Planner: Pre-plan</Badge>
+        }
+      />
       <div className="mt-3">
         {planSteps.length === 0 ? (
           <EmptyState title="No plan yet" hint="The planner publishes steps once the task starts executing." />

@@ -38,14 +38,16 @@ nextool-q1/
 
 | Path | Purpose |
 | --- | --- |
-| `package.json` | `nextool-q1` v1.0.8. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (v1.0.2), `@dsnp/parquetjs` **1.8.9 pinned** (v1.0.3 Parquet adapter), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view` 2.0.0-alpha.43 (JSON tree — reads `--w-rjv-*` tokens only), `commander` (CLI), `fflate` (zip packaging). |
+| `package.json` | `nextool-q1` v1.0.10. Scripts: `dev`, `build`, `start`, `lint`, `db:push`, `db:generate`, `db:migrate`, `db:reset`, `cli` (`bun run scripts/nextool.ts`). `bin`: `nextool` → `./scripts/nextool.ts`. Notable deps: `@tensorflow/tfjs` 4.22.0 (v1.0.2), `@dsnp/parquetjs` **1.8.9 pinned** (v1.0.3 Parquet adapter), `@monaco-editor/react` + `monaco-editor` (Tool IDE), `@uiw/react-json-view` 2.0.0-alpha.43 (JSON tree — reads `--w-rjv-*` tokens only), `commander` (CLI), `fflate` (zip packaging). |
 | `next.config.ts` | `output: "standalone"` (production server bundle), `reactStrictMode: false`, `typescript.ignoreBuildErrors: true`, `serverExternalPackages: ["@dsnp/parquetjs"]` (v1.0.3 — the Parquet adapter is required from node_modules at runtime, not bundled). |
 | `tsconfig.json` | Standard Next.js TS config with `@/*` path alias → `src/*`. |
 | `.env` | Only `DATABASE_URL`. Never committed, values never documented. |
 | `Caddyfile` | Sandbox infrastructure (local reverse proxy) — not part of the application. |
-| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions, v1.0.3 updates, v1.0.4 refinements, v1.0.5 improvements, v1.0.6 tool-runtime expansion, v1.0.7 timeout/search/reset/cleanup, v1.0.8 central limits + tool runtime expansion. |
+| `worklog.md` | Task-by-task build log; v1.0.0 build, v1.0.1 foundation, v1.0.2 additions, v1.0.3 updates, v1.0.4 refinements, v1.0.5 improvements, v1.0.6 tool-runtime expansion, v1.0.7 timeout/search/reset/cleanup, v1.0.8 central limits + tool runtime expansion, v1.0.9/v1.0.91 fixes, v1.0.10 planner modes + training 1.0.1. |
 | `scripts/nextool.ts` | The CLI (`nextool train / benchmark / model / dataset / tool / runtime / version`). Directly imports the same service modules the API routes use. |
-| `tests/*.sh` | Sandbox-infrastructure verification scripts (e.g. a fake-bun harness for `db:push`); they test the hosting environment, not the application. The `*.test.ts` files (`nextool-v102`/`v103`/`v104`/`v105`/`v106`/`v107`) ARE app tests — see [Testing](testing.md). |
+| `tests/*.sh` | Sandbox-infrastructure verification scripts (e.g. a fake-bun harness for `db:push`); they test the hosting environment, not the application. The `*.test.ts` files (`nextool-v102`/`v103`/`v104`/`v105`/`v106`/`v107`/`v108`/`v109`/`v1091`/`v1010`) ARE app tests — see [Testing](testing.md). |
+| `config/configuration-limits.json` | v1.0.8 — THE authoritative central limits file (loader: `src/lib/nexool/config-limits.ts`); v1.0.10 adds `task.prePlanMaxSteps` (integer, default 10, min 1, max 122) to the `task` section. |
+| `config/training/seed-dataset-v1.0.1.json` | **v1.0.10** — the shipped training seed ("NexTool Core v1.0.1 Seed", version 1.0.1): 170 examples — 121 train / 23 validation / 26 test, all 15 registered tools covered in train AND test, paraphrases/typos/ambiguous pairs, parameter-generation examples, zero duplicate requests. Import-ready via `POST /api/datasets/import` or the CLI (see [Datasets](datasets.md)). |
 
 ## prisma/schema.prisma
 
@@ -61,6 +63,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `MemoryEntry` | persistent memory: unique key, JSON value, tags, source | `memory.store` tool, feedback loop, `/api/memory` |
 | `HistoryEntry` | one row per tool execution (params/result JSON, status; v1.0.3 `batchId` + `parallelGroup` for parallel-batch provenance) | `tools/executor.ts` |
 | `Setting` | global settings JSON under key `nextool`; branding manifest under `branding.icons` | `settings.ts`, `branding.ts` |
+| `PatternRecord` | **v1.0.10** — learned execution patterns: unique `signature`, `patternType` (sequence \| outcome \| verification \| failure-recovery \| live \| early-completion), `inputConditions` + `context` JSON, `actionTool`, `resultSummary`, `outcome`, derived `confidence` (0–1), `frequency`/`successCount`/`failureCount`/`contradictionCount`, `source`, `taskMode`, `plannerType`, `sourceRequest` (bounded 300 chars) | `patterns/extractor.ts` (hooked fire-and-forget in `loop.ts` `recordExecution` + finalize); read by `GET /api/patterns` |
 | `ModelRecord` | registered model packages (manifests, trained checkpoints, imports) | `training/engine.ts`, `/api/models/load`, `/api/models/import` |
 | `DatasetRecord` | imported datasets: split sizes, examples JSON, categories | `/api/datasets/import` |
 | `NotificationRecord` | notifications created by `notification.send` | `tools/notify.ts` |
@@ -74,7 +77,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `types.ts` | All domain types: ToolDefinition, CoreModuleOutput, MainState, TaskConfig, NexToolEvent, GlobalLiveState, ContextComposition, SystemStats, ApiEnvelope… | (binding contract) |
 | `api-contract.ts` | REST contract comment + DTOs (`TaskDetail`, `ToolEntry`, `MemoryEntryDTO`…) | `types.ts` |
 | `config/configuration-limits.json` | **v1.0.8** — THE authoritative configuration-limits file (version 1 + `$meta` + `network`/`vfs`/`execution`/`childProcess`/`task` sections). Every property carries type/nullable/default/min/max/unit/description. Self-hosted administrators edit THIS single file (and restart) to customize limits — no source changes | `src/lib/nexool/config-limits.ts` reads it |
-| `version.ts` | `APP_VERSION` 1.0.8, `RELEASE_NAME` ("Central Configuration Limits, Tool Runtime Expansion (confirm/URL imports/node/npm) & Task Console Cleanup"), `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0, SSE constants | everything reads this |
+| `version.ts` | `APP_VERSION` 1.0.10, `RELEASE_NAME` ("Major Planner Architecture (Pre-plan + One-by-one) & AI Training Upgrade (model 1.0.1)"), `CORE_MODULE_NAME` llm-core, `CORE_MODULE_VERSION` 1.0.0 (provider-served, never retrained), **`TRAINED_MODEL_VERSION` 1.0.1 (v1.0.10 — the locally trained classifier generation)**, SSE constants | everything reads this |
 | `eventbus.ts` | Global event manager: `emitEvent`, `subscribe`, `recentEvents`, `queryEvents`, SSE controller registry, runtime metrics (`coreCalls`, latency series) | db, types |
 | `settings.ts` | `DEFAULT_SETTINGS`, cached `getSettings`, clamping `updateSettings` | db |
 | `schemas.ts` | zod schemas for every mutating endpoint (tasks, tools incl. `registerJsToolSchema`/`updateToolSchema`/`testToolSchema` — v1.0.5: `environment` js-function\|nodejs + `metadataRecordSchema` (≤ 50 string pairs); v1.0.6: `autoExecute` on the tool schemas + `autoExecuteTools`/`allowMultipleEvents` on task + settings schemas, training, benchmark, memory, datasets, settings) | zod |
@@ -95,7 +98,9 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `main/nexool.ts` | Runtime singleton (globalThis-backed): `createTask`, `stopTask`, `pauseTask`/`resumeTask` (v1.0.6), `injectEvent`, task queries, active counts (incl. `paused`/`awaiting_approval`) | loop, eventbus, settings, environment |
 | `main/loop.ts` | `runTask` entry; Goal Mode and Live Mode state machines; context bundle; parallel groups; **approval gate** (v1.0.6 `requestApprovalIfNeeded`/`executeWithApproval`); **live event queue** (v1.0.6 inbox + `state.eventQueue`, drop policy); **pause hold** (`waitWhilePaused`); repair passes; finalize | planner, observer, coremodule, executor, registry, approval |
 | `approval.ts` | v1.0.6 Tool Auto-Execution Approval: `resolveAutoExecute` (the ONE precedence: global → task → tool), pending-approval registry + 5-minute timeout (`tool.approval.*` + `tool.execution.blocked` events), `listPendingApprovals`/`resolveApproval` for the console, `cancelPendingApprovalsForTask` | eventbus, types |
-| `main/planner.ts` | `buildPlan` — LLM decomposition (max 8 steps, parallelGroup), deterministic 2-step fallback | z-ai-web-dev-sdk |
+| `main/planner.ts` | `buildPlan` — LLM decomposition (max steps = resolved `prePlanMaxSteps`, parallelGroup), deterministic 2-step fallback — the **pre-plan** strategy (semantics unchanged except the configurable cap) | z-ai-web-dev-sdk |
+| `main/planner-strategy.ts` | **v1.0.10** — the **one-by-one** planner strategy: `resolvePlannerType` (task → global default → `pre-plan`), `buildOneByOneContext` (request, goal, mode, level, previous steps/subgoals, last 6 observations, latest tool result, counters, enabled tools, `knownFailures`, constraints, situational note), `planOneByOneStep` (ONE LLM call → exactly one step + events), `sanitizeOneStepResponse`/`sanitizeSingleStep` (single-step contract — a `{"steps":[…]}` response keeps the first valid step, `discarded` reports the rest), `buildOneByOneFallbackStep` (failure-aware / latest-observation-aware deterministic fallback) | z-ai-web-dev-sdk, types |
+| `patterns/extractor.ts` | **v1.0.10** — deterministic pattern extraction over recorded executions (no LLM): sequence/verification/outcome/failure-recovery/live/early-completion patterns, `deriveConfidence` (`successRate × min(1, total/3) − 0.15 × contradictions`, floor 0), `patternsToDatasetExamples` (reliable single-action patterns → training examples at minConfidence 0.5); persisted as `PatternRecord` rows, read by `GET /api/patterns` | db, types |
 | `main/observer.ts` | `interpret` (domain-aware observation strings) + `checkGoalComplete` (LLM verify, heuristic at L1–2) | z-ai-web-dev-sdk |
 | `core/coremodule.ts` | `decide` — tool matching + parameter generation; validates output; allowed-tools filter; records latency metrics | z-ai-web-dev-sdk, heuristic, executor |
 | `core/heuristic.ts` | Deterministic fallback matcher: token overlap scoring (threshold 0.18), typo normalization, naive param extraction | types |
@@ -115,7 +120,7 @@ Binding data model (SQLite). Everything in the runtime persists here:
 | `tools/memory.ts` | memory.store (upsert) / memory.recall (exact + fuzzy top-5) | db |
 | `tools/notify.ts` | notification.send — persists NotificationRecord, emits `notification.sent` | db, eventbus |
 | `tools/image.ts` | image.generate — z-ai SDK, prompt enrichment, writes PNG to `public/generated` | z-ai-web-dev-sdk, db |
-| `training/engine.ts` | v1.0.2 REAL TF.js trainer: hashed bag-of-words vectorization, dense classifier, per-epoch persistence, checkpoint registration | @tensorflow/tfjs, db |
+| `training/engine.ts` | v1.0.2 REAL TF.js trainer: hashed bag-of-words vectorization, dense classifier, per-epoch persistence, checkpoint registration; **v1.0.10 — best-validation-accuracy checkpoint selection (weights snapshotted + restored before saving, `checkpointSelection` in the manifest), MANUAL early stopping on `val_loss` (the tf.js `EarlyStopping` callback is broken in this build), unique per-job model/layer names + dispose-on-failure (fixes `Variable with name dense_Dense1/kernel was already registered` poisoning later jobs), optional semver-validated `modelVersion` config (default `TRAINED_MODEL_VERSION` 1.0.1; `modelSemanticVersion` + legacy `tc-<job>` `checkpointId` in the manifest)** | @tensorflow/tfjs, db |
 | `training/benchmark.ts` | v1.0.2 REAL benchmark engine: runs llm-core / heuristic-fallback / a trained classifier per example, computes metrics, persists per-case results | @tensorflow/tfjs, core, db |
 | `training/model-package.ts` | v1.0.2 packaging: export tfjs zip / `.nextool` package, import + TFJS load-validation, 25 MiB cap, traversal-safe unzip | fflate, @tensorflow/tfjs, db |
 | `datasets/parquet.ts` | v1.0.3 Parquet dataset adapter: `encodeParquetDataset` / `decodeParquetDataset` (one flat row per example, per-row validation with row index), `parquetAdapterInfo()` honest capability probe (cached once per process) | @dsnp/parquetjs 1.8.9 |
@@ -136,7 +141,9 @@ Binding data model (SQLite). Everything in the runtime persists here:
   `history`, `notifications` (+ `read-all`), `images`, `models` (+ `load`, `export`,
   `import`), `datasets` (+ `import`, `[id]`, `[id]/export`), `training` (+ `[id]`),
   `benchmark` (+ `[id]`), `icons`, `settings` (+ `reset` — v1.0.7 typed-phrase
-  application data reset), `maintenance` (`cleanup` — v1.0.7 dependency-aware
+  application data reset), `patterns` (**v1.0.10** — `GET /api/patterns` pattern store:
+  list + stats, `?type=`, `?minConfidence=`, `?format=examples&minConfidence=0.5`),
+  `maintenance` (`cleanup` — v1.0.7 dependency-aware
   model/dataset cleanup; `validate` — v1.0.7 runtime dependency validation),
   `docs` (+ `[slug]`), plus the scaffold `api/route.ts` hello-world.
   Every route is `runtime = 'nodejs'`, `dynamic = 'force-dynamic'`.

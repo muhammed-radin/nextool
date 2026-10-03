@@ -214,6 +214,14 @@ export type TaskMode = 'goal' | 'live';
 /** v1.0.6 §15 — `awaiting_approval` and `paused` join the runtime states. */
 export type TaskStatus = 'queued' | 'running' | 'waiting' | 'awaiting_approval' | 'paused' | 'completed' | 'failed' | 'stopped' | 'cancelled';
 
+/** v1.0.10 §2 — planner strategies.
+ *  - 'pre-plan': the existing complete-plan planner (plans several steps up
+ *    front, executes them in order, stops early when the goal is achieved).
+ *  - 'one-by-one': plans exactly ONE next step, executes it, observes the
+ *    result, verifies the goal, then plans the next step from the updated
+ *    state. Never generates a hidden future list. */
+export type PlannerType = 'pre-plan' | 'one-by-one';
+
 export interface TaskConfig {
   name?: string;
   mode: TaskMode; // default goal — NEVER auto-switched to live
@@ -247,6 +255,15 @@ export interface TaskConfig {
    *  process them one-by-one (undefined = use the global setting, default
    *  false = single-event mode). Separate concern from parallelToolCalls. */
   allowMultipleEvents?: boolean;
+  /** v1.0.10 §13 — per-task planner override. Resolution precedence:
+   *  task plannerType → global default (Settings) → 'pre-plan'. Resolved and
+   *  persisted at task creation so a later Settings change never switches the
+   *  strategy of an existing task. */
+  plannerType?: PlannerType;
+  /** v1.0.10 §16/§18 — pre-plan step limit for THIS task (1..122). Relevant
+   *  to pre-plan planning only; one-by-one planning always generates exactly
+   *  one step per call. Default = the global Settings value (default 10). */
+  prePlanMaxSteps?: number;
   sessionId?: string;
   context?: Record<string, unknown>;
 }
@@ -494,6 +511,12 @@ export interface NexToolSettings {
   allowMultipleEvents: boolean;
   logLevel: 'info' | 'debug' | 'error';
   realTimeTransport: 'sse'; // websocket adapter not installed in this environment (honest state)
+  /** v1.0.10 §12.1 — global default planner strategy for NEW tasks (tasks may
+   *  override per task). Default 'pre-plan' keeps existing behavior. */
+  defaultPlannerType: PlannerType;
+  /** v1.0.10 §16 — global default pre-plan maximum steps (default 10,
+   *  hard maximum 122 via the central task.prePlanMaxSteps limits). */
+  prePlanMaxSteps: number;
 }
 
 // ---------- Training (v1.0.2) ----------
@@ -506,6 +529,9 @@ export interface TrainingConfig {
   shuffle: boolean;
   earlyStoppingPatience?: number; // 0 = disabled
   vocabSize?: number; // hashed bag-of-words dimension (default 128)
+  /** v1.0.10 §29 — semantic model version for the produced checkpoint
+   *  (e.g. '1.0.1'). When absent the legacy tc-<job> version is kept. */
+  modelVersion?: string;
 }
 
 export interface TrainingEpochMetrics {

@@ -115,6 +115,8 @@ export interface ResolvedRuntimeLimits {
     liveIntervalMs: number;
     maxParallelToolCalls: number;
     eventQueueCap: number;
+    /** v1.0.10 — pre-plan planner maximum steps (default 10, hard max 122). */
+    prePlanMaxSteps: number;
   };
 }
 
@@ -276,6 +278,7 @@ export function getResolvedLimits(): ResolvedRuntimeLimits {
       liveIntervalMs: num('task', 'liveIntervalMs'),
       maxParallelToolCalls: num('task', 'maxParallelToolCalls'),
       eventQueueCap: num('task', 'eventQueueCap'),
+      prePlanMaxSteps: num('task', 'prePlanMaxSteps'),
     },
   };
 }

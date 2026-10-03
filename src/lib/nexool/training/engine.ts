@@ -18,10 +18,16 @@
 import { db } from '@/lib/db';
 import * as tf from '@tensorflow/tfjs';
 import type { TrainingConfig, TrainingEpochMetrics, TrainingLogLine } from '../types';
+import { TRAINED_MODEL_VERSION } from '../version';
 
 export const TRAINING_LOG_CAP = 400;
 
-const DEFAULT_CONFIG: Required<Omit<TrainingConfig, 'earlyStoppingPatience'>> & Pick<TrainingConfig, 'earlyStoppingPatience'> = {
+/** Internal resolved config: modelVersion stays OPTIONAL (legacy tc-<job>
+ *  versions remain the default when unset). */
+type ResolvedTrainingConfig = Required<Omit<TrainingConfig, 'earlyStoppingPatience' | 'modelVersion'>> &
+  Pick<TrainingConfig, 'earlyStoppingPatience' | 'modelVersion'>;
+
+const DEFAULT_CONFIG: ResolvedTrainingConfig = {
   epochs: 20,
   batchSize: 8,
   learningRate: 0.01,
@@ -29,9 +35,10 @@ const DEFAULT_CONFIG: Required<Omit<TrainingConfig, 'earlyStoppingPatience'>> & 
   shuffle: true,
   vocabSize: 128,
   earlyStoppingPatience: 0,
+  modelVersion: undefined,
 };
 
-export function resolveTrainingConfig(partial?: Partial<TrainingConfig>): Required<Omit<TrainingConfig, 'earlyStoppingPatience'>> & Pick<TrainingConfig, 'earlyStoppingPatience'> {
+export function resolveTrainingConfig(partial?: Partial<TrainingConfig>): ResolvedTrainingConfig {
   return {
     epochs: clampInt(partial?.epochs, DEFAULT_CONFIG.epochs, 1, 100),
     batchSize: clampInt(partial?.batchSize, DEFAULT_CONFIG.batchSize, 1, 128),
@@ -40,6 +47,12 @@ export function resolveTrainingConfig(partial?: Partial<TrainingConfig>): Requir
     shuffle: partial?.shuffle ?? true,
     vocabSize: clampInt(partial?.vocabSize, DEFAULT_CONFIG.vocabSize, 16, 1024),
     earlyStoppingPatience: clampInt(partial?.earlyStoppingPatience, 0, 0, 50),
+    // v1.0.10 §29 — semantic checkpoint version (e.g. '1.0.1'); validated for
+    // shape here, honest fallback to the legacy tc-<job> version when unset.
+    modelVersion:
+      typeof partial?.modelVersion === 'string' && /^\d+\.\d+\.\d+/.test(partial.modelVersion.trim())
+        ? partial.modelVersion.trim()
+        : undefined,
   };
 }
 
@@ -175,10 +188,15 @@ async function jobLog(jobId: string, level: TrainingLogLine['level'], message: s
 export async function runTrainingJob(input: {
   jobId: string;
   datasetId: string;
-  config: Required<Omit<TrainingConfig, 'earlyStoppingPatience'>> & Pick<TrainingConfig, 'earlyStoppingPatience'>;
+  config: ResolvedTrainingConfig;
 }): Promise<TrainResult> {
   const { jobId, datasetId, config } = input;
   const t0 = Date.now();
+  // v1.0.10 — the model handle lives OUTSIDE the try so a failed job still
+  // disposes its tf.js variables (a leaked model permanently collides with
+  // any later job: "Variable with name dense_Dense1/kernel was already
+  // registered").
+  let model: tf.Sequential | null = null;
 
   try {
     await db.trainingJobRecord.update({ where: { id: jobId }, data: { status: 'starting', startedAt: new Date() } });
@@ -210,11 +228,18 @@ export async function runTrainingJob(input: {
 
     await jobLog(jobId, 'info', 'Model initialized: dense(64,relu) → dropout(0.1) → dense(softmax)');
 
-    const model = tf.sequential({ layers: [
-      tf.layers.dense({ inputShape: [config.vocabSize], units: 64, activation: 'relu' }),
-      tf.layers.dropout({ rate: 0.1 }),
-      tf.layers.dense({ units: bundle.classes.length, activation: 'softmax' }),
+    // v1.0.10 — unique per-job model AND layer names: tf.js registers
+    // variables by LAYER name, so two jobs in one process (or a job whose
+    // variables were leaked by an earlier failure) must never reuse
+    // `dense_Dense1` — otherwise "Variable ... was already registered".
+    const uid = `${jobId.replace(/[^a-z0-9]/gi, '').slice(-8)}${Date.now().toString(36).slice(-4)}`;
+    model = tf.sequential({ name: `nexool-tc-${uid}`, layers: [
+      tf.layers.dense({ name: `din_${uid}`, inputShape: [config.vocabSize], units: 64, activation: 'relu' }),
+      tf.layers.dropout({ name: `drop_${uid}`, rate: 0.1 }),
+      tf.layers.dense({ name: `dout_${uid}`, units: bundle.classes.length, activation: 'softmax' }),
     ] });
+    // Non-null alias for closures below (model is assigned once, right here).
+    const net = model;
     model.compile({
       optimizer: tf.train.adam(config.learningRate),
       loss: 'categoricalCrossentropy',
@@ -231,6 +256,32 @@ export async function runTrainingJob(input: {
 
     const metrics: TrainingEpochMetrics[] = [];
     let cancelRequested = false;
+    // v1.0.10 §30 — early stopping + checkpoint selection state.
+    let bestValLoss: number | null = null;
+    let epochsSinceBestValLoss = 0;
+    let earlyStoppedAt: number | null = null;
+
+    // v1.0.10 §30 — checkpoint selection: snapshot the weights at the BEST
+    // validation accuracy epoch and restore them before saving. The produced
+    // checkpoint therefore represents the best validated state, not merely
+    // the final epoch (anti-overfitting; works without overfitting by epoch
+    // count).
+    let bestValAccuracy = -1;
+    let bestEpoch = 0;
+    let bestWeightData: ArrayBuffer | null = null;
+    let bestWeightSpecs: { name: string; shape: number[]; dtype: string }[] | null = null;
+    let bestModelTopology: unknown = null;
+    const snapshotBestWeights = async (): Promise<void> => {
+      await new Promise<void>((resolve) => {
+        void net.save(tf.io.withSaveHandler(async (a) => {
+          bestWeightSpecs = (a.weightSpecs ?? []) as { name: string; shape: number[]; dtype: string }[];
+          bestWeightData = a.weightData as ArrayBuffer;
+          bestModelTopology = a.modelTopology;
+          resolve();
+          return { modelArtifactsInfo: { dateSaved: new Date(), modelTopologyType: 'JSON' } };
+        }));
+      });
+    };
 
     const callbacks: tf.CustomCallbackArgs = {
       onEpochEnd: async (epoch, logs) => {
@@ -244,6 +295,12 @@ export async function runTrainingJob(input: {
           elapsedMs: Date.now() - t0,
         };
         metrics.push(row);
+        // §30 — keep the checkpoint of the best validation-accuracy epoch.
+        if (row.valAccuracy !== null && row.valAccuracy > bestValAccuracy) {
+          bestValAccuracy = row.valAccuracy;
+          bestEpoch = row.epoch;
+          await snapshotBestWeights();
+        }
         await db.trainingJobRecord.update({
           where: { id: jobId },
           data: {
@@ -254,29 +311,43 @@ export async function runTrainingJob(input: {
         await jobLog(
           jobId,
           'info',
-          `Epoch ${epoch + 1}/${config.epochs} — loss ${row.loss}${row.valLoss !== null ? `, val_loss ${row.valLoss}` : ''}, accuracy ${row.accuracy}${row.valAccuracy !== null ? `, val_accuracy ${row.valAccuracy}` : ''}`,
+          `Epoch ${epoch + 1}/${config.epochs} — loss ${row.loss}${row.valLoss !== null ? `, val_loss ${row.valLoss}` : ''}, accuracy ${row.accuracy}${row.valAccuracy !== null ? `, val_accuracy ${row.valAccuracy}` : ''}${row.epoch === bestEpoch && row.valAccuracy !== null ? ' ★ best' : ''}`,
         );
 
         // Honor cancellation between epochs (status flipped by the API/CLI).
         const current = await db.trainingJobRecord.findUnique({ where: { id: jobId }, select: { status: true } });
         if (current?.status === 'cancelled') {
           cancelRequested = true;
-          model.stopTraining = true;
+          net.stopTraining = true;
+          return;
+        }
+        // v1.0.10 §30 — MANUAL early stopping (val_loss, patience N). The tf.js
+        // EarlyStopping callback is broken in this build (restoreBestWeights
+        // unimplemented; getMonitorValue missing when combined with custom
+        // callbacks) — so the safeguard is implemented here, deterministically.
+        if ((config.earlyStoppingPatience ?? 0) > 0 && row.valLoss !== null) {
+          const patience = config.earlyStoppingPatience ?? 0;
+          if (bestValLoss === null || row.valLoss < bestValLoss - 1e-6) {
+            bestValLoss = row.valLoss;
+            epochsSinceBestValLoss = 0;
+          } else {
+            epochsSinceBestValLoss += 1;
+            if (epochsSinceBestValLoss >= patience) {
+              earlyStoppedAt = row.epoch;
+              net.stopTraining = true;
+              await jobLog(jobId, 'info', `Early stopping triggered: val_loss has not improved for ${patience} epoch(s) — stopping after epoch ${row.epoch}.`);
+            }
+          }
         }
       },
     };
 
     const fitCallbacks: tf.CustomCallbackArgs[] = [callbacks];
     if (hasVal && config.earlyStoppingPatience && config.earlyStoppingPatience > 0) {
-      fitCallbacks.push(tf.callbacks.earlyStopping({
-        monitor: 'val_loss',
-        patience: config.earlyStoppingPatience,
-        restoreBestWeights: true,
-      }));
-      await jobLog(jobId, 'info', `Early stopping enabled (monitor val_loss, patience ${config.earlyStoppingPatience})`);
+      await jobLog(jobId, 'info', `Early stopping enabled (monitor val_loss, patience ${config.earlyStoppingPatience}) — manual implementation; best checkpoint restored via validation-accuracy selection`);
     }
 
-    await model.fit(xTensor, yTensor, {
+    await net.fit(xTensor, yTensor, {
       epochs: config.epochs,
       batchSize: config.batchSize,
       shuffle: config.shuffle,
@@ -295,6 +366,9 @@ export async function runTrainingJob(input: {
       await db.trainingJobRecord.update({ where: { id: jobId }, data: { completedAt: new Date() } });
       return { ok: false, jobId, error: 'cancelled' };
     }
+    if (earlyStoppedAt !== null) {
+      await jobLog(jobId, 'info', `Training stopped early at epoch ${earlyStoppedAt}/${config.epochs} — the best validated checkpoint (epoch ${bestEpoch}, val_accuracy ${bestValAccuracy}) is restored below.`);
+    }
 
     const finalLogs = metrics[metrics.length - 1];
     const trainMs = Date.now() - t0;
@@ -307,20 +381,40 @@ export async function runTrainingJob(input: {
     };
 
     // ---- Persist the trained model as a REAL TFJS artifact (ModelRecord) ----
-    const artifacts = await new Promise<tf.io.ModelArtifacts>((resolve) => {
-      void model.save(tf.io.withSaveHandler(async (a) => {
-        resolve(a);
-        return { modelArtifactsInfo: { dateSaved: new Date(), modelTopologyType: 'JSON' } };
-      }));
-    });
+    // v1.0.10 §30 — when a best-validation checkpoint exists it REPLACES the
+    // final-epoch weights: the registered checkpoint is the best validated
+    // state, not simply the last one. Without validation data the final
+    // weights are used (honest fallback).
+    let artifacts: tf.io.ModelArtifacts;
+    if (bestWeightData && bestWeightSpecs) {
+      artifacts = {
+        modelTopology: bestModelTopology as tf.io.ModelArtifacts['modelTopology'],
+        weightSpecs: bestWeightSpecs,
+        weightData: bestWeightData,
+      };
+      await jobLog(jobId, 'info', `Checkpoint selection: epoch ${bestEpoch} restored (best val_accuracy ${bestValAccuracy})`);
+    } else {
+      artifacts = await new Promise<tf.io.ModelArtifacts>((resolve) => {
+        void net.save(tf.io.withSaveHandler(async (a) => {
+          resolve(a);
+          return { modelArtifactsInfo: { dateSaved: new Date(), modelTopologyType: 'JSON' } };
+        }));
+      });
+    }
     const weightSpecs = artifacts.weightSpecs ?? [];
     const parameterCount = weightSpecs.reduce((acc, w) => acc + w.shape.reduce((p, d) => p * d, 1), 0);
-    const modelVersion = `tc-${jobId.slice(-8, undefined).replace(/[^a-z0-9]/gi, '').slice(0, 8) || Date.now().toString(36).slice(-6)}`;
+    const legacyVersion = `tc-${jobId.slice(-8, undefined).replace(/[^a-z0-9]/gi, '').slice(0, 8) || Date.now().toString(36).slice(-6)}`;
+    // v1.0.10 §29 — semantic model version: config override (e.g. '1.0.1') →
+    // shipped TRAINED_MODEL_VERSION for this release generation → legacy
+    // tc-<job> identifier. Old checkpoints keep their versions (traceability).
+    const modelVersion = config.modelVersion ?? TRAINED_MODEL_VERSION ?? legacyVersion;
     const packageName = `tool-classifier-${dataset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
     const manifest = {
       name: packageName,
       version: modelVersion,
+      checkpointId: legacyVersion, // v1.0.10 — legacy per-job identifier kept for traceability
+      modelSemanticVersion: config.modelVersion ?? TRAINED_MODEL_VERSION,
       format: 'tfjs-trained-classifier',
       architecture: 'dense-64-relu → dropout-0.1 → dense-softmax',
       parameterCount,
@@ -330,6 +424,7 @@ export async function runTrainingJob(input: {
       datasetName: dataset.name,
       datasetVersion: dataset.version,
       trainingConfig: config,
+      checkpointSelection: bestWeightData ? { selectedEpoch: bestEpoch, valAccuracy: bestValAccuracy, strategy: 'best-validation-accuracy' } : { strategy: 'final-epoch (no validation holdout)' },
       finalMetrics,
       trainedAt: new Date().toISOString(),
       tfjsCompatibility: tf.version.tfjs ?? 'unknown',
@@ -350,7 +445,7 @@ export async function runTrainingJob(input: {
       },
     });
 
-    await jobLog(jobId, 'info', `Checkpoint saved: ${packageName} v${modelVersion} (${parameterCount} parameters)`);
+    await jobLog(jobId, 'info', `Checkpoint saved: ${packageName} v${modelVersion} (${parameterCount} parameters) — model version ${config.modelVersion ?? TRAINED_MODEL_VERSION}`);
     await jobLog(jobId, 'info', `Training completed in ${(trainMs / 1000).toFixed(1)}s`);
     model.dispose();
 
@@ -388,6 +483,10 @@ export async function runTrainingJob(input: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await jobLog(jobId, 'error', `Training failed: ${message}`);
+    // v1.0.10 — release tf.js variables even on failure (see comment above).
+    try {
+      model?.dispose();
+    } catch { /* already disposed */ }
     await db.trainingJobRecord.update({
       where: { id: jobId },
       data: { status: 'failed', error: message, completedAt: new Date() },

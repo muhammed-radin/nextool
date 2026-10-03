@@ -99,6 +99,27 @@ prints the aggregate metrics block (see
 [CLI](../operations/cli.md#benchmark--score-a-decision-unit-against-a-dataset)); the run
 is persisted identically to a console run.
 
+## v1.0.10 release benchmark (recorded history)
+
+Recorded in this release as `BenchmarkRunRecord` rows labeled **`v1010-bench-*`**, on
+the **held-out test split (26 cases)** of the shipped seed dataset
+`config/training/seed-dataset-v1.0.1.json` — all four decision units on the identical
+split, same tool inventory:
+
+| Model key | Tool-selection accuracy | Param accuracy | noTool | Avg latency | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `llm-core` | **0.9615** | 0.8095 | — | ~1074 ms/case | The provider-served decision unit — **NOT retrained** in v1.0.10, model version stays **1.0.0**. |
+| `heuristic-fallback` | 0.6538 | 0.2778 | — | instant | Deterministic floor / regression tripwire. |
+| Trained classifier **v1.0.1** (new generation) | **0.6923** | `null` | 0 | ~1 ms/case | Tool selector only — no parameter generation (documented classifier limit). |
+| OLD 1.0.0-era checkpoint | 0.4231 | `null` | — | ~1 ms/case | Same architecture, pre-v1.0.10 dataset/training. |
+
+**§55 comparison conclusion:** on identical held-out data (the same 26-case test split),
+the **1.0.1 training generation improves local tool-selection over the 1.0.0 checkpoint
+by ~27 percentage points** (0.6923 vs 0.4231). This is a LOCAL classifier improvement
+only: the active runtime engine remains llm-core (0.9615, unchanged, provider-served),
+and the classifier is still a selector that never generates parameters. Numbers above
+are exactly as recorded; do not extrapolate them to other splits or tool inventories.
+
 ## See also
 
 - [Training](training.md) — producing the classifiers this engine can benchmark.

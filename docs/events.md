@@ -69,8 +69,13 @@ actual call sites.
 
 | Type | Pri | Purpose | data |
 | --- | --- | --- | --- |
-| `planner.plan` | 5 | Plan stored on the task. | `{ goal, steps: PlanStep[] }` |
-| `planner.plan_built` | 6 | Plan produced (LLM or deterministic fallback; message includes engine + ms). | `{ goal, steps }` |
+| `planner.plan` | 5 | Plan stored on the task. v1.0.10: data carries `plannerType`; under the one-by-one strategy it is emitted once per planned step (1-step plan) so the Task Preview checklist refreshes. | `{ goal, steps: PlanStep[], plannerType? }` |
+| `planner.plan_built` | 6 | Plan produced (LLM or deterministic fallback; message includes engine + ms). v1.0.10: data also carries `plannerType`. | `{ goal, steps, plannerType? }` |
+| `planner.mode_selected` | **v1.0.10** | The task's planner strategy was resolved at creation (precedence task override → global default → `pre-plan`); the decision is persisted with the task config. | `{ plannerType, taskOverride: boolean, globalDefault, prePlanMaxSteps }` |
+| `planner.one_by_one_step_planned` | **v1.0.10** | One-by-one strategy planned exactly ONE next step from the latest state. `source` is `llm` or `deterministic-fallback`; `discarded` counts extra steps the single-step sanitizer dropped (a `{"steps":[…]}` response keeps only the first valid step). | `{ plannerType, stepId, stepTitle, source: 'llm' \| 'deterministic-fallback', discarded }` |
+| `planner.one_by_one_step_completed` | **v1.0.10** | The planned one-by-one step finished executing (tool + duration for the trace). | `{ plannerType, stepId, stepTitle, tool, durationMs }` |
+| `planner.one_by_one_replanned` | **v1.0.10** | A one-by-one step FAILED — no blind retry: the failure was recorded/observed, the goal verified, and ONE replacement step planned with the failure context. After two consecutive failures of the same step, a third identical proposal is replaced by the failure-aware deterministic fallback. | `{ plannerType, stepId, stepTitle \| failedTool, reason, error }` |
+| `planner.one_by_one_goal_reached` | **v1.0.10** | The goal verifier (which runs BEFORE every new planning call) confirmed completion — no further step is generated. In Live Mode the task CONTINUES across ticks (not torn down); `live` marks that context. | `{ plannerType, goal, live? }` |
 | `planner.parallel_batch` | 5 | v1.0.3: ≥ 2 independent same-group steps announced for concurrent execution (`"N independent tool call(s) detected — executing concurrently (cap M)"`). | `{ batchId, parallelGroup, tools, maxParallelToolCalls }` |
 | `planner.partial_failure` | 4 | v1.0.3: some but not all calls of a parallel batch failed — independent survivors continued. | `{ batchId }` |
 | `planner.retry` | 4 | Tool failed; one retry with error-as-observation. | `{ tool, error }` |
@@ -151,7 +156,11 @@ actual call sites.
 - **Source dots** — `SOURCE_COLORS` maps each of the 8 sources to a stable dot color
   (slate/cyan family); type chips use a reduced label (`tool.completed → COMPLETED`).
 - **Task Preview timeline** — events of the selected task, merged from REST backfill and
-  the live SSE stream, newest last, with payload inspection.
+  the live SSE stream, newest last, with payload inspection. The v1.0.10 SSE refresh
+  regex includes the new planner events (`planner.mode_selected`,
+  `planner.one_by_one_step_planned/.step_completed/.replanned/.goal_reached`), so the
+  Task Preview plan/checklist refreshes the moment a one-by-one step transitions (its
+  per-step `planner.plan` events feed the same checklist).
 - **runtime:// terminal** — source-colored lines in the terminal component.
 - **Notification bell** — driven by `NotificationRecord`s (not raw events), but the
   `notification.sent` event mirrors each send into the stream.
