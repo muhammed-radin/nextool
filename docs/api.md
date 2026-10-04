@@ -713,3 +713,16 @@ enveloped). Not used by the console.
 For payload/response schemas of the domain objects (`TaskDetail`, `NexToolEvent`,
 `GlobalLiveState`, …) see the type definitions in `src/lib/nexool/types.ts` and
 `api-contract.ts`, and the per-domain pages under Architecture, Data and Realtime.
+
+## Connectors (v1.0.12)
+
+MCP connector management (see [MCP Connectors](mcp.md)). All routes return the standard `{ ok, data }` envelope; credential VALUES never leave the server.
+
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/api/connectors` | GET | List connectors + the JSON provider registry (providers, transport/auth shapes, registry version) |
+| `/api/connectors` | POST | Create a connector from a provider (`providerId`, `name?`, non-secret `config?`) |
+| `/api/connectors/[id]` | GET / PATCH / DELETE | Connector detail / update (name, config, enabled) / delete (cascades imported tools) |
+| `/api/connectors/[id]/connection` | POST | `{ action: "connect" \| "disconnect" \| "reconnect" }` — real status machine |
+| `/api/connectors/[id]/credentials` | PUT / DELETE | Store / clear credential values (server-side only; DTOs expose presence info only) |
+| `/api/connectors/[id]/tools` | GET | `?mode=discovered` (live discovery) or imported tools; POST `{ mcpToolNames[] }` imports selected tools; PATCH enables/disables/removes an imported tool; PUT refreshes schemas |

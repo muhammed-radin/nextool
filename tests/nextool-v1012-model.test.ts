@@ -2,7 +2,7 @@
  * NexTool v1.0.12 — model 1.0.3 training + checkpoint validation (spec §6.9-§6.11, §8.6).
  *
  * Verifies:
- *  - version constants (model 1.0.3, app 1.0.11)
+ *  - version constants (model 1.0.3, app 1.0.12)
  *  - the v1.0.3 seed curriculum integrity (same rules the v1.0.2 dataset
  *    suite enforces, extended to the CURRENT registry: every registered
  *    builtin tool appears in ALL THREE splits)
@@ -23,7 +23,7 @@ import seedDataset from '../config/training/seed-dataset-v1.0.3.json';
 describe('v1.0.12 — model version surfaces (§6.9)', () => {
   test('trained classifier generation moved to 1.0.3; app version unchanged', () => {
     expect(TRAINED_MODEL_VERSION).toBe('1.0.3');
-    expect(APP_VERSION).toBe('1.0.11');
+    expect(APP_VERSION).toBe('1.0.12');
   });
 });
 

@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.11** — release name: *"THE EMPOWERMENT — pre-plan failure recovery, freedom-node, auto-execution hierarchy (model 1.0.2)"* |
-| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — provider-served, NOT retrained; v1.0.2–v1.0.11 add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.2** since v1.0.11, **1.0.1** in v1.0.10) |
+| **Application version** | **1.0.12** — release name: *"MCP CONNECTORS, SHARED GLOBAL VFS & AI TRAINING — Connectors page + mcp environment, one persistent shared filesystem with fs.* tools, task instructions (model 1.0.3)"* |
+| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — provider-served, NOT retrained; releases add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.3** since v1.0.12 — MCP/VFS/identity-aware 447-example curriculum; 1.0.2 in v1.0.11, 1.0.1 in v1.0.10) |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 

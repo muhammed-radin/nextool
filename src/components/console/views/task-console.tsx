@@ -101,6 +101,10 @@ export default function TaskConsoleView() {
   const [tools, setTools] = useState<ToolEntry[] | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+  // v1.0.13 §1 — which tool CATEGORIES are expanded in the selector. Sections
+  // start collapsed (header count is enough); collapsed sections render no
+  // per-tool rows so the selector stays fast with large registries.
+  const [openCategories, setOpenCategories] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [validation, setValidation] = useState<string | null>(null);
   // v1.0.12 Phase 7 — custom task instructions: free-form textarea AND/OR an
@@ -167,8 +171,41 @@ export default function TaskConsoleView() {
       list.push(t);
       groups.set(t.category, list);
     }
-    return [...groups.entries()];
+    // v1.0.13 §1 — stable order: categories alphabetically, tools by name
+    // within each category, so collapsible sections keep a predictable place.
+    return [...groups.entries()]
+      .map(([category, list]) => [category, [...list].sort((a, b) => a.name.localeCompare(b.name))] as [string, ToolEntry[]])
+      .sort(([a], [b]) => a.localeCompare(b));
   }, [tools]);
+
+  // v1.0.13 §1 — category select-all support. Only real tool NAMES ever enter
+  // the set (categories are never written into config.enabledTools).
+  const allToolNames = useMemo(() => (tools ?? []).map((t) => t.name), [tools]);
+  const allSelected = allToolNames.length > 0 && selectedTools.size >= allToolNames.length;
+
+  /** Select/deselect EVERY tool of one category in a single set update.
+   *  Radix Checkbox fires `true` from both unchecked AND indeterminate states
+   *  → clicking an indeterminate section selects all its tools (spec §1). */
+  const toggleCategory = (list: ToolEntry[], selectAll: boolean) => {
+    setSelectedTools((prev) => {
+      const next = new Set(prev);
+      if (selectAll) {
+        for (const t of list) next.add(t.name);
+      } else {
+        for (const t of list) next.delete(t.name);
+      }
+      return next;
+    });
+  };
+
+  const toggleCategoryOpen = (category: string, open: boolean) => {
+    setOpenCategories((prev) => {
+      const next = new Set(prev);
+      if (open) next.add(category);
+      else next.delete(category);
+      return next;
+    });
+  };
 
   const setLimit = (key: keyof typeof DEFAULTS, raw: string) => {
     const n = Number(raw);
@@ -695,16 +732,35 @@ export default function TaskConsoleView() {
         </Collapsible>
 
         {/* Tool selection — v1.0.4 §21: at least one tool must be selected
-            before the task can run. */}
+            before the task can run.
+            v1.0.13 §1 — tools render grouped by category as collapsible
+            sections (header: name · tri-state select-all checkbox · selected/
+            total count · expand affordance). Collapsed sections render NO
+            per-tool rows. The payload keeps REAL tool names only — category
+            labels never reach config.enabledTools. */}
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <Label className="text-sm">
               Tool selection <span className="text-rose-400" aria-hidden>*</span>
               <span className="sr-only">(required — select at least one tool)</span>
             </Label>
-            <span className={cn('font-mono text-[11px]', selectedTools.size === 0 ? 'text-amber-300' : 'text-muted-foreground')}>
-              {selectedTools.size === 0 ? 'required — select at least 1' : `${selectedTools.size} selected`}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={cn('font-mono text-[11px]', selectedTools.size === 0 ? 'text-amber-300' : 'text-muted-foreground')}>
+                {selectedTools.size === 0 ? 'required — select at least 1' : `${selectedTools.size} selected`}
+              </span>
+              {/* v1.0.13 §1 — master control across all categories. */}
+              {tools !== null && tools.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 min-h-8 border-white/[0.09] bg-white/[0.04] px-2.5 text-[11px] leading-none text-slate-300 hover:border-sky-400/40 hover:bg-white/[0.06] hover:text-sky-300"
+                  onClick={() => setSelectedTools(allSelected ? new Set<string>() : new Set(allToolNames))}
+                >
+                  {allSelected ? 'Clear all' : 'Select all'}
+                </Button>
+              ) : null}
+            </div>
           </div>
           {toolsError ? (
             <ErrorCard title="Tool registry unavailable" message={toolsError} />
@@ -719,52 +775,96 @@ export default function TaskConsoleView() {
             // renders inside each Checkbox to THIS scroll container; without it
             // they escape to the document and inflate the page height past the
             // footer (artificial blank space below the footer).
-            <div className="nextool-scroll relative max-h-56 space-y-3 overflow-y-auto rounded-lg border border-white/[0.07] bg-white/[0.03] p-3">
-              {toolGroups.map(([category, list]) => (
-                <div key={category}>
-                  <p className="mb-1.5">
-                    <TechLabel className="text-[9px] text-sky-300/60">{category}</TechLabel>
-                  </p>
-                  <div className="grid gap-1.5 sm:grid-cols-2">
-                    {list.map((tool) => {
-                      const checked = selectedTools.has(tool.name);
-                      return (
-                        <label
-                          key={tool.name}
-                          className={cn(
-                            'flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors outline-ring/50 focus-within:ring-2',
-                            checked
-                              ? 'border-sky-400/30 bg-primary-gradient-soft text-sky-100'
-                              : 'border-white/[0.07] text-slate-300 hover:bg-white/[0.06]',
-                          )}
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(v) =>
-                              setSelectedTools((prev) => {
-                                const next = new Set(prev);
-                                if (v) next.add(tool.name);
-                                else next.delete(tool.name);
-                                return next;
-                              })
-                            }
-                            aria-label={`Enable tool ${tool.name}`}
+            <div className="nextool-scroll relative max-h-96 space-y-2 overflow-y-auto rounded-lg border border-white/[0.07] bg-white/[0.03] p-2">
+              {toolGroups.map(([category, list]) => {
+                const selCount = list.reduce((n, t) => n + (selectedTools.has(t.name) ? 1 : 0), 0);
+                const catChecked: boolean | 'indeterminate' =
+                  selCount === 0 ? false : selCount >= list.length ? true : 'indeterminate';
+                const isOpen = openCategories.has(category);
+                return (
+                  <Collapsible
+                    key={category}
+                    open={isOpen}
+                    onOpenChange={(open) => toggleCategoryOpen(category, open)}
+                    className={cn(
+                      'rounded-lg border bg-white/[0.02] transition-colors',
+                      selCount > 0 ? 'border-sky-400/25' : 'border-white/[0.07]',
+                    )}
+                  >
+                    {/* Header — the tri-state checkbox and the expand trigger are
+                        SIBLINGS (never a control nested inside the trigger
+                        button); clicking the checkbox must not toggle expansion. */}
+                    <div className="flex items-center gap-1 px-1.5 py-1">
+                      <Checkbox
+                        checked={catChecked}
+                        onCheckedChange={(v) => toggleCategory(list, v === true)}
+                        aria-label={`Select all tools in category ${category}`}
+                        className="ml-1 shrink-0"
+                      />
+                      <CollapsibleTrigger className="flex min-h-9 min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left outline-ring/50 focus-visible:ring-2">
+                        <TechLabel className="truncate text-[9px] text-sky-300/70">{category}</TechLabel>
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          <span className="font-mono text-[10px] text-muted-foreground" aria-label={`${selCount} of ${list.length} tools selected in ${category}`}>
+                            {selCount}/{list.length}
+                          </span>
+                          {selCount >= list.length && list.length > 0 ? (
+                            <Badge variant="outline" className="border-sky-400/30 text-[9px] text-sky-300">all</Badge>
+                          ) : null}
+                          <ChevronDown
+                            className={cn('size-3.5 text-sky-300/70 transition-transform', isOpen && 'rotate-180')}
+                            aria-hidden
                           />
-                          <span className="truncate font-mono">{tool.name}</span>
-                          {!tool.enabled ? <Badge variant="outline" className="ml-auto border-amber-500/30 text-[9px] text-amber-300">disabled</Badge> : null}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
+                        </span>
+                      </CollapsibleTrigger>
+                    </div>
+                    <CollapsibleContent>
+                      {/* v1.0.13 §1 — per-tool rows exist ONLY while the section
+                          is expanded; a collapsed section costs nothing but the
+                          count already shown on its header. */}
+                      {isOpen ? (
+                        <div className="grid gap-1.5 px-2 pb-2 pt-0.5 sm:grid-cols-2">
+                          {list.map((tool) => {
+                            const checked = selectedTools.has(tool.name);
+                            return (
+                              <label
+                                key={tool.name}
+                                className={cn(
+                                  'flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors outline-ring/50 focus-within:ring-2',
+                                  checked
+                                    ? 'border-sky-400/30 bg-primary-gradient-soft text-sky-100'
+                                    : 'border-white/[0.07] text-slate-300 hover:bg-white/[0.06]',
+                                )}
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(v) =>
+                                    setSelectedTools((prev) => {
+                                      const next = new Set(prev);
+                                      if (v) next.add(tool.name);
+                                      else next.delete(tool.name);
+                                      return next;
+                                    })
+                                  }
+                                  aria-label={`Enable tool ${tool.name}`}
+                                />
+                                <span className="truncate font-mono">{tool.name}</span>
+                                {!tool.enabled ? <Badge variant="outline" className="ml-auto border-amber-500/30 text-[9px] text-amber-300">disabled</Badge> : null}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </CollapsibleContent>
+                  </Collapsible>
+                );
+              })}
               {selectedTools.size > 0 ? (
                 <Button type="button" variant="ghost" size="sm" className="min-h-11 text-xs text-muted-foreground hover:text-foreground" onClick={() => setSelectedTools(new Set())}>
                   Clear selection
                 </Button>
               ) : (
                 <p className="px-1 pb-1 text-[11px] text-muted-foreground">
-                  The planner may only use the selected tools — pick every tool that could help with this request.
+                  The planner may only use the selected tools — expand a category to pick tools, or use Select all.
                 </p>
               )}
             </div>

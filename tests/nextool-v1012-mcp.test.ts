@@ -404,7 +404,7 @@ describe('v1.0.12 — export classification (§2.1/§2.2)', () => {
       schema: { params: [] },
       functionSource: 'return 1;',
     } as never;
-    const portable = exportToolJson(entry, '1.0.11');
+    const portable = exportToolJson(entry, '1.0.12');
     expect((portable as { name: string }).name).toBe('test-export-tool');
     expect(JSON.stringify(portable)).not.toContain(SECRET);
   });

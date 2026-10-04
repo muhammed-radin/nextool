@@ -77,7 +77,7 @@ bun run dev
 
 ```bash
 curl -s http://localhost:3000/api/system | head -c 300
-# {"ok":true,"data":{"appVersion":"1.0.6",...}}
+# {"ok":true,"data":{"appVersion":"1.0.12",...}}
 
 curl -s "http://localhost:3000/api/stream?since=0" --max-time 3
 # event: hello

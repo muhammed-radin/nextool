@@ -10,7 +10,7 @@ NexTool Q1 ships a focused **bun test** unit suite alongside `bun run lint`
 and the manual verification workflows below.
 
 ```bash
-bun test                     # runs tests/*.test.ts (371 tests across 11 files, 0 failing)
+bun test                     # runs tests/*.test.ts (440 tests across 15 files, 0 failing)
 bun run lint                 # eslint over the repo
 bunx tsc --noEmit            # strict TypeScript check (zero errors)
 ```
@@ -200,6 +200,15 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 12. **Responsive pass** — 390×844 (bottom nav, More sheet, 2-col grids) and 1440×900;
     connection pill reflects real SSE state when you kill the dev server mid-session.
 
+## v1.0.12 suites (added)
+
+| Suite | Tests | Covers |
+| --- | --- | --- |
+| `tests/nextool-v1012-mcp.test.ts` | 21 | MCP provider registry, schema conversion, connector lifecycle, credential isolation, discovery, import (identity-only definitions), execution through the connector, failure mapping, disconnect/reconnect availability, schema refresh with metadata preservation, export classification (§1.1–§1.19, §2.1–§2.2) — mock MCP client, no external credentials |
+| `tests/nextool-v1012-vfs.test.ts` | 16 | shared VFS across tools/tasks, restart persistence, traversal/encoded/symlink escape rejection, whole-store limits, freedom-node exemption, all 10 fs.* tools (§3.1–§3.13, §4) |
+| `tests/nextool-v1012-model.test.ts` | 11 | model 1.0.3 version surfaces, v1.0.3 curriculum integrity (447 examples, every registered tool in all three splits), trained checkpoint registered, both checkpoint exports on disk, real import path + REAL inference (§6.1–§6.11, §8.6) |
+| `tests/nextool-v1012-instructions.test.ts` | 21 | instruction combining (file+textarea), persistence round-trip, planner/core/observer context wiring, hierarchy safety (system block always first), large/special-character markdown (§7.1–§7.9) |
+
 ## Regression checklist (v1.0.2 focus areas, still valid in v1.0.11)
 
 - Dynamic runtime status: no hardcoded `nextool@runtime:~$` prompt or static "Running";
@@ -214,7 +223,7 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Benchmark honesty: `paramAccuracy` `-`/null without `expectedParams` or for
   classifiers; suite fixed to `tool-selection`.
 - Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
-  version` all read 1.0.11; engine stays llm-core 1.0.0 (not retrained); trained
+  version` all read 1.0.12; engine stays llm-core 1.0.0 (not retrained); trained
   checkpoints register under 1.0.3 (v1.0.12 curriculum).
 - Parallel batching (v1.0.3): a multi-step plan with independent steps emits
   `planner.parallel_batch`, executions share a `batchId` (grouped card in Task Preview),

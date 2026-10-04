@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "providers": [
     {
       "id": "gmail",
@@ -36,17 +36,34 @@
       },
       "authentication": {
         "type": "oauth",
-        "title": "Google OAuth credentials",
-        "description": "The server is launched with your Google Cloud OAuth client (Desktop app). Credentials are injected as environment variables — they are stored server-side only and never leave the NexTool process.",
+        "title": "Google account access",
+        "description": "Choose how NexTool authenticates with Google: paste an access + refresh token pair you already obtained, or log in through NexTool's OAuth redirect flow. Tokens are stored server-side only.",
         "injection": "env",
-        "requiredFields": [
-          "clientId",
-          "clientSecret"
-        ],
-        "optionalFields": [
-          "refreshToken",
-          "accessToken"
-        ],
+        "authMethods": ["token_pair", "oauth2", "bearer"],
+        "requiredFieldsByMethod": {
+          "token_pair": ["accessToken"],
+          "oauth2": [],
+          "bearer": ["accessToken"]
+        },
+        "oauth": {
+          "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+          "tokenUrl": "https://oauth2.googleapis.com/token",
+          "defaultScopes": [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.compose",
+            "https://www.googleapis.com/auth/gmail.modify"
+          ],
+          "scopeSeparator": " ",
+          "pkce": true,
+          "tokenStyle": "form",
+          "accessTokenField": "accessToken",
+          "refreshTokenField": "refreshToken"
+        },
+        "loginWording": "Login via Google",
+        "validation": "google_tokeninfo",
+        "requiredFields": ["clientId", "clientSecret"],
+        "optionalFields": ["refreshToken", "accessToken"],
         "fields": [
           {
             "key": "clientId",
@@ -55,7 +72,7 @@
             "required": true,
             "secret": true,
             "placeholder": "xxxxxxxx.apps.googleusercontent.com",
-            "description": "Google Cloud OAuth 2.0 Client ID (Desktop app type).",
+            "description": "Google Cloud OAuth 2.0 Client ID (Desktop or Web application type).",
             "envName": "GOOGLE_CLIENT_ID"
           },
           {
@@ -74,7 +91,7 @@
             "type": "string",
             "required": false,
             "secret": true,
-            "description": "Optional pre-authorized refresh token for headless setups.",
+            "description": "Refresh token (auto-refreshes the access token when it expires).",
             "envName": "GOOGLE_REFRESH_TOKEN"
           },
           {
@@ -83,7 +100,7 @@
             "type": "string",
             "required": false,
             "secret": true,
-            "description": "Optional short-lived access token (refresh token preferred).",
+            "description": "Access token for the Google API scopes you selected.",
             "envName": "GOOGLE_ACCESS_TOKEN"
           }
         ]
@@ -124,17 +141,32 @@
       },
       "authentication": {
         "type": "oauth",
-        "title": "Google OAuth credentials",
-        "description": "Google Cloud OAuth client credentials for the Calendar API, injected as environment variables at server start. Credentials are stored server-side only.",
+        "title": "Google account access",
+        "description": "Choose how NexTool authenticates with Google for Calendar: paste an access + refresh token pair, or log in through NexTool's OAuth redirect flow. Tokens are stored server-side only.",
         "injection": "env",
-        "requiredFields": [
-          "clientId",
-          "clientSecret"
-        ],
-        "optionalFields": [
-          "refreshToken",
-          "accessToken"
-        ],
+        "authMethods": ["token_pair", "oauth2", "bearer"],
+        "requiredFieldsByMethod": {
+          "token_pair": ["accessToken"],
+          "oauth2": [],
+          "bearer": ["accessToken"]
+        },
+        "oauth": {
+          "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+          "tokenUrl": "https://oauth2.googleapis.com/token",
+          "defaultScopes": [
+            "https://www.googleapis.com/auth/calendar",
+            "https://www.googleapis.com/auth/calendar.events"
+          ],
+          "scopeSeparator": " ",
+          "pkce": true,
+          "tokenStyle": "form",
+          "accessTokenField": "accessToken",
+          "refreshTokenField": "refreshToken"
+        },
+        "loginWording": "Login via Google",
+        "validation": "google_tokeninfo",
+        "requiredFields": ["clientId", "clientSecret"],
+        "optionalFields": ["refreshToken", "accessToken"],
         "fields": [
           {
             "key": "clientId",
@@ -162,7 +194,7 @@
             "type": "string",
             "required": false,
             "secret": true,
-            "description": "Optional pre-authorized refresh token.",
+            "description": "Refresh token (auto-refreshes the access token when it expires).",
             "envName": "GOOGLE_CALENDAR_REFRESH_TOKEN"
           },
           {
@@ -171,7 +203,7 @@
             "type": "string",
             "required": false,
             "secret": true,
-            "description": "Optional short-lived access token.",
+            "description": "Access token for the Google API scopes you selected.",
             "envName": "GOOGLE_CALENDAR_ACCESS_TOKEN"
           }
         ]
@@ -212,17 +244,32 @@
       },
       "authentication": {
         "type": "oauth",
-        "title": "Google OAuth credentials",
-        "description": "Google Cloud OAuth client credentials for the Drive API, injected as environment variables at server start. Credentials are stored server-side only.",
+        "title": "Google account access",
+        "description": "Choose how NexTool authenticates with Google for Drive: paste an access + refresh token pair, or log in through NexTool's OAuth redirect flow. Tokens are stored server-side only.",
         "injection": "env",
-        "requiredFields": [
-          "clientId",
-          "clientSecret"
-        ],
-        "optionalFields": [
-          "refreshToken",
-          "accessToken"
-        ],
+        "authMethods": ["token_pair", "oauth2", "bearer"],
+        "requiredFieldsByMethod": {
+          "token_pair": ["accessToken"],
+          "oauth2": [],
+          "bearer": ["accessToken"]
+        },
+        "oauth": {
+          "authorizeUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+          "tokenUrl": "https://oauth2.googleapis.com/token",
+          "defaultScopes": [
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/drive.file"
+          ],
+          "scopeSeparator": " ",
+          "pkce": true,
+          "tokenStyle": "form",
+          "accessTokenField": "accessToken",
+          "refreshTokenField": "refreshToken"
+        },
+        "loginWording": "Login via Google",
+        "validation": "google_tokeninfo",
+        "requiredFields": ["clientId", "clientSecret"],
+        "optionalFields": ["refreshToken", "accessToken"],
         "fields": [
           {
             "key": "clientId",
@@ -250,7 +297,7 @@
             "type": "string",
             "required": false,
             "secret": true,
-            "description": "Optional pre-authorized refresh token.",
+            "description": "Refresh token (auto-refreshes the access token when it expires).",
             "envName": "GOOGLE_DRIVE_REFRESH_TOKEN"
           },
           {
@@ -259,7 +306,7 @@
             "type": "string",
             "required": false,
             "secret": true,
-            "description": "Optional short-lived access token.",
+            "description": "Access token for the Google API scopes you selected.",
             "envName": "GOOGLE_DRIVE_ACCESS_TOKEN"
           }
         ]
@@ -283,35 +330,33 @@
             "required": false,
             "placeholder": "https://api.githubcopilot.com/mcp/",
             "description": "Streamable HTTP endpoint of the MCP server (default from the provider definition)."
-          },
-          {
-            "key": "command",
-            "label": "Local command (optional stdio)",
-            "type": "string",
-            "required": false,
-            "placeholder": "docker",
-            "description": "When set, the connector uses the stdio transport with this command instead of the remote HTTP endpoint."
-          },
-          {
-            "key": "args",
-            "label": "Local arguments",
-            "type": "string",
-            "required": false,
-            "placeholder": "run -i --rm ghcr.io/github/github-mcp-server",
-            "description": "Arguments for the optional stdio mode."
           }
         ]
       },
       "authentication": {
         "type": "api_token",
-        "title": "GitHub personal access token",
-        "description": "A fine-grained or classic PAT is sent as a Bearer token. It is stored server-side only and used exclusively inside the NexTool process to authenticate with the MCP server.",
+        "title": "GitHub access",
+        "description": "Authenticate with a personal access token you already have, or log in through NexTool's GitHub OAuth redirect flow. The token is sent as a Bearer header and stored server-side only.",
         "injection": "header",
         "headerName": "Authorization",
         "headerTemplate": "Bearer ${token}",
-        "requiredFields": [
-          "token"
-        ],
+        "authMethods": ["bearer", "oauth2"],
+        "requiredFieldsByMethod": {
+          "bearer": ["token"],
+          "oauth2": []
+        },
+        "oauth": {
+          "authorizeUrl": "https://github.com/login/oauth/authorize",
+          "tokenUrl": "https://github.com/login/oauth/access_token",
+          "defaultScopes": ["repo", "read:user"],
+          "scopeSeparator": " ",
+          "pkce": false,
+          "tokenStyle": "form",
+          "accessTokenField": "token"
+        },
+        "loginWording": "Login via GitHub",
+        "validation": "github_user",
+        "requiredFields": ["token"],
         "optionalFields": [],
         "fields": [
           {
@@ -321,7 +366,63 @@
             "required": true,
             "secret": true,
             "placeholder": "github_pat_… / ghp_…",
-            "description": "GitHub PAT with the scopes the MCP server requires (e.g. repo, read:org)."
+            "description": "GitHub PAT (or OAuth user token from the redirect login) with the scopes the MCP server requires."
+          }
+        ]
+      }
+    },
+    {
+      "id": "custom",
+      "name": "Custom MCP",
+      "description": "Any Model Context Protocol server — connect over a URL (Streamable HTTP / SSE) or launch a local command (stdio). Everything is manual: transport, credentials, and (optionally) custom OAuth endpoints.",
+      "category": "general",
+      "enabled": true,
+      "transport": {
+        "type": "http",
+        "configFields": []
+      },
+      "authentication": {
+        "type": "access_token",
+        "title": "Custom authentication",
+        "description": "Everything is manual: no auth, a bearer/access token, an access + refresh token pair, or a fully custom OAuth 2.0 authorization-code flow with your own endpoints.",
+        "injection": "header",
+        "headerName": "Authorization",
+        "headerTemplate": "Bearer ${accessToken}",
+        "authMethods": ["none", "bearer", "token_pair", "oauth2"],
+        "requiredFieldsByMethod": {
+          "none": [],
+          "bearer": ["accessToken"],
+          "token_pair": ["accessToken"],
+          "oauth2": []
+        },
+        "oauth": {
+          "defaultScopes": [],
+          "scopeSeparator": " ",
+          "pkce": true,
+          "tokenStyle": "form",
+          "accessTokenField": "accessToken",
+          "refreshTokenField": "refreshToken"
+        },
+        "loginWording": "Login via NexTool redirect",
+        "requiredFields": [],
+        "optionalFields": ["accessToken", "refreshToken"],
+        "fields": [
+          {
+            "key": "accessToken",
+            "label": "Access Token",
+            "type": "string",
+            "required": false,
+            "secret": true,
+            "placeholder": "paste the access token",
+            "description": "Sent as the Authorization: Bearer header on every request (URL mode) — for command mode pass tokens through env vars instead."
+          },
+          {
+            "key": "refreshToken",
+            "label": "Refresh Token",
+            "type": "string",
+            "required": false,
+            "secret": true,
+            "description": "Optional refresh token — auto-refreshes the access token when a custom token endpoint is configured."
           }
         ]
       }

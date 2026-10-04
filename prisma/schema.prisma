@@ -253,7 +253,7 @@ model VirtualFile {
 // it against live in-memory clients on every read.
 model McpConnector {
   id              String    @id // cuid, prefix "mconn_"
-  providerId      String // gmail | google-calendar | google-drive | github | … (from the JSON registry)
+  providerId      String // gmail | google-calendar | google-drive | github | custom | … (from the JSON registry)
   name            String // user-facing connector name (unique)
   config          String    @default("{}") // JSON NON-secret transport config (command/args/url/headers names)
   enabled         Boolean   @default(true)
@@ -265,6 +265,17 @@ model McpConnector {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   credential      McpCredential?
+
+  // ==== v1.0.13 (Task 5) — ADDITIVE OPTIONAL columns (JSON-encoded strings,
+  // same pattern as `config`). NULL = legacy v1.0.12 record; every reader
+  // must treat null as "derive from provider defaults / legacy config". ====
+  // §4.1 connection modes: { mode:'url'|'command', url?, command?, args?:string[], cwd?, env?:Record<string,string> }
+  transport       String?
+  // §5 auth state (NON-secret parts): { method, oauth?:{ authorizeUrl?, tokenUrl?, scopes? },
+  //   authenticatedAt?, tokenExpiresAt?, lastRefreshAt?, lastError? } — tokens live ONLY in McpCredential.secret.
+  auth            String?
+  // §4.5 last capability snapshot: { serverInfo, declared, tools, resources, resourceTemplates, prompts, capturedAt, notes? }
+  capabilities    String?
 }
 
 // Credentials are SERVER-SIDE ONLY. The secret JSON is never returned by any

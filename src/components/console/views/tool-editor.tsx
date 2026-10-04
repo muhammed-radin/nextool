@@ -32,6 +32,19 @@
  * §4  MONACO ⇄ TEXTAREA TOGGLE — "Use Monaco Editor" (default ON). Both
  *     surfaces share `source`; switching editors preserves the code exactly
  *     and Test behaves identically in either mode.
+ *
+ * v1.0.13 §17 — SCHEMA FORM ⇄ JSON CANONICAL DRAFT — `schemaText` is the ONE
+ *     canonical draft of the tool's input schema; `schemaRows` is the form's
+ *     editable projection with explicit sync points (never an independent
+ *     competing copy):
+ *       · seeded from the stored definition on first mount;
+ *       · JSON → Form: switching to the form re-derives the rows from the
+ *         canonical text (invalid text keeps the last valid rows, read-only);
+ *       · Form → JSON: switching to JSON, "Apply to schema" and Save flush the
+ *         rows into the canonical text — never while that text is invalid
+ *         (the user's exact input is preserved and Save is disabled).
+ *     Save parses the same canonical draft the IntelliSense/param-generation
+ *     model (parsedSchema) is built from.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
@@ -167,10 +180,14 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   // Initialized from the STORED tool definition; a duplicate session starts
   // with the EXACT function code of the original.
   const [source, setSource] = useState(initial?.functionSource ?? DEFAULT_SOURCE);
+  // §17 — `schemaText` is the CANONICAL schema draft: the JSON view edits it,
+  // and Save, IntelliSense (parsedSchema) and the parameter table all read it.
   const [schemaText, setSchemaText] = useState(() => JSON.stringify(schemaToEditable(initial?.schema) ?? emptySchema(), null, 2));
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaView, setSchemaView] = useState<'structured' | 'json'>('structured');
-  const [schemaRows, setSchemaRows] = useState<ToolParamDef[]>([]);
+  // §17 — the form is an editable PROJECTION of the canonical draft, seeded
+  // from the SAME stored definition so it is correct on first mount too.
+  const [schemaRows, setSchemaRows] = useState<ToolParamDef[]>(() => schemaToEditable(initial?.schema)?.properties ?? []);
 
   // ---- §4 Monaco ⇄ textarea toggle (default ON, §4) ----
   const [useMonaco, setUseMonaco] = useState(true);
@@ -210,6 +227,31 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   const parsedSchema = useMemo<ToolSchema | null>(() => parseSchemaText(schemaText).schema, [schemaText]);
 
   const markDirty = () => setDirty(true);
+
+  // ---- §17 canonical-draft sync helpers ----
+  /**
+   * §17 — the single write-path for form edits: update the rows projection and
+   * flag the session dirty. Rows reach the canonical `schemaText` at the
+   * explicit sync points (switch to JSON, "Apply to schema", Save).
+   */
+  const editSchemaRows = (updater: (rows: ToolParamDef[]) => ToolParamDef[]) => {
+    setSchemaRows((rows) => updater(rows));
+    markDirty();
+  };
+
+  /**
+   * §17 — flush the form projection into the canonical draft and return the
+   * text to parse/persist. Only ever called while the canonical text is VALID
+   * — an invalid draft is never overwritten (the user's exact text is kept).
+   */
+  const flushSchemaRows = (): string => {
+    const serialized = serializeSchemaRows(schemaRows);
+    if (serialized !== schemaText) {
+      setSchemaText(serialized);
+      markDirty();
+    }
+    return serialized;
+  };
 
   // ---- schema parsing / validation (v1.0.2 §23/§24) ----
   useEffect(() => {
@@ -272,7 +314,12 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
       }
       timeoutMs = n;
     }
-    const parsed = parseSchemaText(schemaText);
+    // §17 — flush the form projection first so Save persists exactly what the
+    // form shows: the same canonical draft the IntelliSense/param-generation
+    // model uses. (Skipped on the JSON view — the canonical text is already
+    // current — and while the text is invalid, where Save is disabled anyway.)
+    const schemaDraft = schemaView === 'structured' && schemaError === null ? flushSchemaRows() : schemaText;
+    const parsed = parseSchemaText(schemaDraft);
     if (parsed.error || !parsed.schema) {
       toast.error('Schema is invalid', { description: parsed.error ?? 'Fix the schema before saving.' });
       return;
@@ -828,8 +875,12 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
               type="button"
               onClick={() => {
                 if (schemaView === 'structured') return;
+                // §17 JSON → Form — re-derive the rows from the canonical draft
+                // so the form always reflects the current JSON. When the text is
+                // temporarily invalid, KEEP the last valid rows (shown read-only
+                // with the validation message) instead of wiping them.
                 const parsed = parseSchemaText(schemaText);
-                setSchemaRows(parsed.schema?.properties ?? []);
+                if (parsed.schema) setSchemaRows(parsed.schema.properties);
                 setSchemaView('structured');
               }}
               className={cn('min-h-8 px-2.5 font-mono text-[11px]', schemaView === 'structured' ? 'bg-sky-400/15 text-sky-200' : 'text-muted-foreground hover:text-foreground')}
@@ -838,7 +889,14 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
             </button>
             <button
               type="button"
-              onClick={() => { if (schemaView !== 'json') setSchemaView('json'); }}
+              onClick={() => {
+                if (schemaView === 'json') return;
+                // §17 Form → JSON — flush the form edits into the canonical draft
+                // so the JSON view reflects the current form. Skipped while the
+                // text is invalid: never silently replace the user's JSON.
+                if (schemaError === null) flushSchemaRows();
+                setSchemaView('json');
+              }}
               className={cn('min-h-8 px-2.5 font-mono text-[11px]', schemaView === 'json' ? 'bg-sky-400/15 text-sky-200' : 'text-muted-foreground hover:text-foreground')}
             >
               json
@@ -847,6 +905,10 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
         </div>
       </div>
 
+      {/* §17 — both views are projections of ONE canonical draft (`schemaText`).
+          While that text is invalid, the form view shows the last valid rows
+          READ-ONLY (disabled fieldset) and never writes back, and Save is
+          disabled — the user's exact JSON text is preserved until it parses. */}
       {schemaView === 'json' ? (
         <Textarea
           id="tool-schema"
@@ -857,7 +919,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           aria-invalid={!!schemaError}
         />
       ) : (
-        <div className="space-y-2">
+        <fieldset disabled={schemaError !== null} className={cn('space-y-2', schemaError !== null && 'opacity-60')}>
           {schemaRows.length === 0 ? (
             <p className="text-[11px] text-muted-foreground">No parameters defined.</p>
           ) : (
@@ -870,13 +932,13 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
                     aria-label={`Param ${i + 1} name`}
                     onChange={(e) => {
                       const v = e.target.value;
-                      setSchemaRows((rows) => rows.map((r, j) => (j === i ? { ...r, name: v } : r)));
+                      editSchemaRows((rows) => rows.map((r, j) => (j === i ? { ...r, name: v } : r)));
                     }}
                     className="min-h-9 min-w-0 flex-1 border-white/[0.09] bg-white/[0.04] font-mono text-xs"
                   />
                   <Select
                     value={p.type}
-                    onValueChange={(v) => setSchemaRows((rows) => rows.map((r, j) => (j === i ? { ...r, type: v as ToolParamDef['type'] } : r)))}
+                    onValueChange={(v) => editSchemaRows((rows) => rows.map((r, j) => (j === i ? { ...r, type: v as ToolParamDef['type'] } : r)))}
                   >
                     <SelectTrigger aria-label={`Param ${i + 1} type`} className="min-h-9 w-24 border-white/[0.09] bg-white/[0.04] font-mono text-xs">
                       <SelectValue />
@@ -892,7 +954,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
                       type="checkbox"
                       checked={p.required}
                       aria-label={`Param ${i + 1} required`}
-                      onChange={(e) => setSchemaRows((rows) => rows.map((r, j) => (j === i ? { ...r, required: e.target.checked } : r)))}
+                      onChange={(e) => editSchemaRows((rows) => rows.map((r, j) => (j === i ? { ...r, required: e.target.checked } : r)))}
                       className="size-4 accent-sky-400"
                     />
                     req
@@ -903,7 +965,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
                     size="sm"
                     className="min-h-9 px-2 text-rose-300 hover:bg-rose-500/10"
                     aria-label={`Remove param ${i + 1}`}
-                    onClick={() => setSchemaRows((rows) => rows.filter((_, j) => j !== i))}
+                    onClick={() => editSchemaRows((rows) => rows.filter((_, j) => j !== i))}
                   >
                     <X className="size-4" aria-hidden />
                   </Button>
