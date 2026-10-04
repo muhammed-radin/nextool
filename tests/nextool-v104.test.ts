@@ -64,11 +64,13 @@ describe('tool export JSON (v1.0.4 §11/§12)', () => {
     expect(json.schema.properties?.[0]?.type).toBe('string');
   });
 
-  test('export-all returns one portable object per tool', () => {
+  test('export-all returns one portable object per EXPORTABLE tool (v1.0.12 §2.2: built-ins excluded)', () => {
     const list = exportToolsJson([ENTRY, { ...ENTRY, name: 'math.evaluate', functionSource: undefined, environment: 'builtin' }]);
-    expect(list.length).toBe(2);
+    // v1.0.12 §2.2 — only custom-created tools may be exported; the builtin
+    // entry is filtered out instead of exported.
+    expect(list.length).toBe(1);
+    expect(list[0].name).toBe(ENTRY.name);
     expect(list[0].functionSource).toBe(SOURCE);
-    expect(list[1].functionSource).toBeUndefined();
   });
 
   test('export → JSON.stringify → parse round-trip is lossless for the source', () => {

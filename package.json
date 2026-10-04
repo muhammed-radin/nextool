@@ -21,6 +21,7 @@
     "@dsnp/parquetjs": "1.8.9",
     "@hookform/resolvers": "^5.1.1",
     "@mdxeditor/editor": "^3.39.1",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@monaco-editor/react": "^4.7.0",
     "@prisma/client": "^6.11.1",
     "@radix-ui/react-accordion": "^1.2.11",

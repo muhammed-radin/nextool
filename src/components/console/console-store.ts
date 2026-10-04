@@ -9,6 +9,7 @@ export type ConsoleView =
   | 'live-monitor'
   | 'tools'
   | 'tool-editor'
+  | 'connectors'
   | 'memory'
   | 'live-state'
   | 'events'

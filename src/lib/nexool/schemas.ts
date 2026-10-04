@@ -471,3 +471,59 @@ export const maintenanceCleanupSchema = z
     dryRun: z.boolean().optional(),
   })
   .strict();
+
+// ==================== v1.0.12: MCP connectors ====================
+
+/** POST /api/connectors — create a connector instance of a registry provider. */
+export const createConnectorSchema = z
+  .object({
+    providerId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(80)
+      .regex(/^[a-z0-9][a-z0-9-]*$/, 'must be the kebab-case id of a provider from config/mcp-servers.json'),
+    name: z.string().trim().min(1).max(80).optional(),
+    config: z.record(z.string(), z.union([z.string().max(2000), z.number()])).optional(),
+  })
+  .strict();
+
+/** PATCH /api/connectors/:id */
+export const updateConnectorSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80).optional(),
+    config: z.record(z.string(), z.union([z.string().max(2000), z.number()])).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+
+/** POST /api/connectors/:id/connection */
+export const connectorConnectionSchema = z
+  .object({
+    action: z.enum(['connect', 'disconnect', 'reconnect']),
+  })
+  .strict();
+
+/**
+ * PUT /api/connectors/:id/credentials — values are stored SERVER-SIDE ONLY
+ * and are never returned by any response (only field NAMES are echoed back).
+ */
+export const connectorCredentialsSchema = z
+  .object({
+    type: z.string().trim().max(40).optional(),
+    values: z.record(z.string().trim().min(1).max(120), z.string().max(8000)),
+  })
+  .strict();
+
+/** POST /api/connectors/:id/tools — import / refresh / toggle / remove. */
+export const connectorToolsActionSchema = z
+  .object({
+    action: z.enum(['import', 'refresh', 'toggle', 'remove']),
+    /** import: remote tool names selected in the discovery list. */
+    names: z.array(z.string().trim().min(1).max(200)).min(1).max(200).optional(),
+    /** refresh/toggle/remove: one imported tool's REMOTE tool name (refresh
+     *  also accepts names omitted = refresh ALL imported tools). */
+    name: z.string().trim().min(1).max(200).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict();

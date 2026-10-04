@@ -63,6 +63,9 @@ db/*.db
 db/*.sqlite
 db/*.sqlite3
 
+# v1.0.12 — the global shared VFS root lives on disk here (runtime data)
+/data/
+
 # internal agent/automation artifacts
 worklog.md
 tool-results/

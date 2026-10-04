@@ -22,9 +22,25 @@ import {
   freedomDisabledError,
 } from './freedom-node-runner';
 import { resolveNetworkRequestTimeoutForExecution, clampNetworkTimeoutMs } from './network-timeout';
-import { openVirtualFs } from './vfs';
+// v1.0.12 §3 — ONE runtime-level shared VFS serves every restricted tool.
+import { openGlobalVfs } from './vfs';
+// v1.0.12 §4 — native fs.* built-in tools (operate on the shared VFS only).
+import {
+  FS_TOOL_DEFINITIONS,
+  fsCreateFolder,
+  fsDeleteFile,
+  fsDeleteFolder,
+  fsGetPath,
+  fsHasFile,
+  fsHasFolder,
+  fsInfoFile,
+  fsList,
+  fsReadFile,
+  fsWriteFile,
+} from './fs-tools';
 import { createNetworkAccounting } from './sandbox-net';
 import { createTestInteractions } from './sandbox-interactive';
+import { makeMcpHandler } from './mcp-runner';
 
 // module-scoped syntax cache (compile once per source)
 const syntaxCache = new Map<string, { ok: true } | { ok: false; error: string }>();
@@ -206,6 +222,10 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       ],
     },
   },
+  // v1.0.12 §4 — native fs.* tools over the GLOBAL SHARED VFS (never the
+  // host fs). environment 'builtin' → toolExportClass 'builtin' → never
+  // exportable (§2.2).
+  ...FS_TOOL_DEFINITIONS,
 ];
 
 // ---------- Handler registry ----------
@@ -264,6 +284,17 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
     'memory.recall': memoryRecall,
     'notification.send': notificationSend,
     'image.generate': imageGenerate,
+    // v1.0.12 §4 — shared-VFS filesystem tools
+    'fs.list': fsList,
+    'fs.readfile': fsReadFile,
+    'fs.writefile': fsWriteFile,
+    'fs.getpath': fsGetPath,
+    'fs.hasfile': fsHasFile,
+    'fs.hasfolder': fsHasFolder,
+    'fs.infofile': fsInfoFile,
+    'fs.createfolder': fsCreateFolder,
+    'fs.deletefile': fsDeleteFile,
+    'fs.deletefolder': fsDeleteFolder,
   };
 
   const builtin = builtinMap[def.name];
@@ -292,6 +323,16 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
     const freedomHandler = makeFreedomNodeHandler(def.name, def.functionSource);
     s.handlers.set(def.name, freedomHandler);
     return freedomHandler;
+  }
+
+  // v1.0.12 — mcp environment: the handler proxies the call through the owning
+  // connector to the remote MCP server (official SDK client). MCP protocol
+  // handling stays in mcp-runner + mcp/client — the executor contract is
+  // unchanged (same lifecycle, same structured failures).
+  if (def.environment === 'mcp' && def.mcp) {
+    const mcpHandler = makeMcpHandler(def.mcp);
+    s.handlers.set(def.name, mcpHandler);
+    return mcpHandler;
   }
 
   if (def.environment === 'dynamic' && def.handlerKind) {
@@ -708,6 +749,11 @@ export async function updateTool(
   if (current.environment === 'builtin' || current.environment === 'virtual-env') {
     throw new ToolFailure(`Built-in tool ${name} is read-only. Duplicate it to customize.`, 'READ_ONLY');
   }
+  // v1.0.12 — mcp tools are managed by their connector (Connectors page):
+  // their identity/schema come from the remote server, not the Tool IDE.
+  if (current.environment === 'mcp') {
+    throw new ToolFailure(`MCP tool ${name} is managed by its connector — refresh or re-import it from the Connectors page.`, 'MANAGED_BY_CONNECTOR');
+  }
 
   const currentDef = JSON.parse(current.definition) as ToolDefinition;
   const currentEnvironment = current.environment as ToolDefinition['environment'];
@@ -824,6 +870,11 @@ export async function deleteTool(name: string): Promise<{ deleted: boolean; name
   if (current.environment === 'builtin' || current.environment === 'virtual-env') {
     throw new ToolFailure(`Built-in tool ${name} cannot be deleted. Disable it instead.`, 'READ_ONLY');
   }
+  // v1.0.12 — mcp tools are managed by their connector (Connectors page):
+  // removing them here would silently detach them from the import bookkeeping.
+  if (current.environment === 'mcp') {
+    throw new ToolFailure(`MCP tool ${name} is managed by its connector — remove it from the Connectors page.`, 'MANAGED_BY_CONNECTOR');
+  }
   await db.toolRecord.delete({ where: { name } });
   handlerState().handlers.delete(name);
   return { deleted: true, name };
@@ -842,7 +893,9 @@ export async function deleteTool(name: string): Promise<{ deleted: boolean; name
  */
 function makeJsHandler(name: string, source: string, networkTimeoutMs?: number): ToolHandler {
   return async (params, ctx) => {
-    const vfs = await openVirtualFs(name);
+    // v1.0.12 §3.1/§3.12 — every restricted tool receives THE ONE shared
+    // runtime VFS (per-tool workspaces were removed).
+    const vfs = openGlobalVfs();
     const net = await resolveNetworkRequestTimeoutForExecution({
       toolNetworkTimeoutMs: networkTimeoutMs,
       taskNetworkTimeoutMs: ctx.networkTimeoutMs,
@@ -885,7 +938,9 @@ function makeJsHandler(name: string, source: string, networkTimeoutMs?: number):
  *  v1.0.9 §14 — same Network Policy request-timeout resolution as js-function. */
 function makeNodeHandler(name: string, source: string, networkTimeoutMs?: number): ToolHandler {
   return async (params, ctx) => {
-    const vfs = await openVirtualFs(name);
+    // v1.0.12 §3.1/§3.12 — every restricted tool receives THE ONE shared
+    // runtime VFS (per-tool workspaces were removed).
+    const vfs = openGlobalVfs();
     const net = await resolveNetworkRequestTimeoutForExecution({
       toolNetworkTimeoutMs: networkTimeoutMs,
       taskNetworkTimeoutMs: ctx.networkTimeoutMs,
@@ -953,12 +1008,12 @@ function makeFreedomNodeHandler(name: string, source: string): ToolHandler {
 /**
  * Test-only execution of a function tool source (Tool IDE "Test Tool").
  * v1.0.5: `environment` routes the source to the matching sandbox —
- * "js-function" (default) or "nodejs". The runner is the SAME one production
- * uses, so tests exercise the real runtime contract. v1.0.6: tests run with
- * the test interaction bridge (alert/prompt resolve immediately — honest,
- * documented) and an EPHEMERAL scratch Virtual FS workspace (fs/require of
- * VFS modules work; the scratch workspace is wiped after the run so nothing
- * leaks between tests or into real tool workspaces).
+ * "js-function" (default), "nodejs" or "freedom-node". The runner is the SAME
+ * one production uses, so tests exercise the real runtime contract.
+ * v1.0.6: tests ran with an EPHEMERAL scratch VFS workspace.
+ * v1.0.12 §3.1/§3.12: the per-tool VFS was REMOVED — test runs now use THE
+ * ONE shared runtime VFS, exactly like production executions, so a test can
+ * seed a file and a later task/tool can read it.
  */
 export async function testToolSource(
   source: string,
@@ -974,8 +1029,8 @@ export async function testToolSource(
 ): Promise<{ ok: boolean; result?: unknown; error?: { code: string; message: string }; logs: string[]; durationMs: number }> {
   const started = Date.now();
   const executionId = `test_${Date.now().toString(36)}`;
-  const scratchToolId = `__scratch_${executionId}`;
-  const vfs = await openVirtualFs(scratchToolId);
+  const executionLabel = `__test_${executionId}`; // execution label only — NOT a VFS root
+  const vfs = openGlobalVfs(); // v1.0.12 §3 — the shared runtime VFS
   // v1.0.9 §14 — resolve the effective per-request Network Policy timeout for
   // the test run (explicit override wins; otherwise Settings/global/default).
   const net = await resolveNetworkRequestTimeoutForExecution({
@@ -989,50 +1044,41 @@ export async function testToolSource(
     now: new Date().toISOString(),
     log: () => {},
   };
-  try {
-    // v1.0.11 — freedom-node test runs go through the DEDICATED freedom
-    // runner with the same server-side fs gate as production (fail closed).
-    // The gate is checked BEFORE the sandbox is built; a denied test reports
-    // FREEDOM_DISABLED honestly instead of silently degrading the sandbox.
-    if (opts.environment === 'freedom-node') {
-      if (!isFreedomNodeAuthorized()) {
-        return { ok: false, error: freedomDisabledError(), logs: [], durationMs: Date.now() - started };
-      }
-      const run = await runFreedomNodeTool(source, params, ctx, {
-        toolId: scratchToolId,
-        interactions: createTestInteractions(),
-        timeoutMs: opts.timeoutMs,
-      });
-      return { ...run, durationMs: Date.now() - started };
+  // v1.0.11 — freedom-node test runs go through the DEDICATED freedom
+  // runner with the same server-side fs gate as production (fail closed).
+  // The gate is checked BEFORE the sandbox is built; a denied test reports
+  // FREEDOM_DISABLED honestly instead of silently degrading the sandbox.
+  if (opts.environment === 'freedom-node') {
+    if (!isFreedomNodeAuthorized()) {
+      return { ok: false, error: freedomDisabledError(), logs: [], durationMs: Date.now() - started };
     }
-    const run = opts.environment === 'nodejs'
-      ? await runNodeTool(source, params, ctx, {
-        toolId: scratchToolId,
-        vfs,
-        interactions: createTestInteractions(),
-        accounting: createNetworkAccounting(net.effective),
-        moduleCache: new Map(),
-        timeoutMs: opts.timeoutMs,
-        networkTimeoutMs: net.effective,
-      })
-      : await runJsTool(source, params, ctx, {
-        toolId: scratchToolId,
-        vfs,
-        interactions: createTestInteractions(),
-        accounting: createNetworkAccounting(net.effective),
-        moduleCache: new Map(),
-        timeoutMs: opts.timeoutMs,
-        networkTimeoutMs: net.effective,
-      });
+    const run = await runFreedomNodeTool(source, params, ctx, {
+      toolId: executionLabel,
+      interactions: createTestInteractions(),
+      timeoutMs: opts.timeoutMs,
+    });
     return { ...run, durationMs: Date.now() - started };
-  } finally {
-    // Best-effort scratch cleanup — the ephemeral workspace never leaks.
-    try {
-      await db.virtualFile.deleteMany({ where: { toolId: scratchToolId } });
-    } catch (err) {
-      console.error(`[registry] scratch VFS cleanup failed for ${scratchToolId}:`, err);
-    }
   }
+  const run = opts.environment === 'nodejs'
+    ? await runNodeTool(source, params, ctx, {
+      toolId: executionLabel,
+      vfs,
+      interactions: createTestInteractions(),
+      accounting: createNetworkAccounting(net.effective),
+      moduleCache: new Map(),
+      timeoutMs: opts.timeoutMs,
+      networkTimeoutMs: net.effective,
+    })
+    : await runJsTool(source, params, ctx, {
+      toolId: executionLabel,
+      vfs,
+      interactions: createTestInteractions(),
+      accounting: createNetworkAccounting(net.effective),
+      moduleCache: new Map(),
+      timeoutMs: opts.timeoutMs,
+      networkTimeoutMs: net.effective,
+    });
+  return { ...run, durationMs: Date.now() - started };
 }
 
 /** Back-compat alias (v1.0.2 name) — delegates to testToolSource with the js sandbox. */
@@ -1043,6 +1089,14 @@ export const testJsToolSource = (
 ) => testToolSource(source, params, opts);
 
 export { JS_TOOL_TIMEOUT_MS, NODE_TOOL_TIMEOUT_MS };
+
+/**
+ * v1.0.12 — drop a cached handler so the next execution rebuilds it (used by
+ * the MCP connector manager after import/refresh/enable/disable/remove).
+ */
+export function invalidateCachedHandler(name: string): void {
+  handlerState().handlers.delete(name);
+}
 
 export async function toggleTool(name: string, enabled: boolean): Promise<ToolEntryFull> {
   const row = await db.toolRecord.update({ where: { name }, data: { enabled } });

@@ -412,3 +412,31 @@ Preview: `core.decision` → `tool.started` → `tool.completed` → `observer.o
   re-resolved on demand from the in-memory map / builtin map).
 - `environment` labels are honest: `virtual-env` tools operate on the in-memory fleet,
   `builtin` on the real host, `dynamic` on their bound handler.
+
+## Shared global VFS (v1.0.12)
+
+All tools running in restricted environments (`js-function`, `nodejs`) now share **ONE persistent, runtime-owned virtual filesystem** (§3.1–§3.13). Files written by one tool are visible to every other tool and to later tasks:
+
+```
+Tool A: fs.writeFile("/notes/test.txt", "hello")
+Tool B: fs.readFile("/notes/test.txt")   →   "hello"
+```
+
+- The VFS root is the security boundary — tool code sees virtual absolute paths rooted at `/` and can never reach the host filesystem (traversal, encoded escapes, NUL bytes, drive letters and symlink escapes are all rejected).
+- Storage is a real on-disk tree under the runtime data directory, so files persist across executions, tasks and application restarts.
+- Limits (max file size, total size, entries, depth) remain authoritative in `config/configuration-limits.json` and are enforced live — now against the WHOLE shared store.
+- `freedom-node` is exempt (§3.10): it keeps complete host freedom and never touches the shared VFS.
+
+Native filesystem tools (built-in, operate only on the shared VFS):
+
+| Tool | Purpose |
+| --- | --- |
+| `fs.list` | List entries in a directory (with metadata) |
+| `fs.readfile` | Read a file (`utf8`, `base64` or `buffer`) |
+| `fs.writefile` | Create/overwrite a file |
+| `fs.getpath` | Normalize a virtual path |
+| `fs.hasfile` / `fs.hasfolder` | Existence checks |
+| `fs.infofile` | File metadata (name, path, size, type, timestamps) |
+| `fs.createfolder` / `fs.deletefile` / `fs.deletefolder` | Structure management |
+
+Built-in tools are visible but **not exportable** — only custom tools can be exported (§2.2).

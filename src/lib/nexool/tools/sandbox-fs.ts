@@ -1,11 +1,13 @@
 /**
  * NexTool v1.0.6 — sandbox `fs` module (spec §2.3/§2.4).
+ * v1.0.12 §3 — the session is now THE GLOBAL SHARED VFS (one per runtime).
  *
  * Builds the `fs` surface exposed inside the nodejs sandbox from a
  * VirtualFsSession. Promise APIs are preferred (§2.3); fs.promises mirrors
  * them; common *Sync helpers power `require()` of VFS modules; a few
- * callback-style forms are accepted. Every operation is bound to the tool's
- * isolated virtual workspace — there is NO path from here to the host fs.
+ * callback-style forms are accepted. Every operation is bound to the shared
+ * virtual workspace rooted at the VFS root (the security boundary) — there is
+ * NO path from here to the host fs.
  */
 
 import type { VirtualFsSession } from './vfs';

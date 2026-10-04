@@ -51,8 +51,44 @@ export interface PortableTool {
 
 // ---------- export ----------
 
+/**
+ * v1.0.12 §2.1 — tool source classification derived from the EXISTING
+ * `environment` field (no duplicate ownership field was introduced — the
+ * environment already encodes provenance):
+ *   - 'builtin' → shipped system/runtime tools (builtin, virtual-env):
+ *     VISIBLE but never exportable (§2.2).
+ *   - 'custom'  → user-authored tools (dynamic, js-function, nodejs,
+ *     freedom-node): exportable.
+ *   - 'mcp'     → connector-backed imports: managed via Connectors, never
+ *     exportable (their identity only makes sense with their server, and
+ *     §1.7/§1.14 require that no connector data travels in exports).
+ */
+export type ToolExportClass = 'builtin' | 'custom' | 'mcp';
+
+const CUSTOM_ENVIRONMENTS = new Set(['dynamic', 'js-function', 'nodejs', 'freedom-node']);
+
+export function toolExportClass(environment: string): ToolExportClass {
+  if (environment === 'mcp') return 'mcp';
+  if (CUSTOM_ENVIRONMENTS.has(environment)) return 'custom';
+  return 'builtin';
+}
+
+/** v1.0.12 §2.2 — ONLY custom-created tools may be exported. */
+export function isToolExportable(entry: Pick<ToolEntry, 'environment'>): boolean {
+  return toolExportClass(entry.environment) === 'custom';
+}
+
 /** Build the portable JSON for ONE tool from its live registry entry. */
 export function exportToolJson(entry: ToolEntry, appVersion?: string): PortableTool {
+  // Defense in depth (§2.2): built-ins and mcp tools never produce portable
+  // JSON, even if a future caller forgets the UI gate.
+  if (!isToolExportable(entry)) {
+    throw new Error(
+      toolExportClass(entry.environment) === 'mcp'
+        ? `MCP tool ${entry.name} cannot be exported — it is connector-backed. Manage it from the Connectors page.`
+        : `Built-in tool ${entry.name} cannot be exported — only custom-created tools are exportable.`,
+    );
+  }
   return {
     nexool: { kind: TOOL_EXPORT_KIND, version: TOOL_EXPORT_VERSION, ...(appVersion ? { appVersion } : {}), exportedAt: new Date().toISOString() },
     name: entry.name,
@@ -73,9 +109,11 @@ export function exportToolJson(entry: ToolEntry, appVersion?: string): PortableT
   };
 }
 
-/** Build the portable JSON for MANY tools (an array of single-tool objects). */
+/** Build the portable JSON for MANY tools (an array of single-tool objects).
+ *  v1.0.12 §2.2 — non-exportable tools (built-ins, mcp) are silently
+ *  EXCLUDED here; callers surface the exclusion count in the UI. */
 export function exportToolsJson(entries: ToolEntry[], appVersion?: string): PortableTool[] {
-  return entries.map((e) => exportToolJson(e, appVersion));
+  return entries.filter((e) => isToolExportable(e)).map((e) => exportToolJson(e, appVersion));
 }
 
 /** Download filename for a tool export. */

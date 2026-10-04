@@ -239,3 +239,36 @@ model VirtualFile {
   @@unique([toolId, path])
   @@index([toolId])
 }
+
+// ============ v1.0.12: MCP connectors (NexTool as MCP CLIENT) ============
+
+// A connector = one configured INSTANCE of a supported MCP server platform
+// (provider definitions live in config/mcp-servers.json — NOT hard-coded).
+// `status` is the REAL connection state (never faked): the manager reconciles
+// it against live in-memory clients on every read.
+model McpConnector {
+  id              String    @id // cuid, prefix "mconn_"
+  providerId      String // gmail | google-calendar | google-drive | github | … (from the JSON registry)
+  name            String // user-facing connector name (unique)
+  config          String    @default("{}") // JSON NON-secret transport config (command/args/url/headers names)
+  enabled         Boolean   @default(true)
+  // not_connected | connecting | auth_required | connected | disconnected | error | reconnecting
+  status          String    @default("not_connected")
+  statusDetail    String?
+  lastError       String?
+  lastConnectedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  credential      McpCredential?
+}
+
+// Credentials are SERVER-SIDE ONLY. The secret JSON is never returned by any
+// API route (responses carry `hasCredentials` + field names only), never
+// logged and never written into tool definitions or exports.
+model McpCredential {
+  connectorId String   @id
+  connector   McpConnector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  type        String // oauth | access_token | api_token | api_key (per provider registry)
+  secret      String // JSON — field values from the provider's credential schema
+  updatedAt   DateTime @updatedAt
+}

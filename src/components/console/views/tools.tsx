@@ -47,14 +47,14 @@ import {
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import type { ToolTestResult } from '@/lib/nexool/client';
 import {
-  exportToolJson, exportToolsJson, parseToolsImport, proposeCopyName, toolExportFilename, validateImportedTool, buildBulkImportPlan,
+  exportToolJson, exportToolsJson, isToolExportable, parseToolsImport, proposeCopyName, toolExportFilename, validateImportedTool, buildBulkImportPlan,
   type BulkConflictResolution, type BulkImportPlan, type PortableTool,
 } from '@/lib/nexool/tool-portable';
 import { APP_VERSION } from '@/lib/nexool/version';
 import { filterTools } from '@/lib/nexool/tool-search';
 import { EmptyState, ErrorCard, SectionTitle, TechLabel, fmtMs } from '../ui-bits';
 import {
-  Copy, Download, FilePlus2, FileUp, Loader2, Pencil, Play, Plus, Search, Squircle, Trash2, Upload, Wrench, X,
+  Copy, Download, FilePlus2, FileUp, Loader2, Pencil, Play, Plug, Plus, Search, Squircle, Trash2, Upload, Wrench, X,
 } from 'lucide-react';
 
 function EnvironmentBadge({ environment }: { environment: ToolEntry['environment'] }) {
@@ -76,6 +76,25 @@ function EnvironmentBadge({ environment }: { environment: ToolEntry['environment
   if (environment === 'dynamic') {
     return <Badge variant="outline" className="border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-300">dynamic</Badge>;
   }
+  if (environment === 'nodejs') {
+    return <Badge variant="outline" className="border-emerald-400/30 bg-emerald-400/10 font-mono text-[10px] text-emerald-300">nodejs</Badge>;
+  }
+  if (environment === 'freedom-node') {
+    return <Badge variant="outline" className="border-fuchsia-400/30 bg-fuchsia-400/10 font-mono text-[10px] text-fuchsia-300">freedom-node</Badge>;
+  }
+  // v1.0.12 — tools imported from a connected MCP server (connector-backed).
+  if (environment === 'mcp') {
+    return (
+      <TooltipProvider delayDuration={150}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" className="border-violet-400/30 bg-violet-400/10 font-mono text-[10px] text-violet-300">mcp</Badge>
+          </TooltipTrigger>
+          <TooltipContent>Imported from a connected MCP server — managed on the Connectors page</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
   return <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">builtin</Badge>;
 }
 
@@ -93,7 +112,12 @@ function ToolCard({
   onExport: (tool: ToolEntry) => void;
 }) {
   const s = tool.stats;
-  const readOnly = tool.environment === 'builtin' || tool.environment === 'virtual-env';
+  // v1.0.12 — mcp tools are connector-backed: managed from the Connectors page
+  // (no Tool-IDE edit, no delete here), like the read-only built-ins.
+  const readOnly = tool.environment === 'builtin' || tool.environment === 'virtual-env' || tool.environment === 'mcp';
+  // v1.0.12 §2.2 — ONLY custom-created tools may be exported; built-ins AND
+  // mcp tools show the export action as unavailable (visible, disabled).
+  const exportable = isToolExportable(tool);
   return (
     <div className={cn('glass-card flex flex-col rounded-lg p-4', !tool.enabled && 'opacity-70')}>
       <div className="flex items-start justify-between gap-2">
@@ -124,6 +148,17 @@ function ToolCard({
           <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onEdit(tool)}>
             <Pencil className="size-3.5" aria-hidden /> Edit
           </Button>
+        ) : tool.environment === 'mcp' ? (
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={0} className="inline-flex min-h-9 items-center rounded-md border border-white/[0.09] bg-white/[0.02] px-3 text-xs text-muted-foreground">
+                  <Plug className="mr-1.5 size-3.5" aria-hidden /> Managed via Connectors
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Imported MCP tools are refreshed/removed on the Connectors page — not editable here</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ) : (
           <TooltipProvider delayDuration={150}>
             <Tooltip>
@@ -139,15 +174,41 @@ function ToolCard({
         <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200" onClick={() => onTest(tool)}>
           <Play className="size-3.5" aria-hidden /> Test
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200"
-          onClick={() => onExport(tool)}
-          aria-label={`Export tool ${tool.name} as JSON`}
-        >
-          <Download className="size-3.5" aria-hidden /> Export
-        </Button>
+        {/* v1.0.12 §2.2 — export restricted to custom tools: built-ins and mcp
+            tools stay VISIBLE with the action shown as unavailable. */}
+        {exportable ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs text-slate-200"
+            onClick={() => onExport(tool)}
+            aria-label={`Export tool ${tool.name} as JSON`}
+          >
+            <Download className="size-3.5" aria-hidden /> Export
+          </Button>
+        ) : (
+          <TooltipProvider delayDuration={150}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled
+                  aria-disabled="true"
+                  className="min-h-9 cursor-not-allowed border-white/[0.09] bg-white/[0.02] text-xs text-muted-foreground opacity-60"
+                  aria-label={`Export unavailable for ${tool.name}`}
+                >
+                  <Download className="size-3.5" aria-hidden /> Export unavailable
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {tool.environment === 'mcp'
+                  ? 'MCP tools are connector-backed — manage them from the Connectors page (no export).'
+                  : 'Built-in/system tools cannot be exported — only custom-created tools.'}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
         {!readOnly ? (
           <Button
             variant="outline"
@@ -395,14 +456,33 @@ export default function ToolsView({
   };
 
   const exportOne = (tool: ToolEntry) => {
+    // v1.0.12 §2.2 — the UI hides the action for non-custom tools; guard anyway.
+    if (!isToolExportable(tool)) {
+      toast.error('Export unavailable', {
+        description: tool.environment === 'mcp'
+          ? 'MCP tools are connector-backed — manage them from the Connectors page.'
+          : 'Only custom-created tools can be exported.',
+      });
+      return;
+    }
     downloadJson(toolExportFilename(tool.name), exportToolJson(tool, APP_VERSION));
     toast.success('Tool exported', { description: `${tool.name} — function code preserved as text.` });
   };
 
   const exportAll = () => {
     if (!tools || tools.length === 0) return;
-    downloadJson(`nextool-tools-${new Date().toISOString().slice(0, 10)}.json`, exportToolsJson(tools, APP_VERSION));
-    toast.success('Tools exported', { description: `${tools.length} tool definition(s) exported.` });
+    // v1.0.12 §2.2 — the export list EXCLUDES built-in/system and mcp tools;
+    // the user is told honestly how many were skipped.
+    const exportable = tools.filter((t) => isToolExportable(t));
+    if (exportable.length === 0) {
+      toast.info('Nothing to export', { description: 'All registered tools are built-in/system or MCP-connector tools — only custom-created tools are exportable.' });
+      return;
+    }
+    const skipped = tools.length - exportable.length;
+    downloadJson(`nextool-tools-${new Date().toISOString().slice(0, 10)}.json`, exportToolsJson(exportable, APP_VERSION));
+    toast.success('Tools exported', {
+      description: `${exportable.length} custom tool definition(s) exported${skipped > 0 ? ` — ${skipped} built-in/MCP tool(s) excluded.` : '.'}`,
+    });
   };
 
   // ---------- v1.0.4 §13-16 + v1.0.91: import (single object OR array) ----------
@@ -640,9 +720,10 @@ export default function ToolsView({
                 <DropdownMenuItem onClick={() => importFileRef.current?.click()}>
                   <FileUp className="size-3.5" aria-hidden /> Import tools (JSON)…
                 </DropdownMenuItem>
-                {/* v1.0.4 §11 — export all tools */}
+                {/* v1.0.4 §11 — export all tools. v1.0.12 §2.2 — export list
+                    excludes built-in/system and mcp (connector-backed) tools. */}
                 <DropdownMenuItem onClick={exportAll} disabled={!tools || tools.length === 0}>
-                  <Download className="size-3.5" aria-hidden /> Export all tools (JSON)
+                  <Download className="size-3.5" aria-hidden /> Export custom tools (JSON)
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

@@ -681,3 +681,149 @@ export const getDocsIndex = () => apiFetch<DocsIndex>('/api/docs');
 
 export const getDocPage = (slug: string) =>
   apiFetch<DocPage>(`/api/docs/${encodeURIComponent(slug)}`);
+
+// ---------- MCP connectors (v1.0.12) ----------
+
+export interface ImportedToolDTO {
+  name: string;
+  mcpToolName: string;
+  description: string;
+  enabled: boolean;
+  paramCount: number;
+  remoteHash?: string;
+  importedAt?: string;
+  lastRefreshedAt?: string;
+  customizedDescription: boolean;
+}
+
+export interface ConnectorDTO {
+  id: string;
+  providerId: string;
+  /** User-facing connector name (editable). */
+  name: string;
+  providerName: string;
+  providerDescription: string;
+  providerCategory: string;
+  docsUrl?: string;
+  transportType: 'stdio' | 'http';
+  authType: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  status: 'not_connected' | 'connecting' | 'auth_required' | 'connected' | 'disconnected' | 'error' | 'reconnecting';
+  statusDetail?: string | null;
+  lastError?: string | null;
+  lastConnectedAt?: string | null;
+  hasCredentials: boolean;
+  credentialFieldsProvided: string[];
+  missingRequiredFields: string[];
+  authRequired: boolean;
+  serverInfo?: { name: string; version: string } | null;
+  importedTools: ImportedToolDTO[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpProviderFieldDTO {
+  key: string;
+  label: string;
+  type: 'string' | 'number';
+  required: boolean;
+  secret?: boolean;
+  placeholder?: string;
+  description: string;
+  envName?: string;
+}
+
+export interface McpProviderDTO {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  docsUrl?: string;
+  enabled: boolean;
+  transport: {
+    type: 'stdio' | 'http';
+    defaultCommand?: string;
+    defaultArgs?: string[];
+    defaultUrl?: string;
+    configFields: McpProviderFieldDTO[];
+  };
+  authentication: {
+    type: string;
+    title: string;
+    description: string;
+    injection: 'env' | 'header';
+    requiredFields: string[];
+    optionalFields: string[];
+    fields: McpProviderFieldDTO[];
+  };
+}
+
+export interface ConnectorsStateDTO {
+  registryVersion: number;
+  providers: McpProviderDTO[];
+  connectors: ConnectorDTO[];
+}
+
+export interface DiscoveredToolDTO {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema: unknown;
+  remoteHash: string;
+  imported: boolean;
+  importedToolName?: string;
+}
+
+export interface ImportResultDTO {
+  imported: string[];
+  updated: string[];
+  failed: { name: string; reason: string }[];
+}
+
+export interface RefreshResultDTO {
+  refreshed: { name: string; mcpToolName: string; changed: boolean; summary: string }[];
+  unavailable: string[];
+}
+
+export const listConnectors = () => apiFetch<ConnectorsStateDTO>('/api/connectors');
+
+export const getConnector = (id: string) =>
+  apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}`);
+
+export const createConnector = (payload: { providerId: string; name?: string; config?: Record<string, string | number> }) =>
+  apiFetch<ConnectorDTO>('/api/connectors', body(payload));
+
+export const updateConnector = (id: string, payload: { name?: string; config?: Record<string, string | number>; enabled?: boolean }) =>
+  apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+
+export const deleteConnector = (id: string) =>
+  apiFetch<{ deleted: true; id: string; removedTools: string[] }>(`/api/connectors/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+export const connectorConnectionAction = (id: string, action: 'connect' | 'disconnect' | 'reconnect') =>
+  apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}/connection`, body({ action }));
+
+/**
+ * Store credentials SERVER-SIDE. The response is the connector WITHOUT any
+ * secret values (only presence info) — the client never round-trips tokens.
+ */
+export const setConnectorCredentials = (id: string, values: Record<string, string>) =>
+  apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}/credentials`, { method: 'PUT', body: JSON.stringify({ values }) });
+
+export const clearConnectorCredentials = (id: string) =>
+  apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}/credentials`, { method: 'DELETE' });
+
+export const discoverConnectorTools = (id: string) =>
+  apiFetch<{ connected: boolean; tools: DiscoveredToolDTO[] }>(`/api/connectors/${encodeURIComponent(id)}/tools`);
+
+export const importConnectorTools = (id: string, names: string[]) =>
+  apiFetch<ImportResultDTO>(`/api/connectors/${encodeURIComponent(id)}/tools`, body({ action: 'import', names }));
+
+export const refreshConnectorTools = (id: string, names?: string[]) =>
+  apiFetch<RefreshResultDTO>(`/api/connectors/${encodeURIComponent(id)}/tools`, body({ action: 'refresh', ...(names?.length ? { names } : {}) }));
+
+export const toggleImportedTool = (id: string, name: string, enabled: boolean) =>
+  apiFetch<ImportedToolDTO>(`/api/connectors/${encodeURIComponent(id)}/tools`, body({ action: 'toggle', name, enabled }));
+
+export const removeImportedTool = (id: string, name: string) =>
+  apiFetch<{ removed: true; name: string }>(`/api/connectors/${encodeURIComponent(id)}/tools`, body({ action: 'remove', name }));

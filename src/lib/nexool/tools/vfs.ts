@@ -1,34 +1,47 @@
 /**
- * NexTool v1.0.8 — Virtual File System for tool workspaces (spec §2.1–§2.9, v1.0.8 §5/§16).
+ * NexTool v1.0.12 — GLOBAL SHARED Virtual File System (Phase 3, spec §3.1–§3.13).
  *
- * A REAL, persistent filesystem that belongs to the tool runtime — NOT the
- * NexTool project. Backed by the `VirtualFile` SQLite table (never the host
- * filesystem), one isolated workspace per tool:
+ * ONE persistent VFS owned by the NexTool RUNTIME — no longer by an individual
+ * tool (v1.0.12 §3.12 removed the per-tool VFS architecture). Every tool that
+ * runs in a restricted environment (`js-function`, `nodejs`) receives THE SAME
+ * session, so files written by one tool are visible to every other tool and
+ * to later executions/tasks (§3.3/§3.4).
  *
- *   /input  /output  /tmp  /data  /workspace   (created on first use)
+ * Storage is the REAL filesystem under one authoritative host root
+ * (`<repo>/data/vfs/`, §3.6) — never process memory — so the tree survives
+ * application restarts and deployments that persist the working directory
+ * (§3.5). The host path is an implementation detail: restricted tool code
+ * only ever sees VIRTUAL absolute paths whose root is `/`.
  *
- * Guarantees:
- *  - `require("fs")` / `import fs from "fs"` inside the nodejs sandbox resolve
- *    to THIS module (§2.4) — host `fs` is unreachable from tool code.
- *  - Every path is decoded, normalized and validated (§2.6): `..` traversal,
- *    encoded traversal (%2e%2e), NUL bytes, absolute host paths, URL file:
- *    paths and symlink-style escapes are all rejected with a clear error.
- *  - Files are actually stored and retrieved (§2.7) with create/read/update/
- *    delete/list/rename/copy/metadata support and real safety limits (§2.9).
- *  - Lifecycle (§2.8): storage is PERSISTENT PER TOOL and isolated per tool;
- *    each execution loads a workspace snapshot and writes through to the
- *    database. Concurrent executions of the same tool are last-write-wins
- *    (documented).
+ * Security model (§3.2/§3.7/§3.8):
+ *  - The VFS ROOT is the isolation boundary. Everything under it is shared;
+ *    nothing outside it is reachable from restricted tool code.
+ *  - Every path is decoded, normalized and validated: `..` traversal,
+ *    encoded traversal (%2e%2e), NUL bytes, backslashes, URL `file:` paths,
+ *    Windows drive letters and absolute HOST paths (the host cwd prefix) are
+ *    rejected with the documented VirtualFSAccessError.
+ *  - Symlinks can never become an escape route: every operation walks its
+ *    path component-by-component with lstat() and REFUSES to traverse any
+ *    symbolic link planted inside the root (e.g. by a freedom-node tool or a
+ *    host operator). Operations never follow links out of the root.
+ *  - Limits stay authoritative in the central configuration
+ *    (config/configuration-limits.json via getVfsLimits(), §3.9/§5.2 of
+ *    v1.0.8): max file size, max total size, max entries, max depth, max path
+ *    length are resolved live at every enforcement point. With ONE shared
+ *    store these caps now apply to the WHOLE VFS (not per tool).
  *
- * v1.0.8 (§5/§16): ALL limits are resolved dynamically from the central
- * configuration (config/configuration-limits.json via getVfsLimits()) —
- * the implementation contains NO hard-coded size/count/depth constants.
- * New defaults: file 2 MiB, total 700 MiB, 4000 entries, depth 56.
- * A lowered limit never corrupts or deletes existing files (§5.4): new
- * operations that violate the limit fail clearly instead.
+ * `freedom-node` is EXEMPT (§3.10): it does not touch this service at all and
+ * keeps complete host freedom (v1.0.11 §23/§31).
+ *
+ * Compatibility: the historical exports (normalizeVirtualPath, VirtualFsError,
+ * VirtualFsSession, openVirtualFs, getVfsLimits, VFS_LIMITS,
+ * VFS_WORKSPACE_DIRECTORIES) keep their names and shapes. `openVirtualFs()`
+ * is now SYNCHRONOUS (await-ed call sites keep working) and ignores the
+ * legacy per-tool id — all callers receive the same shared session.
  */
 
-import { db } from '@/lib/db';
+import fsSync from 'node:fs';
+import nodePath from 'node:path';
 import { getResolvedLimits, type ResolvedRuntimeLimits } from '../config-limits';
 
 export type VfsLimits = ResolvedRuntimeLimits['vfs'];
@@ -56,6 +69,15 @@ export const VFS_LIMITS = {
 /** §2.1 — the standard workspace scaffold, created on first use. */
 export const VFS_WORKSPACE_DIRECTORIES = ['/input', '/output', '/tmp', '/data', '/workspace'] as const;
 
+/**
+ * §3.6 — the ONE authoritative host root of the shared VFS. Lives next to the
+ * other persistent runtime data (db/); deployment storage that persists the
+ * working directory persists the VFS. Never exposed to restricted tool code.
+ */
+export function getVfsRoot(): string {
+  return nodePath.resolve(process.cwd(), 'data', 'vfs');
+}
+
 export interface VfsEntryMeta {
   path: string;
   kind: 'file' | 'dir';
@@ -81,25 +103,11 @@ export function hostAccessError(detail?: string): VirtualFsError {
   );
 }
 
-interface StoredEntry {
-  kind: 'file' | 'dir';
-  /** 'utf8' | 'base64' */
-  encoding: string;
-  content: string;
-  size: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-function parentOf(p: string): string {
-  const idx = p.lastIndexOf('/');
-  return idx <= 0 ? '/' : p.slice(0, idx);
-}
-
-function baseName(p: string): string {
-  return p.slice(p.lastIndexOf('/') + 1);
-}
-
+/**
+ * §3.7 — normalize a VIRTUAL path and reject every escape shape BEFORE it can
+ * touch the disk. Returns a virtual absolute path rooted at `/`; never a host
+ * path. Encoded traversal is decoded first, so `%2e%2e` cannot slip through.
+ */
 export function normalizeVirtualPath(input: string): string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new VirtualFsError('EINVAL', 'Path must be a non-empty string.');
@@ -122,8 +130,11 @@ export function normalizeVirtualPath(input: string): string {
   if (raw.includes('\\')) {
     throw hostAccessError('backslash paths are not permitted');
   }
+  // §3.7 — Windows drive-letter absolute paths are HOST paths.
+  if (/^[a-zA-Z]:\//.test(raw)) {
+    throw hostAccessError(`absolute host path "${input}"`);
+  }
   const limits = getVfsLimits(); // §5.2 — dynamic, never hard-coded
-  const absolute = raw.startsWith('/');
   const segments = raw.split('/').filter((s) => s.length > 0);
   const out: string[] = [];
   for (const seg of segments) {
@@ -145,346 +156,432 @@ export function normalizeVirtualPath(input: string): string {
   if (normalized.length > limits.maxPathLength) {
     throw new VirtualFsError('VFS_LIMIT', `Path exceeds the maximum length of ${limits.maxPathLength} characters.`);
   }
+  // §3.7 — an absolute HOST path (the runtime working directory prefix) must
+  // never round-trip into the VFS: reject it instead of creating a same-named
+  // virtual folder that could shadow/confuse host locations.
+  const hostCwdVirtual = '/' + process.cwd().split(/[\\/]+/).filter(Boolean).join('/');
+  if (normalized === hostCwdVirtual || normalized.startsWith(`${hostCwdVirtual}/`)) {
+    throw hostAccessError(`absolute host path "${input}"`);
+  }
   return normalized === '//' ? '/' : normalized;
 }
 
-/** One tool workspace session — in-memory snapshot with write-through persistence. */
-export class VirtualFsSession {
-  readonly toolId: string;
-  private entries = new Map<string, StoredEntry>();
-  private totalBytes = 0;
+/** The shared session label kept for legacy diagnostics (§3.12: one VFS). */
+const SHARED_SESSION_LABEL = '__global_shared_vfs__';
 
-  private constructor(toolId: string) {
-    this.toolId = toolId;
+/**
+ * §3.13 — the GLOBAL VFS service. One instance (per process) serves EVERY
+ * restricted tool; all state lives on disk under the VFS root, so a fresh
+ * service object (or a full application restart) resumes the same tree.
+ */
+export class VirtualFsSession {
+  /** Test/instance seam — the private constructor is only reachable here. */
+  static createFresh(): VirtualFsSession {
+    return new VirtualFsSession(getVfsRoot());
   }
 
-  static async load(toolId: string): Promise<VirtualFsSession> {
-    const session = new VirtualFsSession(toolId);
+  /** Legacy per-tool id field — always the shared label since v1.0.12. */
+  readonly toolId: string;
+  /** Host root (resolved). Internal — never surfaced to restricted tools. */
+  private readonly rootReal: string;
+
+  private constructor(root: string) {
+    this.toolId = SHARED_SESSION_LABEL;
+    this.rootReal = root;
+    fsSync.mkdirSync(this.rootReal, { recursive: true });
+    // Defend against a planted root symlink: pin the boundary to the REAL
+    // location the root resolves to.
     try {
-      const rows = await db.virtualFile.findMany({
-        where: { toolId },
-        orderBy: { path: 'asc' },
-        // §5.4 — load MORE than the configured cap so pre-existing entries
-        // stay visible/readable even when an administrator lowers maxEntries.
-        take: Math.max(getVfsLimits().maxEntries * 2, 1000),
-      });
-      for (const row of rows) {
-        session.entries.set(row.path, {
-          kind: row.kind === 'dir' ? 'dir' : 'file',
-          encoding: row.encoding,
-          content: row.content,
-          size: row.size,
-          createdAt: row.createdAt.getTime(),
-          updatedAt: row.updatedAt.getTime(),
-        });
-        if (row.kind !== 'dir') session.totalBytes += row.size;
-      }
-    } catch (err) {
-      console.error(`[vfs] snapshot load failed for ${toolId}:`, err);
+      this.rootReal = fsSync.realpathSync(this.rootReal);
+    } catch {
+      /* mkdir just created it — realpath must exist */
     }
-    await session.ensureWorkspaceScaffold();
-    return session;
+    this.ensureWorkspaceScaffold();
   }
 
   /** §2.1 — the standard workspace scaffold, created on first use. */
-  async ensureWorkspaceScaffold(): Promise<void> {
+  ensureWorkspaceScaffold(): void {
     for (const dir of VFS_WORKSPACE_DIRECTORIES) {
-      if (!this.entries.has(dir)) {
-        this.entries.set(dir, { kind: 'dir', encoding: 'utf8', content: '', size: 0, createdAt: Date.now(), updatedAt: Date.now() });
-        void this.persist(dir).catch(() => {});
+      try {
+        fsSync.mkdirSync(this.hostPathOf(dir), { recursive: true });
+      } catch (err) {
+        console.error(`[vfs] scaffold failed for ${dir}:`, err);
       }
     }
   }
 
-  // ---------- persistence (write-through, best effort) ----------
+  // ---------- §3.8 security: secure host-path resolution ----------
 
-  private async persist(path: string): Promise<void> {
-    const entry = this.entries.get(path);
-    if (!entry) return;
-    try {
-      await db.virtualFile.upsert({
-        where: { toolId_path: { toolId: this.toolId, path } },
-        update: { kind: entry.kind, encoding: entry.encoding, content: entry.content, size: entry.size },
-        create: { toolId: this.toolId, path, kind: entry.kind, encoding: entry.encoding, content: entry.content, size: entry.size },
-      });
-    } catch (err) {
-      console.error(`[vfs] persist failed for ${this.toolId}:${path}:`, err);
-    }
+  private hostPathOf(virtualPath: string): string {
+    const v = normalizeVirtualPath(virtualPath);
+    return v === '/' ? this.rootReal : nodePath.join(this.rootReal, v.slice(1));
   }
 
-  private async remove(path: string): Promise<void> {
+  /**
+   * Walk the path component-by-component from the REAL root. Any component
+   * that exists as a symbolic link is REFUSED (a planted symlink must never
+   * become an escape route, §3.8). Missing components are allowed only at the
+   * tail — a real filesystem cannot have entries below a missing directory,
+   * and (unlike a link) a missing name cannot resolve elsewhere.
+   */
+  private resolveSecure(input: string): string {
+    const v = normalizeVirtualPath(input);
+    if (v === '/') return this.rootReal;
+    let cur = this.rootReal;
+    const segs = v.slice(1).split('/');
+    for (let i = 0; i < segs.length; i++) {
+      cur = nodePath.join(cur, segs[i]);
+      let st: fsSync.Stats;
+      try {
+        st = fsSync.lstatSync(cur);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          // Nothing at/below this component exists on disk — return the
+          // remaining joined path; the actual operation will report ENOENT.
+          return nodePath.join(cur, ...segs.slice(i + 1));
+        }
+        throw new VirtualFsError(code ?? 'EIO', `${code ?? 'EIO'}: cannot access '${input}'`);
+      }
+      if (st.isSymbolicLink()) {
+        throw hostAccessError(`symbolic link "${segs.slice(0, i + 1).join('/')}" inside the VFS is not permitted`);
+      }
+    }
+    return cur;
+  }
+
+  private isDirHost(host: string): boolean {
     try {
-      await db.virtualFile.deleteMany({ where: { toolId: this.toolId, path } });
-    } catch (err) {
-      console.error(`[vfs] remove failed for ${this.toolId}:${path}:`, err);
+      return fsSync.statSync(host).isDirectory();
+    } catch {
+      return false;
     }
   }
 
   // ---------- lookups ----------
 
-  private isImplicitDir(path: string): boolean {
-    if (path === '/') return true;
-    const prefix = path.endsWith('/') ? path : `${path}/`;
-    for (const key of this.entries.keys()) {
-      if (key.startsWith(prefix)) return true;
+  exists(path: string): boolean {
+    try {
+      const host = this.resolveSecure(path);
+      return fsSync.existsSync(host);
+    } catch {
+      // Traversal/symlink/host-path attempts report "does not exist" for a
+      // plain boolean probe — the throwing APIs carry the detailed error.
+      return false;
     }
-    return false;
   }
 
-  exists(path: string): boolean {
-    const p = normalizeVirtualPath(path);
-    if (p === '/') return true;
-    const entry = this.entries.get(p);
-    if (entry) return true;
-    return this.isImplicitDir(p);
+  private toMeta(virtualPath: string, st: fsSync.Stats): VfsEntryMeta {
+    const created = st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs;
+    return {
+      path: virtualPath,
+      kind: st.isDirectory() ? 'dir' : 'file',
+      size: st.isFile() ? st.size : 0,
+      createdAt: new Date(created).toISOString(),
+      updatedAt: new Date(st.mtimeMs).toISOString(),
+    };
   }
 
   stat(path: string): VfsEntryMeta {
-    const p = normalizeVirtualPath(path);
-    if (p === '/') return { path: '/', kind: 'dir', size: 0, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() };
-    const entry = this.entries.get(p);
-    if (entry) return { path: p, kind: entry.kind, size: entry.size, createdAt: new Date(entry.createdAt).toISOString(), updatedAt: new Date(entry.updatedAt).toISOString() };
-    if (this.isImplicitDir(p)) {
-      return { path: p, kind: 'dir', size: 0, createdAt: new Date(0).toISOString(), updatedAt: new Date(0).toISOString() };
+    const v = normalizeVirtualPath(path);
+    const host = this.resolveSecure(path);
+    let st: fsSync.Stats;
+    try {
+      st = fsSync.statSync(host);
+    } catch {
+      throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
     }
-    throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
+    return this.toMeta(v, st);
   }
 
   lstat(path: string): VfsEntryMeta {
-    return this.stat(path); // no symlinks exist inside the VFS (§2.6)
+    // No symlink ever resolves inside the VFS (§3.8) — lstat === stat.
+    return this.stat(path);
   }
 
   realpath(path: string): string {
-    const p = normalizeVirtualPath(path); // throws on traversal — §2.6
-    if (!this.exists(p)) {
+    const v = normalizeVirtualPath(path); // throws on traversal — §3.7
+    if (!this.exists(v)) {
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, realpath '${path}'`);
     }
-    return p;
+    return v; // the VIRTUAL path is the truth tools are allowed to see
   }
 
   // ---------- reads ----------
 
   readFile(path: string, encoding?: string): string | Buffer {
-    const p = normalizeVirtualPath(path);
-    const entry = this.entries.get(p);
-    if (!entry || entry.kind !== 'file') {
-      if (entry?.kind === 'dir' || this.isImplicitDir(p)) {
+    const host = this.resolveSecure(path);
+    let st: fsSync.Stats;
+    try {
+      st = fsSync.lstatSync(host);
+    } catch {
+      if (this.isDirHost(host)) {
         throw new VirtualFsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
       }
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     }
+    if (st.isDirectory()) {
+      throw new VirtualFsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
+    }
     // §5.4 — reads of PRE-EXISTING larger files are never corrupted by a
     // lowered limit; the read cap is the configured per-file maximum.
     const limits = getVfsLimits();
-    if (entry.size > limits.maxFileBytes) {
+    if (st.size > limits.maxFileBytes) {
       throw new VirtualFsError('VFS_LIMIT', `VFS limit: file exceeds the maximum read size of ${limits.maxFileBytes} bytes (configured vfs.maxFileBytes).`);
     }
-    const buf = entry.encoding === 'base64' ? Buffer.from(entry.content, 'base64') : Buffer.from(entry.content, 'utf8');
+    const buf = fsSync.readFileSync(host);
     if (!encoding || encoding === 'buffer') return buf;
     return buf.toString(encoding as BufferEncoding);
   }
 
   readdir(path: string): string[] {
-    const p = normalizeVirtualPath(path);
-    if (!this.exists(p) || (!this.entries.get(p) && !this.isImplicitDir(p))) {
+    const host = this.resolveSecure(path);
+    if (!fsSync.existsSync(host)) {
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, scandir '${path}'`);
     }
-    const prefix = p === '/' ? '/' : `${p}/`;
-    const names = new Set<string>();
-    for (const key of this.entries.keys()) {
-      if (!key.startsWith(prefix) || key === p) continue;
-      const rest = key.slice(prefix.length);
-      if (!rest) continue;
-      names.add(rest.split('/')[0]);
+    if (!this.isDirHost(host)) {
+      // Old per-tool behavior: a file path has no children — return [].
+      return [];
     }
-    return [...names].sort();
+    return fsSync.readdirSync(host).sort();
   }
 
   readdirWithTypes(path: string): { name: string; kind: 'file' | 'dir' }[] {
+    const host = this.resolveSecure(path);
     return this.readdir(path).map((name) => {
-      const full = (path === '/' ? '' : normalizeVirtualPath(path)) + '/' + name;
-      const entry = this.entries.get(full);
-      return { name, kind: entry?.kind === 'file' ? 'file' as const : 'dir' as const };
+      let kind: 'file' | 'dir' = 'file';
+      try {
+        if (fsSync.lstatSync(nodePath.join(host, name)).isDirectory()) kind = 'dir';
+      } catch {
+        /* vanished between readdir and stat — report as file */
+      }
+      return { name, kind };
     });
+  }
+
+  // ---------- usage / limits (§3.9) ----------
+
+  /** Recount the shared store from disk (symlink entries are skipped — they
+   *  are unusable anyway and must not inflate the budget). */
+  private scanUsage(): { files: number; dirs: number; bytes: number } {
+    let files = 0;
+    let dirs = 0;
+    let bytes = 0;
+    const walk = (dir: string): void => {
+      let entries: fsSync.Dirent[];
+      try {
+        entries = fsSync.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const d of entries) {
+        if (d.isSymbolicLink()) continue;
+        const full = nodePath.join(dir, d.name);
+        if (d.isDirectory()) {
+          dirs++;
+          walk(full);
+        } else {
+          try {
+            bytes += fsSync.statSync(full).size;
+            files++;
+          } catch {
+            /* raced removal */
+          }
+        }
+      }
+    };
+    walk(this.rootReal);
+    return { files, dirs, bytes };
+  }
+
+  private assertCanStore(bytes: number, replacingBytes: number, replacingExisted: boolean): void {
+    const limits = getVfsLimits(); // §5.2 — resolved at every write
+    const usage = this.scanUsage();
+    const newEntries = usage.files + usage.dirs + (replacingExisted ? 0 : 1);
+    if (newEntries > limits.maxEntries) {
+      throw new VirtualFsError('VFS_LIMIT', `VFS limit: at most ${limits.maxEntries} entries in the shared VFS are allowed.`);
+    }
+    if (usage.bytes - replacingBytes + bytes > limits.maxTotalBytes) {
+      throw new VirtualFsError('VFS_LIMIT', `VFS limit: shared VFS exceeds the maximum total size of ${limits.maxTotalBytes} bytes.`);
+    }
+  }
+
+  usage(): { usedBytes: number; files: number; limits: VfsLimits } {
+    const u = this.scanUsage();
+    return { usedBytes: u.bytes, files: u.files, limits: getVfsLimits() };
   }
 
   // ---------- writes ----------
 
-  private assertCanStore(bytes: number, replacingBytes = 0): void {
-    const limits = getVfsLimits(); // §5.2 — resolved at every write
-    if (this.entries.size + 1 > limits.maxEntries) {
-      throw new VirtualFsError('VFS_LIMIT', `VFS limit: at most ${limits.maxEntries} entries per tool workspace are allowed.`);
-    }
-    if (bytes > limits.maxFileBytes) {
-      throw new VirtualFsError('VFS_LIMIT', `VFS limit: file exceeds the maximum size of ${limits.maxFileBytes} bytes.`);
-    }
-    if (this.totalBytes - replacingBytes + bytes > limits.maxTotalBytes) {
-      throw new VirtualFsError('VFS_LIMIT', `VFS limit: workspace exceeds the maximum total size of ${limits.maxTotalBytes} bytes.`);
-    }
+  private static toBuffer(data: string | Buffer | Uint8Array): Buffer {
+    return Buffer.isBuffer(data)
+      ? data
+      : ArrayBuffer.isView(data)
+        ? Buffer.from(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength)
+        : Buffer.from(String(data), 'utf8');
   }
 
-  writeFile(path: string, data: string | Buffer | Uint8Array, encoding?: string): void {
-    const p = normalizeVirtualPath(path);
-    if (p === '/') throw new VirtualFsError('EISDIR', `EISDIR: illegal operation on a directory, open '${path}'`);
-    const buf = Buffer.isBuffer(data) ? data : ArrayBuffer.isView(data) ? Buffer.from(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength) : Buffer.from(String(data), 'utf8');
-    if (buf.length > getVfsLimits().maxFileBytes) {
-      throw new VirtualFsError('VFS_LIMIT', `VFS limit: write exceeds the maximum file size of ${getVfsLimits().maxFileBytes} bytes.`);
+  /** Write a file, creating missing parent directories implicitly. */
+  writeFile(path: string, data: string | Buffer | Uint8Array): void {
+    const v = normalizeVirtualPath(path);
+    if (v === '/') throw new VirtualFsError('EISDIR', `EISDIR: illegal operation on a directory, open '${path}'`);
+    const buf = VirtualFsSession.toBuffer(data);
+    const limits = getVfsLimits();
+    if (buf.length > limits.maxFileBytes) {
+      throw new VirtualFsError('VFS_LIMIT', `VFS limit: write exceeds the maximum file size of ${limits.maxFileBytes} bytes.`);
     }
-    const existing = this.entries.get(p);
-    if (existing?.kind === 'dir') {
-      throw new VirtualFsError('EISDIR', `EISDIR: illegal operation on a directory, open '${path}'`);
+    const host = this.resolveSecure(path);
+    let replacingBytes = 0;
+    let existed = false;
+    try {
+      const st = fsSync.lstatSync(host);
+      if (st.isDirectory()) {
+        throw new VirtualFsError('EISDIR', `EISDIR: illegal operation on a directory, open '${path}'`);
+      }
+      replacingBytes = st.size;
+      existed = true;
+    } catch (err) {
+      if (err instanceof VirtualFsError) throw err;
     }
-    this.assertCanStore(buf.length, existing?.size ?? 0);
-    // writeFile creates missing parent directories implicitly (documented).
-    // utf8 storage only when the bytes survive a utf8 round trip losslessly.
-    const useBase64 = encoding === 'base64' || !buf.equals(Buffer.from(buf.toString('utf8'), 'utf8'));
-    this.entries.set(p, {
-      kind: 'file',
-      encoding: useBase64 ? 'base64' : 'utf8',
-      content: useBase64 ? buf.toString('base64') : buf.toString('utf8'),
-      size: buf.length,
-      createdAt: existing?.createdAt ?? Date.now(),
-      updatedAt: Date.now(),
-    });
-    if (!existing) this.totalBytes += buf.length;
-    else this.totalBytes = this.totalBytes - existing.size + buf.length;
-    void this.persist(p);
+    this.assertCanStore(buf.length, replacingBytes, existed);
+    fsSync.mkdirSync(nodePath.dirname(host), { recursive: true });
+    fsSync.writeFileSync(host, buf);
   }
 
   appendFile(path: string, data: string | Buffer | Uint8Array): void {
-    const p = normalizeVirtualPath(path);
-    const existing = this.entries.get(p);
-    if (!existing || existing.kind !== 'file') {
-      this.writeFile(p, data);
+    const v = normalizeVirtualPath(path);
+    const host = this.resolveSecure(path);
+    const isFile = (() => {
+      try {
+        return fsSync.lstatSync(host).isFile();
+      } catch {
+        return false;
+      }
+    })();
+    if (!isFile) {
+      this.writeFile(v, data);
       return;
     }
-    const prev = existing.encoding === 'base64' ? Buffer.from(existing.content, 'base64') : Buffer.from(existing.content, 'utf8');
-    const add = Buffer.isBuffer(data) ? data : ArrayBuffer.isView(data) ? Buffer.from(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength) : Buffer.from(String(data), 'utf8');
-    this.writeFile(p, Buffer.concat([prev, add]));
+    const prev = fsSync.readFileSync(host);
+    this.writeFile(v, Buffer.concat([prev, VirtualFsSession.toBuffer(data)]));
   }
 
   mkdir(path: string, options?: { recursive?: boolean }): void {
-    const p = normalizeVirtualPath(path);
-    if (p === '/') return;
+    const v = normalizeVirtualPath(path);
+    if (v === '/') return;
+    const host = this.resolveSecure(path);
     const recursive = options?.recursive === true;
-    if (this.entries.get(p)?.kind === 'file') {
+    if (fsSync.existsSync(host)) {
+      if (recursive && this.isDirHost(host)) return;
       throw new VirtualFsError('EEXIST', `EEXIST: file already exists, mkdir '${path}'`);
     }
-    if (this.exists(p)) {
-      if (recursive) return;
-      throw new VirtualFsError('EEXIST', `EEXIST: file already exists, mkdir '${path}'`);
-    }
-    const parents: string[] = [];
-    let cursor = parentOf(p);
-    while (cursor !== '/' && !this.exists(cursor)) {
-      parents.unshift(cursor);
-      cursor = parentOf(cursor);
-    }
-    if (!recursive && parents.length > 0) {
+    if (!recursive && !this.isDirHost(nodePath.dirname(host))) {
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, mkdir '${path}'`);
     }
-    for (const dir of [...parents, p]) {
-      this.entries.set(dir, { kind: 'dir', encoding: 'utf8', content: '', size: 0, createdAt: Date.now(), updatedAt: Date.now() });
-      void this.persist(dir);
-    }
+    this.assertCanStore(0, 0, false);
+    fsSync.mkdirSync(host, { recursive });
   }
 
   unlink(path: string): void {
-    const p = normalizeVirtualPath(path);
-    const entry = this.entries.get(p);
-    if (!entry) {
+    const host = this.resolveSecure(path);
+    let st: fsSync.Stats;
+    try {
+      st = fsSync.lstatSync(host);
+    } catch {
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, unlink '${path}'`);
     }
-    if (entry.kind === 'dir') {
+    if (st.isDirectory()) {
       throw new VirtualFsError('EISDIR', `EISDIR: illegal operation on a directory, unlink '${path}' — use rm with recursive.`);
     }
-    this.entries.delete(p);
-    this.totalBytes -= entry.size;
-    void this.remove(p);
+    fsSync.unlinkSync(host);
   }
 
   rm(path: string, options?: { recursive?: boolean; force?: boolean }): void {
-    const p = normalizeVirtualPath(path);
-    if (p === '/') throw hostAccessError('refusing to remove the workspace root');
-    const entry = this.entries.get(p);
-    if (!entry && !this.isImplicitDir(p)) {
+    const v = normalizeVirtualPath(path);
+    if (v === '/') throw hostAccessError('refusing to remove the workspace root');
+    const host = this.resolveSecure(path);
+    if (!fsSync.existsSync(host)) {
       if (options?.force) return;
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, rm '${path}'`);
     }
-    const isDir = !entry || entry.kind === 'dir';
-    const prefix = `${p}/`;
-    const children = [...this.entries.keys()].filter((k) => k.startsWith(prefix));
-    if (isDir && children.length > 0 && options?.recursive !== true) {
-      throw new VirtualFsError('ENOTEMPTY', `ENOTEMPTY: directory not empty, rm '${path}' — pass { recursive: true }.`);
+    if (this.isDirHost(host)) {
+      const children = fsSync.readdirSync(host);
+      if (children.length > 0 && options?.recursive !== true) {
+        throw new VirtualFsError('ENOTEMPTY', `ENOTEMPTY: directory not empty, rm '${path}' — pass { recursive: true }.`);
+      }
     }
-    for (const child of children) {
-      const e = this.entries.get(child);
-      if (e && e.kind === 'file') this.totalBytes -= e.size;
-      this.entries.delete(child);
-      void this.remove(child);
-    }
-    if (entry) {
-      if (entry.kind === 'file') this.totalBytes -= entry.size;
-      this.entries.delete(p);
-      void this.remove(p);
-    }
+    fsSync.rmSync(host, { recursive: true, force: true });
   }
 
   rename(oldPath: string, newPath: string): void {
     const from = normalizeVirtualPath(oldPath);
     const to = normalizeVirtualPath(newPath);
-    const entry = this.entries.get(from);
-    if (!entry && !this.isImplicitDir(from)) {
+    const fromHost = this.resolveSecure(oldPath);
+    const toHost = this.resolveSecure(newPath);
+    if (!fsSync.existsSync(fromHost)) {
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, rename '${oldPath}' -> '${newPath}'`);
     }
-    if (to.startsWith(from === '/' ? '/' : `${from}/`)) {
+    if (to === from || to.startsWith(`${from}/`)) {
       throw new VirtualFsError('EINVAL', `EINVAL: cannot move a directory into itself, rename '${oldPath}' -> '${newPath}'`);
     }
-    const prefix = `${from}/`;
-    const children = [...this.entries.entries()].filter(([k]) => k.startsWith(prefix));
-    const target = this.entries.get(to);
-    if (target?.kind === 'file' || (children.length > 0 && target)) {
-      throw new VirtualFsError('ENOTEMPTY', `ENOTEMPTY: destination already exists, rename '${oldPath}' -> '${newPath}'`);
+    if (fsSync.existsSync(toHost)) {
+      const st = fsSync.lstatSync(toHost);
+      if (st.isFile() || (st.isDirectory() && fsSync.readdirSync(toHost).length > 0)) {
+        throw new VirtualFsError('ENOTEMPTY', `ENOTEMPTY: destination already exists, rename '${oldPath}' -> '${newPath}'`);
+      }
     }
-    for (const [k, v] of children) {
-      this.entries.delete(k);
-      const nextPath = to + k.slice(from.length);
-      this.entries.set(nextPath, v);
-      void this.remove(k);
-      void this.persist(nextPath);
-    }
-    if (entry) {
-      this.entries.delete(from);
-      this.entries.set(to, entry);
-      void this.remove(from);
-      void this.persist(to);
-    }
+    fsSync.mkdirSync(nodePath.dirname(toHost), { recursive: true });
+    fsSync.renameSync(fromHost, toHost);
   }
 
   copy(from: string, to: string): void {
     const src = normalizeVirtualPath(from);
     const dst = normalizeVirtualPath(to);
-    const entry = this.entries.get(src);
-    if (!entry && !this.isImplicitDir(src)) {
+    const srcHost = this.resolveSecure(from);
+    const dstHost = this.resolveSecure(to);
+    let st: fsSync.Stats;
+    try {
+      st = fsSync.lstatSync(srcHost);
+    } catch {
       throw new VirtualFsError('ENOENT', `ENOENT: no such file or directory, copy '${from}' -> '${to}'`);
     }
-    const prefix = `${src}/`;
-    const children = [...this.entries.entries()].filter(([k]) => k.startsWith(prefix));
-    if (entry?.kind === 'file') {
-      this.writeFile(dst, this.readFile(src) as Buffer);
+    if (st.isFile()) {
+      this.writeFile(dst, fsSync.readFileSync(srcHost));
       return;
     }
-    // directory copy (recursive by definition)
-    if (this.entries.get(dst)?.kind === 'file') {
+    if (fsSync.existsSync(dstHost) && fsSync.lstatSync(dstHost).isFile()) {
       throw new VirtualFsError('ENOTDIR', `ENOTDIR: destination is a file, copy '${from}' -> '${to}'`);
     }
-    if (!this.exists(dst)) this.mkdir(dst, { recursive: true });
-    for (const [k, v] of children) {
-      const nextPath = dst + k.slice(src.length);
-      if (v.kind === 'file') {
-        this.writeFile(nextPath, this.readFile(k) as Buffer);
-      } else if (!this.exists(nextPath)) {
-        this.mkdir(nextPath, { recursive: true });
+    // A directory copy into its own subtree would recurse forever — refuse it
+    // the same way rename does (the whole root counts as "inside" for '/').
+    if (dst === src || src === '/' || dst.startsWith(`${src}/`)) {
+      throw new VirtualFsError('EINVAL', `EINVAL: cannot copy a directory into itself, copy '${from}' -> '${to}'`);
+    }
+    // Directory copy — recursive by definition. Implemented with secure
+    // primitives (mkdir/writeFile) so limits + symlink rejection apply to
+    // every copied entry; symlinks under the source are skipped entirely.
+    this.copyTree(srcHost, dst);
+  }
+
+  private copyTree(srcHost: string, dstVirtual: string): void {
+    this.mkdir(dstVirtual, { recursive: true });
+    let entries: fsSync.Dirent[];
+    try {
+      entries = fsSync.readdirSync(srcHost, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const d of entries) {
+      if (d.isSymbolicLink()) continue;
+      const childVirtual = `${dstVirtual}/${d.name}`;
+      if (d.isDirectory()) {
+        this.copyTree(nodePath.join(srcHost, d.name), childVirtual);
+      } else if (d.isFile()) {
+        try {
+          this.writeFile(childVirtual, fsSync.readFileSync(nodePath.join(srcHost, d.name)));
+        } catch {
+          /* raced removal or unreadable entry — skip */
+        }
       }
     }
   }
@@ -492,14 +589,32 @@ export class VirtualFsSession {
   // ---------- metadata (§2.7) ----------
 
   listAll(): VfsEntryMeta[] {
-    return [...this.entries.values()]
-      .map((e, i) => ({ path: [...this.entries.keys()][i], kind: e.kind, size: e.size, createdAt: new Date(e.createdAt).toISOString(), updatedAt: new Date(e.updatedAt).toISOString() }))
-      .sort((a, b) => a.path.localeCompare(b.path));
-  }
-
-  usage(): { usedBytes: number; files: number; limits: VfsLimits } {
-    // §16 — reported limits are the CURRENT configured values.
-    return { usedBytes: this.totalBytes, files: [...this.entries.values()].filter((e) => e.kind === 'file').length, limits: getVfsLimits() };
+    const out: VfsEntryMeta[] = [];
+    const walk = (hostDir: string, virtualDir: string): void => {
+      let entries: fsSync.Dirent[];
+      try {
+        entries = fsSync.readdirSync(hostDir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const d of entries) {
+        if (d.isSymbolicLink()) continue;
+        const childVirtual = virtualDir === '/' ? `/${d.name}` : `${virtualDir}/${d.name}`;
+        const childHost = nodePath.join(hostDir, d.name);
+        if (d.isDirectory()) {
+          out.push(this.toMeta(childVirtual, fsSync.statSync(childHost)));
+          walk(childHost, childVirtual);
+        } else {
+          try {
+            out.push(this.toMeta(childVirtual, fsSync.statSync(childHost)));
+          } catch {
+            /* raced removal */
+          }
+        }
+      }
+    };
+    walk(this.rootReal, '/');
+    return out.sort((a, b) => a.path.localeCompare(b.path));
   }
 
   // ---------- sync helpers (power require() and fs.*Sync) ----------
@@ -517,7 +632,34 @@ export class VirtualFsSession {
   }
 }
 
-/** Load (and lazily scaffold) a tool's persistent workspace. */
-export async function openVirtualFs(toolId: string): Promise<VirtualFsSession> {
-  return VirtualFsSession.load(toolId);
+// ---------- the runtime-level GLOBAL VFS service (§3.13) ----------
+
+const g = globalThis as unknown as { __nextoolGlobalVfs?: VirtualFsSession };
+
+/**
+ * §3.1/§3.13 — receive THE shared VFS. Every js-function/nodejs execution,
+ * every fs.* builtin and every test run gets the SAME session. Stored on
+ * globalThis so dev-server module reloads keep one service (and its caches)
+ * alive, mirroring the runtime's other global registries.
+ */
+export function openGlobalVfs(): VirtualFsSession {
+  if (!g.__nextoolGlobalVfs) {
+    g.__nextoolGlobalVfs = VirtualFsSession.createFresh();
+  }
+  return g.__nextoolGlobalVfs;
+}
+
+/**
+ * Legacy per-tool entry point (v1.0.6–v1.0.11). The toolId argument is
+ * IGNORED since v1.0.12 §3.12 — one runtime-level VFS serves all tools.
+ * Synchronous; existing `await openVirtualFs(...)` call sites keep working.
+ */
+export function openVirtualFs(_toolId?: string): VirtualFsSession {
+  return openGlobalVfs();
+}
+
+/** Test-only: drop the process-level service object. The next
+ *  openGlobalVfs() rebuilds it FROM DISK — proving persistence (§3.5). */
+export function resetVfsServiceForTests(): void {
+  delete g.__nextoolGlobalVfs;
 }

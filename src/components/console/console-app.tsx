@@ -33,6 +33,7 @@ import TaskPreviewView from './views/task-preview';
 import LiveMonitorView from './views/live-monitor';
 import ToolsView from './views/tools';
 import ToolEditorView from './views/tool-editor';
+import ConnectorsView from './views/connectors';
 import TrainingView from './views/training';
 import BenchmarkView from './views/benchmark';
 import MemoryView from './views/memory';
@@ -48,6 +49,7 @@ import {
   Bell,
   BookOpen,
   Box,
+  Cable,
   Database,
   FileJson,
   FlaskConical,
@@ -68,6 +70,7 @@ const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'task-console', label: 'Task Console', icon: TerminalSquare },
   { view: 'live-monitor', label: 'Live Monitor', icon: RadioTower },
   { view: 'tools', label: 'Tools', icon: Wrench },
+  { view: 'connectors', label: 'Connectors', icon: Cable },
   { view: 'training', label: 'Training', icon: GraduationCap },
   { view: 'benchmark', label: 'Benchmark', icon: FlaskConical },
   { view: 'memory', label: 'Memory', icon: Database },
@@ -499,6 +502,8 @@ function ViewRouter() {
         return <ToolsView onOpenEditor={openToolEditor} />;
       case 'tool-editor':
         return <ToolEditorRoute key={toolEditorKey} />;
+      case 'connectors':
+        return <ConnectorsView />;
       case 'training':
         return <TrainingView />;
       case 'benchmark':

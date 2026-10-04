@@ -739,7 +739,9 @@ describe('v1.0.8 §3 — expanded virtual child_process', () => {
       return Promise.resolve(new Response('x', { status: 404 }));
     }) as typeof fetch;
     try {
-      await cp.exec('mkdir my-mern-app');
+      // v1.0.12 — the shared VFS is disk-backed and persists across runs, so
+      // the workflow uses recursive mkdir (idempotent on re-runs).
+      await cp.exec('mkdir -p my-mern-app');
       await cp.exec('cd my-mern-app');
       await cp.exec('npm init -y');
       await cp.exec('mkdir server');
@@ -900,4 +902,12 @@ function makeTarGz(files: Record<string, string>): Buffer {
 afterAll(async () => {
   // keep the shared dev database clean of test workspaces
   await db.virtualFile.deleteMany({ where: { toolId: { startsWith: 'v108-' } } }).catch(() => {});
+  // v1.0.12 — the shared VFS is disk-backed now; remove this suite's
+  // /workspace leftovers so later suite runs start clean.
+  try {
+    const vfsRoot = path.join(process.cwd(), 'data', 'vfs');
+    for (const p of ['workspace/my-mern-app', 'workspace/node_modules', 'workspace/package.json', 'workspace/package-lock.json']) {
+      fs.rmSync(path.join(vfsRoot, p), { recursive: true, force: true });
+    }
+  } catch { /* best effort */ }
 });

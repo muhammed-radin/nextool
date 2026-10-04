@@ -24,7 +24,9 @@ export interface ToolEntry {
   description: string;
   purpose?: string;
   category: string;
-  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs' | 'freedom-node';
+  // v1.0.12 — 'mcp' joins the set: tools imported from a connected MCP server
+  // (connector-backed; managed from the Connectors page, not the Tool IDE).
+  environment: 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs' | 'freedom-node' | 'mcp';
   schema: ToolDefinition['schema'];
   handlerKind?: string;
   /** v1.0.5: dynamic handler configuration object (http_get url/timeout, …). */
@@ -40,6 +42,8 @@ export interface ToolEntry {
   /** v1.0.7 §1: tool-specific execution timeout (ms) — overrides the global
    *  default; the runtime caps at 1 hour. Undefined = use global default. */
   timeoutMs?: number;
+  /** v1.0.12: mcp tools only — connector + remote tool identity (NO secrets). */
+  mcp?: ToolDefinition['mcp'];
   enabled: boolean;
   stats: ToolStats;
 }
@@ -149,6 +153,17 @@ DELETE /api/datasets/:id               -> { deleted: true }
 
 GET  /api/settings                     -> NexToolSettings
 PUT  /api/settings { partial settings } -> NexToolSettings
+
+GET  /api/connectors                              -> { registryVersion, providers: McpProviderDTO[], connectors: ConnectorDTO[] }   (v1.0.12)
+POST /api/connectors { providerId, name?, config? } -> ConnectorDTO                                                                (v1.0.12)
+GET  /api/connectors/:id                          -> ConnectorDTO (REAL status; credential PRESENCE only — never values)           (v1.0.12)
+PATCH /api/connectors/:id { name?, config?, enabled? } -> ConnectorDTO                                                              (v1.0.12)
+DELETE /api/connectors/:id                        -> { deleted, id, removedTools } (remote MCP server untouched)                    (v1.0.12)
+POST /api/connectors/:id/connection { action: connect|disconnect|reconnect } -> ConnectorDTO                                      (v1.0.12)
+PUT  /api/connectors/:id/credentials { values }   -> ConnectorDTO (values stored SERVER-SIDE ONLY)                                 (v1.0.12)
+DELETE /api/connectors/:id/credentials           -> ConnectorDTO                                                                  (v1.0.12)
+GET  /api/connectors/:id/tools                    -> { connected, tools: DiscoveredToolDTO[] } (live discovery; 409 when offline)  (v1.0.12)
+POST /api/connectors/:id/tools { action: import|refresh|toggle|remove, ... } -> ImportResult | RefreshResult | ImportedToolDTO | { removed } (v1.0.12)
 
 ======================= SSE protocol =======================
 

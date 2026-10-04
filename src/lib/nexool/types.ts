@@ -18,6 +18,11 @@ export interface ToolParamDef {
   min?: number;
   max?: number;
   default?: unknown;
+  /** v1.0.12 — FULL original JSON Schema for imported MCP tool params.
+   *  Preserves nested objects, array items, formats and any other JSON Schema
+   *  keyword that has no first-class NexTool slot (spec §1.13: never throw
+   *  schema information away). Ignored by runtimes that do not know it. */
+  jsonSchema?: Record<string, unknown>;
 }
 
 export interface ToolSchema {
@@ -32,8 +37,48 @@ export interface ToolSchema {
  * v1.0.6 — the nodejs environment gains the Virtual FS, controlled
  * http/https, a virtual child_process layer and the common safe APIs
  * (fetch/XHR/alert/prompt); js-function gains the same common APIs.
+ * v1.0.12 — `mcp` joins the environment set: tools IMPORTED from a connected
+ * MCP (Model Context Protocol) server. An mcp tool has NO local code — its
+ * handler proxies the call through the owning connector to the remote MCP
+ * server (see mcp/connector-manager.ts + tools/mcp-runner.ts). mcp tools are
+ * NOT authorable in the Tool IDE and NOT exportable (connector-backed —
+ * the definition must never travel without its server).
  */
-export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs' | 'freedom-node';
+export type ToolEnvironment = 'builtin' | 'virtual-env' | 'dynamic' | 'js-function' | 'nodejs' | 'freedom-node' | 'mcp';
+
+/** v1.0.12 — reference block carried INSIDE the stored definition JSON of
+ *  every environment='mcp' tool. Contains connector/tool identity ONLY —
+ *  NEVER tokens or secrets (spec §1.14: credentials are resolved through the
+ *  connector at execution time, server-side). */
+export interface McpToolRef {
+  connectorId: string;
+  providerId: string;
+  mcpToolName: string;
+  /** Provider display name, denormalized for display only. */
+  serverName: string;
+  /** sha256-stable hash of the remote inputSchema at import/refresh time. */
+  remoteHash?: string;
+  importedAt?: string;
+  lastRefreshedAt?: string;
+  /** Set when the user edited the description locally — Refresh tools keeps
+   *  the local text instead of silently overwriting it (spec §1.16). */
+  customizedDescription?: boolean;
+  /** The remote schema at import/refresh time, kept for diffing. */
+  remoteInputSchema?: unknown;
+}
+
+/** v1.0.12 — REAL connector connection states (never faked; spec §1.8).
+ *  `auth_required` = credentials missing (per the provider's auth type) or
+ *  the server rejected them. `disconnected` = user-initiated. Reconciliation
+ *  against live in-memory clients happens on every read. */
+export type McpConnectorStatus =
+  | 'not_connected'
+  | 'connecting'
+  | 'auth_required'
+  | 'connected'
+  | 'disconnected'
+  | 'error'
+  | 'reconnecting';
 
 /** Environments a developer may author tools for in the Tool IDE (v1.0.5 §2.3).
  *  v1.0.11 — `freedom-node` joins the authorable set: an INTENTIONALLY
@@ -76,6 +121,9 @@ export interface ToolDefinition {
    *  network requests; still bounded by the central network.timeoutMs limits
    *  and never beyond the tool's own effective execution timeout. */
   networkTimeoutMs?: number;
+  /** v1.0.12 — mcp tools only: connector + remote tool reference. Identity
+   *  only — NEVER credentials (they resolve through the connector). */
+  mcp?: McpToolRef;
 }
 
 // ---------- Tool execution approval (v1.0.6 §9) ----------
