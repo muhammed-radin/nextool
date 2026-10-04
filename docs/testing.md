@@ -215,7 +215,7 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
   classifiers; suite fixed to `tool-selection`.
 - Version surfaces: header badge, status bar, `/api/system.appVersion`, `nextool
   version` all read 1.0.11; engine stays llm-core 1.0.0 (not retrained); trained
-  checkpoints register under 1.0.2.
+  checkpoints register under 1.0.3 (v1.0.12 curriculum).
 - Parallel batching (v1.0.3): a multi-step plan with independent steps emits
   `planner.parallel_batch`, executions share a `batchId` (grouped card in Task Preview),
   a failing sibling does not cancel the others (`planner.partial_failure`), and

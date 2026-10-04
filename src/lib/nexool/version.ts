@@ -10,11 +10,10 @@
  *                        is served through the external z-ai-web-dev-sdk
  *                        provider and is NOT locally retrained — so it stays
  *                        1.0.0. The LOCALLY TRAINABLE tool-selection
- *                        classifier checkpoints move to model version 1.0.2
- *                        in this release (expanded long-context dataset +
- *                        checkpoint selection); historical 1.0.0/1.0.1
- *                        checkpoints keep their original versions for
- *                        traceability.
+ *                        classifier checkpoints move to model version 1.0.3
+ *                        in v1.0.12 (MCP/VFS/identity-aware curriculum);
+ *                        historical 1.0.0/1.0.1/1.0.2 checkpoints keep their
+ *                        original versions for traceability.
  * - Dataset Version:     dynamic — version of the most recently updated
  *                        dataset in the registry (never hardcoded here).
  */
@@ -22,7 +21,7 @@
 export const APP_NAME = 'NexTool Q1';
 export const APP_VERSION = '1.0.11';
 export const RELEASE_NAME =
-  'THE EMPOWERMENT — pre-plan failure recovery, freedom-node, auto-execution hierarchy (model 1.0.2)';
+  'THE EMPOWERMENT — pre-plan failure recovery, freedom-node, auto-execution hierarchy (model 1.0.3)';
 
 export const CORE_MODULE_NAME = 'llm-core';
 /** CoreModule decision-unit version — llm-core is a provider-served model and
@@ -31,11 +30,12 @@ export const CORE_MODULE_VERSION = '1.0.0';
 export const CORE_MODULE_FALLBACK = 'heuristic-fallback';
 
 /**
- * v1.0.11 — semantic version for the LOCALLY TRAINED tool-selection
- * classifier generation (expanded long-context/Markdown dataset, validation-
- * based checkpoint selection). Trained checkpoints register under this
- * version; historical checkpoints (1.0.0, 1.0.1) keep their versions. */
-export const TRAINED_MODEL_VERSION = '1.0.2';
+ * v1.0.12 — semantic version for the LOCALLY TRAINED tool-selection
+ * classifier generation (v1.0.3 curriculum: MCP connectors, shared global
+ * VFS, NexTool identity, categorization/coding/GK/technology teaching).
+ * Trained checkpoints register under this version; historical checkpoints
+ * (1.0.0, 1.0.1, 1.0.2) keep their versions. */
+export const TRAINED_MODEL_VERSION = '1.0.3';
 
 export const RUNTIME_BRAND = 'NexTool Runtime';
 export const REALTIME_TRANSPORT = 'sse' as const;

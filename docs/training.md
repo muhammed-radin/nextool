@@ -62,7 +62,7 @@ Values outside the ranges are clamped (HTTP) / resolved identically (CLI).
 | `shuffle` | boolean | true | Shuffle training data between epochs. |
 | `vocabSize` | 16–1024 | 128 | Hashed bag-of-words dimension (the model's input shape). |
 | `earlyStoppingPatience` | 0–50 | 0 (off) | **v1.0.10 — MANUAL early stopping** (see below): stops when `val_loss` has not improved for `patience` epochs and restores the best weights. Implemented in the epoch callback because the tf.js `EarlyStopping` callback is broken in this build. Requires a validation holdout. |
-| `modelVersion` | semver-like string (`/^\d+\.\d+\.\d+/` prefix check) | `TRAINED_MODEL_VERSION` (`'1.0.2'` since v1.0.11; feature since v1.0.10 when it defaulted to `'1.0.1'`) | **v1.0.10**: optional semantic version the checkpoint registers under. Legacy `checkpointId`s keep the `tc-<job>` identifier for traceability; old checkpoints keep their original versions. |
+| `modelVersion` | semver-like string (`/^\d+\.\d+\.\d+/` prefix check) | `TRAINED_MODEL_VERSION` (`'1.0.3'` since v1.0.12; was `'1.0.2'` in v1.0.11, `'1.0.1'` in v1.0.10) | **v1.0.10**: optional semantic version the checkpoint registers under. Legacy `checkpointId`s keep the `tc-<job>` identifier for traceability; old checkpoints keep their original versions. |
 
 ## Job lifecycle
 
@@ -97,11 +97,11 @@ real `ModelRecord` row:
 
 | Manifest field | Content |
 | --- | --- |
-| `name` / `version` | `tool-classifier-<dataset-name>` / the resolved model version (v1.0.10: `modelVersion` config → default `TRAINED_MODEL_VERSION` — `'1.0.2'` in this release, was `'1.0.1'` in v1.0.10; the legacy `tc-<job-id-derived>` identifier remains as `checkpointId` for traceability) |
+| `name` / `version` | `tool-classifier-<dataset-name>` / the resolved model version (v1.0.10: `modelVersion` config → default `TRAINED_MODEL_VERSION` — `'1.0.3'` in this release, was `'1.0.2'` in v1.0.11; the legacy `tc-<job-id-derived>` identifier remains as `checkpointId` for traceability) |
 | `format` | `tfjs-trained-classifier` |
 | `modelTopology` + `weightSpecs` + `weightData` | Native TF.js artifacts (weights base64-encoded) — v1.0.10: the weights snapshotted at the **best validation-accuracy epoch** (checkpoint selection) when a validation holdout exists |
 | `checkpointSelection` | **v1.0.10** — `{ selectedEpoch, valAccuracy, strategy: 'best-validation-accuracy' }` (or `strategy: 'final-epoch (no validation holdout)'`) |
-| `modelSemanticVersion` | **v1.0.10** — the semantic model generation of the checkpoint (`'1.0.2'` by default since v1.0.11; was `'1.0.1'` in v1.0.10) |
+| `modelSemanticVersion` | **v1.0.10** — the semantic model generation of the checkpoint (`'1.0.3'` by default since v1.0.12; was `'1.0.2'` in v1.0.11) |
 | `classes` | Sorted tool-class list (index → tool mapping used at inference) |
 | `vocabSize` | Vectorizer dimension the weights were trained with |
 | `trainingConfig` | The resolved config actually used (incl. `modelVersion` since v1.0.10) |
