@@ -18,6 +18,11 @@ model Task {
   reasoningLevel Int        @default(4)
   status         String     // queued | running | waiting | completed | failed | stopped | cancelled
   statusDetail   String?
+  // v1.0.12 Phase 7 — user-provided custom task instructions (textarea +
+  // uploaded Markdown COMBINED at creation). Instruction CONTEXT ONLY — it is
+  // never executed as code; it is injected into planner/core/observer prompts
+  // BELOW the fixed system constraints. Null when the task has none.
+  instructions   String?
   config         String     @default("{}") // JSON TaskConfig
   state          String     @default("{}") // JSON MainStateModel (serializable)
   plan           String?    // JSON PlanStep[]

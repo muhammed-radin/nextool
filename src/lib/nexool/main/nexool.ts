@@ -8,6 +8,7 @@ import { getSettings } from '../settings';
 import { getGlobalLiveState } from '../environment';
 import { runTask, type TaskRunHandle, type WakePayload } from './loop';
 import { clampToLimit } from '../config-limits';
+import { combineInstructions, type InstructionsInput } from '../instructions';
 import { cancelPendingApprovalsForTask, listPendingApprovals } from '../approval';
 import { cancelPendingPromptsForTask, cancelPendingConfirmationsForTask } from '../tools/sandbox-interactive';
 import type {
@@ -46,10 +47,14 @@ function clampLimitStatic(section: string, key: string, v: number | undefined, d
   }
 }
 
-/** Create + start a task. Returns the TaskDetail of the queued task. */
+/** Create + start a task. Returns the TaskDetail of the queued task.
+ *  v1.0.12 Phase 7 — `instructionsInput` carries the two Task Console
+ *  sources (uploaded Markdown + textarea); they are COMBINED deterministically
+ *  here (server is the source of truth) and persisted on the Task row. */
 export async function createTask(
   request: string,
   configPartial: Partial<TaskConfig> = {},
+  instructionsInput?: InstructionsInput,
 ): Promise<TaskDetail> {
   const trimmed = String(request ?? '').trim();
   if (!trimmed) throw new Error('Request must be a non-empty string.');
@@ -88,6 +93,12 @@ export async function createTask(
   const mode = cfg.mode ?? settings.defaultMode;
   const level = cfg.reasoningLevel ?? settings.defaultReasoningLevel;
 
+  // v1.0.12 Phase 7 — combine uploaded Markdown + textarea instructions
+  // deterministically (server-side source of truth). Markdown is treated as
+  // instruction/context content ONLY — never executed. When both sources are
+  // empty nothing is stored (task simply has no custom instructions).
+  const combinedInstructions = instructionsInput ? combineInstructions(instructionsInput) : null;
+
   await db.task.create({
     data: {
       id,
@@ -97,6 +108,7 @@ export async function createTask(
       mode,
       reasoningLevel: level,
       status: 'queued',
+      instructions: combinedInstructions?.combined ?? null,
       config: JSON.stringify(cfg),
       state: JSON.stringify({}),
     },
@@ -107,7 +119,13 @@ export async function createTask(
     type: 'task.created',
     source: 'runtime',
     message: `Task created: "${trimmed.slice(0, 120)}" (${mode} mode).`,
-    data: { taskId: id, mode, reasoningLevel: level },
+    data: {
+      taskId: id, mode, reasoningLevel: level,
+      // v1.0.12 Phase 7 — visible in the event stream which instruction sources are attached.
+      customInstructions: combinedInstructions
+        ? { attached: true, uploadedMarkdown: combinedInstructions.hasUploaded, text: combinedInstructions.hasText, chars: combinedInstructions.chars }
+        : { attached: false },
+    },
     priority: 6,
   });
 
@@ -292,6 +310,7 @@ function parseJson<T>(s: string | null | undefined, fallback: T): T {
 interface TaskRowLike {
   id: string; name: string | null; request: string; goal: string | null; mode: string;
   reasoningLevel: number; status: string; statusDetail: string | null;
+  instructions: string | null;
   config: string; state: string; plan: string | null; finalResult: string | null; error: string | null;
   steps: number; toolCalls: number; durationMs: number | null; sessionId: string | null;
   createdAt: Date; startedAt: Date | null; completedAt: Date | null;
@@ -326,6 +345,9 @@ export function toTaskDetail(row: TaskRowLike): TaskDetail {
     finalResult: row.finalResult ? (parseJson<unknown>(row.finalResult, null) as FinalResult) : undefined,
     error: row.error ? (parseJson<unknown>(row.error, null) as TaskDetail['error']) : null,
     sessionId: row.sessionId ?? undefined,
+    // v1.0.12 Phase 7 — custom task instructions survive task restart/reopen:
+    // always returned on detail reads (null when the task has none).
+    instructions: row.instructions ?? null,
   };
 }
 

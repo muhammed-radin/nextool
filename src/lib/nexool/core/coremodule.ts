@@ -7,6 +7,8 @@ import type { CoreModuleOutput, ToolDefinition } from '../types';
 import { recordCoreDecision } from '../eventbus';
 import { heuristicDecide } from './heuristic';
 import { coerceParams } from '../tools/executor';
+// v1.0.12 Phase 7 — custom task instructions (delimited user block).
+import { appendInstructionsBlock } from '../instructions';
 
 const CORE_TIMEOUT_MS = 25_000;
 
@@ -26,6 +28,9 @@ export interface DecideInput {
   contextBundle?: CoreContextBundle;
   reasoningLevel: number;
   allowedTools?: string[];
+  /** v1.0.12 Phase 7 — combined custom task instructions; appended to the
+   *  USER message as a delimited block BELOW the fixed system prompt. */
+  instructions?: string | null;
 }
 
 function buildSystemPrompt(): string {
@@ -68,7 +73,7 @@ function buildUserMessage(input: DecideInput): string {
   }));
 
   const ctx = input.contextBundle ?? {};
-  return JSON.stringify({
+  const payload = JSON.stringify({
     objective: input.objective,
     request: input.request,
     goal: input.goal,
@@ -82,7 +87,14 @@ function buildUserMessage(input: DecideInput): string {
     },
     reasoningLevel: input.reasoningLevel,
   });
+
+  // v1.0.12 Phase 7 — custom task instructions travel BELOW the fixed system
+  // prompt (which stays FIRST) as a delimited user section. Exported pure for
+  // deterministic hierarchy tests.
+  return appendInstructionsBlock(payload, input.instructions);
 }
+
+export { buildUserMessage as buildCoreUserMessage };
 
 /**
  * v1.0.11 §50 — inference-path optimization. The system prompt is CONSTANT:

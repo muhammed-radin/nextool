@@ -135,6 +135,20 @@ export const createTaskSchema = z
     config: taskConfigSchema.optional(),
     mode: z.enum(['goal', 'live']).optional(),
     reasoningLevel: z.number().int().min(1).max(6).optional(),
+    // v1.0.12 Phase 7 — custom task instructions from the Task Console:
+    // `uploadedMarkdown` = content of an uploaded/drag-dropped .md file,
+    // `text` = free-form textarea content. Both optional; when both are
+    // present they are COMBINED deterministically server-side (spec §7.4) —
+    // neither source is silently discarded. Markdown is instruction/context
+    // content only and is never executed (spec §7.2).
+    instructions: z
+      .object({
+        uploadedMarkdown: z.string().max(120_000).optional(),
+        text: z.string().max(60_000).optional(),
+      })
+      .partial()
+      .strict()
+      .optional(),
   })
   .strict();
 

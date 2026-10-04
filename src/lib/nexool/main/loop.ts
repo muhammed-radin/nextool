@@ -19,6 +19,8 @@ import { runPrePlanRecovery } from './recovery';
 import { listServers } from '../environment';
 import { resolveAutoExecution, requestApproval } from '../approval';
 import { clampToLimit, getResolvedLimits } from '../config-limits';
+// v1.0.12 Phase 7 — custom task instructions (sanitize when loading from DB).
+import { sanitizeInstructionsSource, MAX_COMBINED_INSTRUCTIONS_CHARS } from '../instructions';
 import { recordPatternObservation, recordTaskOutcomePatterns } from '../patterns/extractor';
 import type {
   MainState, PlanStep, Subgoal, TaskConfig, ToolDefinition, ToolExecution, NexToolEvent, FinalResult, QueuedLiveEvent,
@@ -182,6 +184,10 @@ interface RunContext {
   taskId: string;
   request: string;
   goal: string;
+  /** v1.0.12 Phase 7 — combined custom task instructions (uploaded Markdown
+   *  + textarea), loaded from the Task row at run start and threaded into
+   *  planner / core / observer prompts as a delimited user block. */
+  instructions?: string;
   config: ResolvedTaskConfig;
   toolDefs: ToolDefinition[];
   state: MainState;
@@ -451,6 +457,7 @@ async function decideAndExecute(
     contextBundle: bundle,
     reasoningLevel: ctx.config.reasoningLevel,
     allowedTools: ctx.config.enabledTools,
+    instructions: ctx.instructions,
   });
 
   void emitEvent({
@@ -585,7 +592,7 @@ async function proposeNextSubgoal(
 // ---------- goal completion check ----------
 
 async function verifyGoal(ctx: RunContext): Promise<boolean> {
-  const check = await checkGoalComplete(ctx.goal, ctx.state.lastObservation ?? 'No observation yet.', ctx.config.reasoningLevel, ctx.taskId);
+  const check = await checkGoalComplete(ctx.goal, ctx.state.lastObservation ?? 'No observation yet.', ctx.config.reasoningLevel, ctx.taskId, ctx.instructions);
   if (check.complete) {
     void emitEvent({
       taskId: ctx.taskId,
@@ -625,6 +632,7 @@ function oneByOnePlannerInputs(ctx: RunContext, note?: string) {
     state: ctx.state,
     knownFailures: [...ctx.failureLog],
     constraints,
+    instructions: ctx.instructions,
     note,
   });
 }
@@ -1086,6 +1094,7 @@ async function decideForStep(ctx: RunContext, step: PlanStep): Promise<Awaited<R
     contextBundle: await buildContextBundle(ctx),
     reasoningLevel: ctx.config.reasoningLevel,
     allowedTools: ctx.config.enabledTools,
+    instructions: ctx.instructions,
   });
 }
 
@@ -1599,6 +1608,9 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
 
   const ctx: RunContext = {
     taskId, request, goal: state.goal, config, toolDefs: [], state, handle, startedAtMs, artifacts: [], eventSeq: 0, blockedStop: null,
+    // v1.0.12 Phase 7 — custom task instructions loaded from the Task row
+    // (combined at creation; survive task restart/reopen).
+    instructions: sanitizeInstructionsSource(row.instructions, MAX_COMBINED_INSTRUCTIONS_CHARS) || undefined,
     failureLog: [], oneByOneSubgoalByStep: new Map(), identicalFailureStreak: 0, recoveryAttemptsByStep: new Map(),
   };
 
@@ -1638,7 +1650,7 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
     } else {
       // v1.0.10 §16 — pre-plan with the configurable step limit (default 10,
       // hard max 122; task value resolved against the global setting).
-      const plan = await buildPlan(request, state.goal, ctx.toolDefs, config.reasoningLevel, taskId, config.prePlanMaxSteps);
+      const plan = await buildPlan(request, state.goal, ctx.toolDefs, config.reasoningLevel, taskId, config.prePlanMaxSteps, ctx.instructions);
       state.plan = plan.steps;
       state.goal = plan.goal;
       ctx.goal = plan.goal;

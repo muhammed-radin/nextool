@@ -17,6 +17,10 @@ export interface TaskDetail extends TaskSummary {
   finalResult?: FinalResult;
   error?: { code: string; message: string; stage: string } | null;
   sessionId?: string;
+  /** v1.0.12 Phase 7 — combined custom task instructions (uploaded Markdown +
+   * textarea), stored verbatim with the task and returned on read. Null when
+   * the task carries no custom instructions. */
+  instructions?: string | null;
 }
 
 export interface ToolEntry {

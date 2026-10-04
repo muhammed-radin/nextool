@@ -7,7 +7,7 @@
  * controls, wrapping quick-fill chips, prominent full-width submit on mobile).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,7 +25,15 @@ import type { LimitPropertyDTO } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import type { TaskSummary } from '@/lib/nexool/types';
 import { EmptyState, ErrorCard, SectionTitle, StatusChip, TechLabel, TimeAgo } from '../ui-bits';
-import { AlertTriangle, ChevronDown, ListPlus, Loader2, Send, ShieldCheck, Sparkles, TerminalSquare, Wrench, Zap } from 'lucide-react';
+import { AlertTriangle, ChevronDown, FileText, ListPlus, Loader2, Send, ShieldCheck, Sparkles, TerminalSquare, Trash2, Upload, Wrench, Zap } from 'lucide-react';
+// v1.0.12 Phase 7 — shared deterministic instructions logic (pure module,
+// same combine rules the server applies — frontend/backend always agree).
+import {
+  ACCEPTED_INSTRUCTION_FILE_EXT,
+  MAX_TEXT_INSTRUCTIONS_CHARS,
+  MAX_UPLOADED_INSTRUCTIONS_CHARS,
+  combineInstructions,
+} from '@/lib/nexool/instructions';
 
 const REASONING_CAPTIONS: Record<number, string> = {
   1: 'ultra-fast — minimal deliberation',
@@ -95,6 +103,14 @@ export default function TaskConsoleView() {
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [validation, setValidation] = useState<string | null>(null);
+  // v1.0.12 Phase 7 — custom task instructions: free-form textarea AND/OR an
+  // uploaded/drag-dropped Markdown file. Both sources are kept SEPARATELY so
+  // neither can be silently discarded; the deterministic combined preview
+  // (identical to the server-side combination) is computed below.
+  const [instructionsText, setInstructionsText] = useState('');
+  const [instructionsFile, setInstructionsFile] = useState<{ name: string; content: string } | null>(null);
+  const [instructionsDragOver, setInstructionsDragOver] = useState(false);
+  const instructionsInputRef = useRef<HTMLInputElement>(null);
   // v1.0.3 §26-29: the Tasks page ends naturally with REAL content — recent
   // tasks (click → preview) or a meaningful empty state instead of blank space.
   const [recentTasks, setRecentTasks] = useState<TaskSummary[] | null>(null);
@@ -170,6 +186,39 @@ export default function TaskConsoleView() {
     setValidation(null);
   };
 
+  // ---------- v1.0.12 Phase 7 — custom task instructions ----------
+
+  /** Deterministic combined preview of BOTH sources — exactly the same pure
+   *  logic the server applies (spec §7.4: file section first, then textarea;
+   *  neither source is ever silently discarded). */
+  const combinedInstructions = useMemo(
+    () => combineInstructions({ uploadedMarkdown: instructionsFile?.content, text: instructionsText }),
+    [instructionsFile, instructionsText],
+  );
+
+  /** Read an uploaded/drag-dropped Markdown file into instruction CONTEXT
+   *  (spec §7.1/§7.2). The content is never executed — it only ever becomes
+   *  instruction/context text attached to the task. */
+  const acceptInstructionsFile = useCallback(async (file: File) => {
+    const lower = file.name.toLowerCase();
+    const isMarkdown = ACCEPTED_INSTRUCTION_FILE_EXT.some((ext) => lower.endsWith(ext)) || file.type === 'text/markdown';
+    if (!isMarkdown) {
+      toast.error('Unsupported file', { description: `Attach a Markdown file (${ACCEPTED_INSTRUCTION_FILE_EXT.join(', ')}).` });
+      return;
+    }
+    try {
+      const content = await file.text();
+      if (content.length > MAX_UPLOADED_INSTRUCTIONS_CHARS) {
+        toast.error('Markdown file too large', { description: `"${file.name}" is ${content.length.toLocaleString()} chars — the limit is ${MAX_UPLOADED_INSTRUCTIONS_CHARS.toLocaleString()}.` });
+        return;
+      }
+      setInstructionsFile({ name: file.name, content });
+      toast.success('Markdown attached', { description: `${file.name} — ${content.length.toLocaleString()} chars of instruction context.` });
+    } catch {
+      toast.error('Could not read file', { description: file.name });
+    }
+  }, []);
+
   const validate = (): string | null => {
     if (!request.trim()) return 'Request is required — describe what the runtime should do.';
     if (request.trim().length < 4) return 'Request is too short to plan against.';
@@ -191,6 +240,14 @@ export default function TaskConsoleView() {
       if (!Number.isFinite(prePlanMaxSteps) || prePlanMaxSteps < 1 || prePlanMaxSteps > maxCap) {
         return `Maximum pre-plan steps must be between 1 and ${maxCap}.`;
       }
+    }
+    // v1.0.12 Phase 7 — instruction sources: honest client-side caps (the
+    // server enforces the same limits via zod).
+    if (instructionsText.length > MAX_TEXT_INSTRUCTIONS_CHARS) {
+      return `Instruction text is too long — ${instructionsText.length.toLocaleString()} chars (limit ${MAX_TEXT_INSTRUCTIONS_CHARS.toLocaleString()}).`;
+    }
+    if (instructionsFile && instructionsFile.content.length > MAX_UPLOADED_INSTRUCTIONS_CHARS) {
+      return `Markdown file "${instructionsFile.name}" is too large (limit ${MAX_UPLOADED_INSTRUCTIONS_CHARS.toLocaleString()} chars).`;
     }
     return null;
   };
@@ -235,6 +292,15 @@ export default function TaskConsoleView() {
           ...(plannerType === 'pre-plan' ? { prePlanMaxSteps } : {}),
           ...(mode === 'live' ? { liveIntervalMs: limits.liveIntervalMs } : {}),
         },
+        // v1.0.12 Phase 7 — BOTH instruction sources travel to the server,
+        // which combines them deterministically (file section first, then
+        // textarea) and persists the result with the task.
+        instructions: combinedInstructions
+          ? {
+              ...(instructionsFile ? { uploadedMarkdown: instructionsFile.content } : {}),
+              ...(instructionsText.trim() ? { text: instructionsText } : {}),
+            }
+          : undefined,
       });
       toast.success('Task queued', { description: `#${task.id.slice(0, 8)} — opening live preview.` });
       openTaskPreview(task.id);
@@ -242,6 +308,8 @@ export default function TaskConsoleView() {
       setName('');
       setMode('goal');
       setLiveConfirmed(false);
+      setInstructionsText('');
+      setInstructionsFile(null);
       void loadRecent();
     } catch (e) {
       const msg = e instanceof ApiClientError ? e.message : 'Task submission failed';
@@ -389,6 +457,135 @@ export default function TaskConsoleView() {
             className="w-full rounded-md border border-white/[0.09] bg-white/[0.04] px-3 py-2.5 font-mono text-sm shadow-xs outline-ring/50 placeholder:text-muted-foreground focus-visible:border-sky-400/50 focus-visible:ring-2 focus-visible:ring-sky-400/20"
             aria-invalid={!!validation && !request.trim()}
           />
+        </div>
+
+        {/* v1.0.12 Phase 7 — Custom task instructions (textarea + Markdown file).
+            Instruction CONTEXT only: guidance for how the task should be
+            performed (verification requirements, forbidden approaches, failure/
+            success handling, format rules). It never overrides system/runtime
+            constraints and Markdown is never executed as code. */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label htmlFor="task-instructions">Instructions <span className="font-normal text-muted-foreground">(optional)</span></Label>
+            <div className="flex items-center gap-2">
+              <input
+                ref={instructionsInputRef}
+                id="task-instructions-file"
+                type="file"
+                accept=".md,.markdown,.mdown,.mkd,text/markdown"
+                className="sr-only"
+                aria-label="Upload Markdown instructions file"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void acceptInstructionsFile(file);
+                  e.target.value = '';
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-h-9 border-white/[0.09] bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]"
+                onClick={() => instructionsInputRef.current?.click()}
+              >
+                <Upload className="size-3.5" aria-hidden /> Upload .md
+              </Button>
+              {combinedInstructions ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="min-h-9 text-muted-foreground hover:text-foreground"
+                  onClick={() => { setInstructionsText(''); setInstructionsFile(null); }}
+                >
+                  <Trash2 className="size-3.5" aria-hidden /> Clear all
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          {/* Drag & drop zone for Markdown files (also acts as the drop target
+              for the whole instructions card). */}
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Drag and drop a Markdown instructions file here, or use the Upload button"
+            onDragOver={(e) => { e.preventDefault(); setInstructionsDragOver(true); }}
+            onDragLeave={() => setInstructionsDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setInstructionsDragOver(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) void acceptInstructionsFile(file);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                instructionsInputRef.current?.click();
+              }
+            }}
+            className={cn(
+              'rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground transition-colors',
+              instructionsDragOver ? 'border-sky-400/60 bg-sky-400/[0.06] text-sky-200' : 'border-white/[0.12] bg-white/[0.02]',
+            )}
+          >
+            <span className="flex items-center gap-1.5">
+              <FileText className="size-3.5 shrink-0" aria-hidden />
+              Drag &amp; drop a <span className="font-mono">.md</span> file here — its content becomes instruction context (never executed).
+            </span>
+          </div>
+
+          {instructionsFile ? (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-white/[0.09] bg-white/[0.04] px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <FileText className="size-3.5 shrink-0 text-emerald-300" aria-hidden />
+                <span className="truncate font-mono text-[11px] text-foreground/90">{instructionsFile.name}</span>
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{instructionsFile.content.length.toLocaleString()} chars</span>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="min-h-8 shrink-0 text-muted-foreground hover:text-foreground"
+                onClick={() => setInstructionsFile(null)}
+                aria-label={`Remove uploaded file ${instructionsFile.name}`}
+              >
+                <Trash2 className="size-3.5" aria-hidden />
+              </Button>
+            </div>
+          ) : null}
+
+          <textarea
+            id="task-instructions"
+            value={instructionsText}
+            onChange={(e) => setInstructionsText(e.target.value)}
+            rows={4}
+            maxLength={MAX_TEXT_INSTRUCTIONS_CHARS}
+            placeholder={'Follow these rules:\n- Verify every important result before reporting success\n- Never delete files without confirmation\n- Report failures with the exact error message…'}
+            className="w-full rounded-md border border-white/[0.09] bg-white/[0.04] px-3 py-2.5 font-mono text-sm shadow-xs outline-ring/50 placeholder:text-muted-foreground focus-visible:border-sky-400/50 focus-visible:ring-2 focus-visible:ring-sky-400/20"
+            aria-label="Custom task instructions"
+          />
+          <p className="font-mono text-[10px] text-muted-foreground/70">
+            {instructionsText.length.toLocaleString()}/{MAX_TEXT_INSTRUCTIONS_CHARS.toLocaleString()} chars · reaches Planner, CoreModule and Observer · hierarchy: system constraints &gt; task config &gt; your instructions &gt; goal
+          </p>
+
+          {combinedInstructions ? (
+            <Collapsible>
+              <CollapsibleTrigger className="flex min-h-9 w-full items-center justify-between gap-2 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 text-xs text-slate-300 hover:bg-white/[0.06]">
+                <span className="flex items-center gap-1.5">
+                  <ShieldCheck className="size-3.5 text-emerald-300" aria-hidden />
+                  Combined preview — {combinedInstructions.chars.toLocaleString()} chars
+                  {combinedInstructions.hasUploaded && combinedInstructions.hasText ? ' (file + text)' : combinedInstructions.hasUploaded ? ' (file)' : ' (text)'}
+                </span>
+                <ChevronDown className="size-3.5" aria-hidden />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-white/[0.08] bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-foreground/90">
+{combinedInstructions.combined}
+                </pre>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">

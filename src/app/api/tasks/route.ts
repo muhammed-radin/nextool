@@ -44,7 +44,10 @@ export async function POST(req: Request) {
   }
 
   try {
-    const detail = await createTask(body.request, config);
+    // v1.0.12 Phase 7 — the two instruction sources (uploaded .md content +
+    // textarea) travel to the service, which combines them deterministically
+    // and persists the result on the Task row.
+    const detail = await createTask(body.request, config, body.instructions);
     return ok(detail, 201);
   } catch (err) {
     return fail('TASK_CREATE_FAILED', err instanceof Error ? err.message : 'Failed to create task', 400);

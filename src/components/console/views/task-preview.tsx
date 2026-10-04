@@ -35,7 +35,7 @@ import { ChecklistItems, TaskChecklist } from '../task-checklist';
 import { EmptyState, ErrorCard, ExecutionStatusBadge, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
 import { reconcileExecutions, isTerminalExecutionStatus } from '@/lib/nexool/execution-merge';
 import {
-  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, Flag, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, Square, TerminalSquare, Wrench, X, Zap,
+  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Wrench, X, Zap,
 } from 'lucide-react';
 
 const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
@@ -849,6 +849,32 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
             <p className="mt-1.5 font-mono text-[10px] text-muted-foreground">
               {detail.steps} steps · {detail.toolCalls} tools{duration !== undefined ? ` · ${fmtMs(duration)}` : ''}
             </p>
+            {/* v1.0.12 Phase 7 — Task Preview shows that custom instructions are
+                attached and allows inspecting them (user-provided content only;
+                internal system prompts are NOT exposed). */}
+            {detail.instructions ? (
+              <Collapsible className="mt-2">
+                <div className="flex items-center gap-1.5 text-[11px] text-emerald-300">
+                  <ShieldCheck className="size-3.5 shrink-0" aria-hidden />
+                  <span className="font-medium">Instructions ✓ Custom instructions attached</span>
+                  <span className="font-mono text-[10px] text-muted-foreground">({detail.instructions.length.toLocaleString()} chars)</span>
+                </div>
+                <CollapsibleTrigger className="mt-1 flex min-h-9 w-full items-center justify-between gap-2 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 text-xs text-slate-300 hover:bg-white/[0.06]">
+                  <span className="flex items-center gap-1.5">
+                    <FileText className="size-3.5" aria-hidden /> Inspect attached instructions
+                  </span>
+                  <ChevronDown className="size-3.5" aria-hidden />
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <pre className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-white/[0.08] bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-foreground/90">
+{detail.instructions}
+                  </pre>
+                  <p className="mt-1 font-mono text-[10px] text-muted-foreground/70">
+                    User task instructions — context only, never executed. Applied BELOW system/runtime constraints and task configuration.
+                  </p>
+                </CollapsibleContent>
+              </Collapsible>
+            ) : null}
           </div>
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
             <Button

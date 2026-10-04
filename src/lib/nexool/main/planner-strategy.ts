@@ -20,6 +20,8 @@ import type { MainState, PlanStep, PlannerType, TaskMode, ToolDefinition } from 
 import { emitEvent } from '../eventbus';
 // v1.0.11 §50 — shared cached client (one init per process).
 import { getZai } from '../core/coremodule';
+// v1.0.12 Phase 7 — custom task instructions (delimited user block).
+import { appendInstructionsBlock } from '../instructions';
 
 const PLANNER_TIMEOUT_MS = 25_000;
 
@@ -57,6 +59,9 @@ export interface OneByOneContext {
   knownFailures: string[];
   /** Known constraints (enabled-tool restrictions, mode notes). */
   constraints: string[];
+  /** v1.0.12 Phase 7 — combined custom task instructions (delimited user
+   *  block appended BELOW the fixed system constraints). */
+  instructions?: string;
   /** Extra situational note (e.g. the live tick / event that triggered planning). */
   note?: string;
 }
@@ -69,6 +74,7 @@ export function buildOneByOneContext(input: {
   state: OneByOneContext['state'];
   knownFailures?: string[];
   constraints?: string[];
+  instructions?: string;
   note?: string;
 }): OneByOneContext {
   return {
@@ -80,6 +86,7 @@ export function buildOneByOneContext(input: {
     state: input.state,
     knownFailures: input.knownFailures ?? [],
     constraints: input.constraints ?? [],
+    instructions: input.instructions,
     note: input.note,
   };
 }
@@ -205,6 +212,54 @@ export interface PlanNextResult {
  * MUST have verified the goal BEFORE calling this (§9) — planning after goal
  * completion is a contract violation.
  */
+/**
+ * Pure message builder for the one-by-one planner (exported for deterministic
+ * unit tests — v1.0.12 Phase 7). FIXED system block FIRST; custom task
+ * instructions are appended AFTER the user payload as a delimited block
+ * (hierarchy: system > task config > user instructions > goal).
+ */
+export function buildOneByOneMessages(
+  ctx: OneByOneContext,
+  toolDefs: ToolDefinition[],
+): { system: string; user: string } {
+  const system = [
+    'You are the One-by-one Planner of NexTool, a task-processing system (not a chatbot).',
+    'You see the latest task state AFTER the previous step was executed and observed.',
+    'Answer exactly one question: "What is the single best next step to move this task toward the goal?"',
+    'Do NOT plan the whole task. Do NOT return a list of future steps.',
+    'Output STRICT JSON only: {"title":"short imperative objective","detail":"one sentence","kind":"action"|"observation"|"verification"}',
+    'If the latest observation already shows the goal was achieved, you must NOT be called — but if you see goal evidence anyway, return the single cheapest verification step, never work that is already done.',
+    ctx.knownFailures.length > 0
+      ? 'Known failures are listed. Never blindly repeat an identical failed action — choose a different approach or address the failure reason.'
+      : '',
+    ctx.note ? `Situational note: ${ctx.note}` : '',
+  ].filter(Boolean).join('\n');
+
+  const payload = JSON.stringify({
+    request: ctx.request,
+    goal: ctx.goal,
+    taskMode: ctx.taskMode,
+    plannerType: ctx.plannerType,
+    reasoningLevel: ctx.reasoningLevel,
+    constraints: ctx.constraints,
+    knownFailures: ctx.knownFailures,
+    previousSteps: ctx.state.plan.map((s) => ({ id: s.id, title: s.title, status: s.status })),
+    previousSubgoals: ctx.state.subgoals.slice(-6).map((s) => ({ title: s.title, status: s.status })),
+    recentObservations: ctx.state.observations.slice(-6).map((o) => ({ at: o.at, message: o.message })),
+    latestToolResult: ctx.state.lastObservation,
+    executedActions: ctx.state.previousActions.slice(-8),
+    iteration: ctx.state.iterationCount,
+    toolCalls: ctx.state.toolCallCount,
+    enabledTools: toolDefs.map((t) => ({ name: t.name, description: t.description, category: t.category })),
+    answerFormat: 'exactly one step',
+  });
+
+  // v1.0.12 Phase 7 — custom task instructions travel BELOW the fixed
+  // system constraints as a delimited user section.
+  const user = appendInstructionsBlock(payload, ctx.instructions);
+  return { system, user };
+}
+
 export async function planOneByOneStep(
   ctx: OneByOneContext,
   toolDefs: ToolDefinition[],
@@ -215,37 +270,7 @@ export async function planOneByOneStep(
 
   try {
     const zai = await getZai();
-    const system = [
-      'You are the One-by-one Planner of NexTool, a task-processing system (not a chatbot).',
-      'You see the latest task state AFTER the previous step was executed and observed.',
-      'Answer exactly one question: "What is the single best next step to move this task toward the goal?"',
-      'Do NOT plan the whole task. Do NOT return a list of future steps.',
-      'Output STRICT JSON only: {"title":"short imperative objective","detail":"one sentence","kind":"action"|"observation"|"verification"}',
-      'If the latest observation already shows the goal was achieved, you must NOT be called — but if you see goal evidence anyway, return the single cheapest verification step, never work that is already done.',
-      ctx.knownFailures.length > 0
-        ? 'Known failures are listed. Never blindly repeat an identical failed action — choose a different approach or address the failure reason.'
-        : '',
-      ctx.note ? `Situational note: ${ctx.note}` : '',
-    ].filter(Boolean).join('\n');
-
-    const user = JSON.stringify({
-      request: ctx.request,
-      goal: ctx.goal,
-      taskMode: ctx.taskMode,
-      plannerType: ctx.plannerType,
-      reasoningLevel: ctx.reasoningLevel,
-      constraints: ctx.constraints,
-      knownFailures: ctx.knownFailures,
-      previousSteps: ctx.state.plan.map((s) => ({ id: s.id, title: s.title, status: s.status })),
-      previousSubgoals: ctx.state.subgoals.slice(-6).map((s) => ({ title: s.title, status: s.status })),
-      recentObservations: ctx.state.observations.slice(-6).map((o) => ({ at: o.at, message: o.message })),
-      latestToolResult: ctx.state.lastObservation,
-      executedActions: ctx.state.previousActions.slice(-8),
-      iteration: ctx.state.iterationCount,
-      toolCalls: ctx.state.toolCallCount,
-      enabledTools: toolDefs.map((t) => ({ name: t.name, description: t.description, category: t.category })),
-      answerFormat: 'exactly one step',
-    });
+    const { system, user } = buildOneByOneMessages(ctx, toolDefs);
 
     const res = await Promise.race([
       zai.chat.completions.create({

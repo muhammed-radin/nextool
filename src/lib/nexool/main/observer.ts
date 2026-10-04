@@ -5,6 +5,8 @@ import type { ToolExecution } from '../types';
 import { emitEvent } from '../eventbus';
 // v1.0.11 §50 — the shared cached client (one init per process, every path).
 import { getZai } from '../core/coremodule';
+// v1.0.12 Phase 7 — custom task instructions (delimited user block).
+import { appendInstructionsBlock } from '../instructions';
 
 const VERIFY_TIMEOUT_MS = 6_000;
 
@@ -69,12 +71,38 @@ export interface GoalCheck {
   engine: 'llm-core' | 'heuristic-fallback';
 }
 
-/** Decide whether the goal is achieved based on the latest observation. */
+/**
+ * Pure message builder for the goal-completion check (exported for
+ * deterministic unit tests — v1.0.12 Phase 7). FIXED system block FIRST;
+ * custom task instructions are appended AFTER the user payload as a delimited
+ * block (hierarchy: system > task config > user instructions > goal).
+ */
+export function buildGoalCheckMessages(
+  goal: string,
+  observation: string,
+  instructions?: string | null,
+): { system: string; user: string } {
+  const system = [
+    'You are the Observer of NexTool. Given the goal and the latest observation, decide whether the goal is now achieved based on actual observed state.',
+    'Output STRICT JSON only: {"complete": true|false, "reason": "one concise sentence"}',
+  ].join('\n');
+  const payload = JSON.stringify({ goal, observation });
+  // v1.0.12 Phase 7 — instructions travel BELOW the system constraints.
+  const user = appendInstructionsBlock(payload, instructions);
+  return { system, user };
+}
+
+/** Decide whether the goal is achieved based on the latest observation.
+ *  v1.0.12 Phase 7 — `instructions` (combined custom task instructions) is
+ *  appended to the USER message as a delimited block BELOW the fixed system
+ *  constraints, so success/failure handling and verification requirements
+ *  defined by the user reach the Observer. */
 export async function checkGoalComplete(
   goal: string,
   observation: string,
   reasoningLevel: number,
   taskId?: string,
+  instructions?: string | null,
 ): Promise<GoalCheck> {
   if (reasoningLevel <= 2) {
     const obsLower = observation.toLowerCase();
@@ -91,17 +119,12 @@ export async function checkGoalComplete(
 
   try {
     const zai = await getZai();
+    const { system, user } = buildGoalCheckMessages(goal, observation, instructions);
     const res = await Promise.race([
       zai.chat.completions.create({
         messages: [
-          {
-            role: 'assistant' as const,
-            content: [
-              'You are the Observer of NexTool. Given the goal and the latest observation, decide whether the goal is now achieved based on actual observed state.',
-              'Output STRICT JSON only: {"complete": true|false, "reason": "one concise sentence"}',
-            ].join('\n'),
-          },
-          { role: 'user' as const, content: JSON.stringify({ goal, observation }) },
+          { role: 'assistant' as const, content: system },
+          { role: 'user' as const, content: user },
         ],
         thinking: { type: 'disabled' },
       }),

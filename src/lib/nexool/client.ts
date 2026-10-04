@@ -97,6 +97,12 @@ export const listTasks = (params: ListTasksParams = {}) =>
 export interface CreateTaskPayload {
   request: string;
   config?: Partial<TaskConfig>;
+  /** v1.0.12 Phase 7 — custom task instructions: content of an uploaded
+   *  .md file and/or free-form textarea text. Combined server-side. */
+  instructions?: {
+    uploadedMarkdown?: string;
+    text?: string;
+  };
 }
 
 export const createTask = (payload: CreateTaskPayload) =>

@@ -6,6 +6,8 @@ import type { PlanStep, ToolDefinition } from '../types';
 import { emitEvent } from '../eventbus';
 // v1.0.11 §50 — shared cached client (one init per process).
 import { getZai } from '../core/coremodule';
+// v1.0.12 Phase 7 — custom task instructions (delimited user block).
+import { appendInstructionsBlock } from '../instructions';
 
 const PLANNER_TIMEOUT_MS = 25_000;
 /**
@@ -72,6 +74,42 @@ function sanitizeSteps(raw: RawStep[], maxSteps: number): PlanStep[] {
   return steps;
 }
 
+/**
+ * Pure message builder for the pre-plan planner (exported for deterministic
+ * unit tests — v1.0.12 Phase 7). The FIXED system block always comes FIRST;
+ * user task instructions (spec §7.6/§7.7) are appended AFTER the user payload
+ * as a clearly delimited block, so they can never replace or override the
+ * system constraints.
+ */
+export function buildPlannerMessages(
+  request: string,
+  goal: string,
+  toolDefs: ToolDefinition[],
+  reasoningLevel: number,
+  maxSteps: number,
+  instructions?: string | null,
+): { system: string; user: string } {
+  const system = [
+    'You are the Planner of NexTool, a task-processing system (not a chatbot).',
+    'Decompose the request into minimal ordered steps. Each step is one concrete operational action.',
+    'Each step: {"title": short imperative objective, "detail": one sentence, "kind": "action"|"observation"|"verification", "parallelGroup": number}',
+    'Mark truly independent steps with the same parallelGroup number (1,2,...). Dependent steps must NOT share a group.',
+    `Maximum ${maxSteps} steps. Output STRICT JSON only: {"goal":"<refined goal>", "steps":[...]}`,
+  ].join('\n');
+  const payload = JSON.stringify({
+    request,
+    goal,
+    availableTools: toolDefs.map((t) => ({ name: t.name, description: t.description, category: t.category })),
+    reasoningLevel,
+    maxSteps,
+  });
+  // v1.0.12 Phase 7 — custom task instructions travel BELOW the system
+  // constraints as a delimited user section (hierarchy: system > task config
+  // > user instructions > goal).
+  const user = appendInstructionsBlock(payload, instructions);
+  return { system, user };
+}
+
 export async function buildPlan(
   request: string,
   goal: string,
@@ -79,25 +117,13 @@ export async function buildPlan(
   reasoningLevel: number,
   taskId?: string,
   maxSteps: number = DEFAULT_PRE_PLAN_MAX_STEPS,
+  instructions?: string | null,
 ): Promise<Plan> {
   const effectiveMaxSteps = Math.min(Math.max(Math.round(Number(maxSteps) || DEFAULT_PRE_PLAN_MAX_STEPS), 1), 122);
   const started = Date.now();
   try {
     const zai = await getZai();
-    const system = [
-      'You are the Planner of NexTool, a task-processing system (not a chatbot).',
-      'Decompose the request into minimal ordered steps. Each step is one concrete operational action.',
-      'Each step: {"title": short imperative objective, "detail": one sentence, "kind": "action"|"observation"|"verification", "parallelGroup": number}',
-      'Mark truly independent steps with the same parallelGroup number (1,2,...). Dependent steps must NOT share a group.',
-      `Maximum ${effectiveMaxSteps} steps. Output STRICT JSON only: {"goal":"<refined goal>", "steps":[...]}`,
-    ].join('\n');
-    const user = JSON.stringify({
-      request,
-      goal,
-      availableTools: toolDefs.map((t) => ({ name: t.name, description: t.description, category: t.category })),
-      reasoningLevel,
-      maxSteps: effectiveMaxSteps,
-    });
+    const { system, user } = buildPlannerMessages(request, goal, toolDefs, reasoningLevel, effectiveMaxSteps, instructions);
 
     const res = await Promise.race([
       zai.chat.completions.create({
