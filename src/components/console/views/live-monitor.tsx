@@ -19,8 +19,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useConsoleStore } from '../console-store';
 import { useGlobalStream } from '../providers';
-import { ApiClientError, answerChoice, answerConfirmation, answerPrompt, getLiveState, getTaskDetail, injectEnvEvent, listApprovals, listChoices, listConfirmations, listLimitContinuations, listPrompts, listTasks, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, stopTask } from '@/lib/nexool/client';
-import type { PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
+import { ApiClientError, answerChoice, answerConfirmation, answerPrompt, dismissAlert, getLiveState, getTaskDetail, injectEnvEvent, listAlerts, listApprovals, listChoices, listConfirmations, listLimitContinuations, listPrompts, listTasks, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, stopTask } from '@/lib/nexool/client';
+import type { PendingAlertDTO, PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
 import type { GlobalLiveState, NexToolEvent, TaskSummary } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { ServerCard } from '../server-card';
@@ -48,10 +48,11 @@ interface LiveTaskCardData {
 }
 
 // v1.0.13 — adds operator choice / verification latch / safety-limit continuation cards.
-function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, choices, verifications, continuations, onStop, stopping, onPause, onResume, pauseResumeBusy, onResolveApproval, resolvingApproval, onAnswerPrompt, answeringPrompt, onAnswerConfirmation, answeringConfirmation, onAnswerChoice, answeringChoice, onResolveVerification, resolvingVerification, onResolveContinuation, resolvingContinuation, onOpen }: {
+function LiveTaskCard({ data, taskEvents, approvals, alerts, prompts, confirmations, choices, verifications, continuations, onStop, stopping, onPause, onResume, pauseResumeBusy, onResolveApproval, resolvingApproval, onDismissAlert, onAnswerPrompt, answeringPrompt, onAnswerConfirmation, answeringConfirmation, onAnswerChoice, answeringChoice, onResolveVerification, resolvingVerification, onResolveContinuation, resolvingContinuation, onOpen }: {
   data: LiveTaskCardData;
   taskEvents: NexToolEvent[];
   approvals: PendingApprovalDTO[];
+  alerts: PendingAlertDTO[];
   prompts: PendingPromptDTO[];
   confirmations: PendingConfirmationDTO[];
   choices: PendingChoiceDTO[];
@@ -64,6 +65,7 @@ function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, cho
   pauseResumeBusy: boolean;
   onResolveApproval: (approvalId: string, decision: 'allow' | 'deny', feedback?: string) => void;
   resolvingApproval: boolean;
+  onDismissAlert: (alertId: string) => void;
   onAnswerPrompt: (promptId: string, value: string | null) => void;
   answeringPrompt: boolean;
   onAnswerConfirmation: (confirmId: string, accepted: boolean) => void;
@@ -83,7 +85,10 @@ function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, cho
   const [denyFeedback, setDenyFeedback] = useState<string>('');
   const [promptAnswer, setPromptAnswer] = useState<string>('');
   const paused = summary.status === 'paused';
-  const queue = (detail?.state?.eventQueue ?? []).filter((q) => q.status !== 'processed');
+  // v1.0.14 — the monitor shows the LIVE queue (queued + processing only);
+  // settled entries (processed/failed/cancelled/dropped) stay visible in the
+  // task's own event lifecycle trail instead of lingering here.
+  const queue = (detail?.state?.eventQueue ?? []).filter((q) => q.status === 'queued' || q.status === 'processing');
   const nextTickEstimate = useMemo(() => {
     if (!lastTickAt || !interval || paused) return null;
     const elapsed = Date.now() - new Date(lastTickAt).getTime();
@@ -223,6 +228,23 @@ function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, cho
                 >
                   <X className="size-3.5" aria-hidden /> Deny
                 </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* v1.0.14 §20 — pending interactive alerts: OK dismisses, tool resumes */}
+      {alerts.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {alerts.map((a) => (
+            <div key={a.alertId} className="rounded-md border border-sky-400/30 bg-sky-400/[0.05] p-3">
+              <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-sky-300">
+                <MessageSquareQuote className="size-3.5" aria-hidden /> tool alert {a.toolName ? `· ${a.toolName}` : ''}
+              </p>
+              <p className="mt-1 break-words text-xs text-foreground">{a.message}</p>
+              <div className="mt-2 flex">
+                <Button size="sm" disabled={answeringPrompt} onClick={() => onDismissAlert(a.alertId)} className="min-h-9 border-sky-400/30 bg-sky-400/10 text-sky-200 hover:bg-sky-400/20">OK</Button>
               </div>
             </div>
           ))}
@@ -490,6 +512,8 @@ export default function LiveMonitorView() {
   // v1.0.6 — approval/prompt/pause interaction state
   const [approvalsByTask, setApprovalsByTask] = useState<Record<string, PendingApprovalDTO[]>>({});
   const [promptsByTask, setPromptsByTask] = useState<Record<string, PendingPromptDTO[]>>({});
+  // v1.0.14 §20 — pending interactive alerts per active task
+  const [alertsByTask, setAlertsByTask] = useState<Record<string, PendingAlertDTO[]>>({});
   // v1.0.8 §1.5 — pending confirmations per active task
   const [confirmationsByTask, setConfirmationsByTask] = useState<Record<string, PendingConfirmationDTO[]>>({});
   // v1.0.13 — operator choices / verification latches / safety-limit continuations per active task
@@ -519,6 +543,7 @@ export default function LiveMonitorView() {
         .filter((t) => ['running', 'waiting', 'queued', 'paused', 'awaiting_approval'].includes(t.status))
         .map((t) => t.id);
       const nextApprovals: Record<string, PendingApprovalDTO[]> = {};
+      const nextAlerts: Record<string, PendingAlertDTO[]> = {};
       const nextPrompts: Record<string, PendingPromptDTO[]> = {};
       const nextConfirmations: Record<string, PendingConfirmationDTO[]> = {};
       const nextChoices: Record<string, PendingChoiceDTO[]> = {};
@@ -528,8 +553,9 @@ export default function LiveMonitorView() {
         activeIds.map(async (id) => {
           // v1.0.13 — the interaction poll is now a 6-tuple: approvals, prompts,
           // confirmations, choices, verifications, limit continuations.
-          const [a, p, c, ch, v, lc] = await Promise.allSettled([listApprovals(id), listPrompts(id), listConfirmations(id), listChoices(id), listVerifications(id), listLimitContinuations(id)]);
+          const [a, al, p, c, ch, v, lc] = await Promise.allSettled([listApprovals(id), listAlerts(id), listPrompts(id), listConfirmations(id), listChoices(id), listVerifications(id), listLimitContinuations(id)]);
           if (a.status === 'fulfilled') nextApprovals[id] = a.value.approvals;
+          if (al.status === 'fulfilled') nextAlerts[id] = al.value.alerts;
           if (p.status === 'fulfilled') nextPrompts[id] = p.value.prompts;
           if (c.status === 'fulfilled') nextConfirmations[id] = c.value.confirmations;
           if (ch.status === 'fulfilled') nextChoices[id] = ch.value.choices;
@@ -538,6 +564,7 @@ export default function LiveMonitorView() {
         }),
       );
       setApprovalsByTask(nextApprovals);
+      setAlertsByTask(nextAlerts);
       setPromptsByTask(nextPrompts);
       setConfirmationsByTask(nextConfirmations);
       setChoicesByTask(nextChoices);
@@ -659,6 +686,19 @@ export default function LiveMonitorView() {
     }
   };
 
+  // v1.0.14 §20 — dismiss an interactive alert; the paused tool resumes.
+  const dismissAlertById = async (alertId: string) => {
+    setAnsweringPrompt(true);
+    try {
+      await dismissAlert(alertId);
+      void load();
+    } catch (e) {
+      toast.error('Dismiss failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setAnsweringPrompt(false);
+    }
+  };
+
   // v1.0.8 §1.2 — the user's boolean decision resumes the waiting tool.
   const answerConfirmationById = async (confirmId: string, accepted: boolean) => {
     setAnsweringConfirmation(true);
@@ -765,6 +805,7 @@ export default function LiveMonitorView() {
                 data={{ summary: t, detail: details[t.id] ?? null, eventCount: liveTaskEvents(t.id), lastTickAt: lastTick(t.id) }}
                 taskEvents={events.filter((ev) => ev.taskId === t.id).slice(-120)}
                 approvals={approvalsByTask[t.id] ?? []}
+                alerts={alertsByTask[t.id] ?? []}
                 prompts={promptsByTask[t.id] ?? []}
                 confirmations={confirmationsByTask[t.id] ?? []}
                 choices={choicesByTask[t.id] ?? []}
@@ -777,6 +818,7 @@ export default function LiveMonitorView() {
                 pauseResumeBusy={pauseResumeBusy}
                 onResolveApproval={(approvalId, decision, feedback) => void resolveApprovalById(approvalId, decision, feedback)}
                 resolvingApproval={resolvingApproval}
+                onDismissAlert={(alertId) => void dismissAlertById(alertId)}
                 onAnswerPrompt={(promptId, value) => void answerPromptById(promptId, value)}
                 answeringPrompt={answeringPrompt}
                 onAnswerConfirmation={(confirmId, accepted) => void answerConfirmationById(confirmId, accepted)}

@@ -146,17 +146,31 @@ event. Response: `{ resolved: true, decision }` — or
 `{ resolved: false, reason }` when the approval is unknown, already resolved or
 expired (5-minute timeout). Errors: `INVALID_PARAMS`.
 
-### GET /api/prompts?taskId= (v1.0.6)
+### GET /api/prompts?taskId= (v1.0.6, extended v1.0.14)
 Pending tool `prompt()` interactions: `{ prompts: PendingPrompt[] }` with `promptId`,
-`taskId?`, `toolName?`, `message`, `requestedAt`. These pause **only their tool**
-(120 s timeout resolves `null`).
+`taskId?`, `toolName?`, `message`, `requestedAt` — plus the v1.0.14 fields `inputType`
+(text/textarea/number/email/password/url/search/date/time/datetime-local/month/week/
+color/file) and `placeholder?` so the UI can render the proper input. These pause
+**only their tool** (120 s timeout resolves `null`).
 
-### POST /api/prompts (v1.0.6)
+### POST /api/prompts (v1.0.6, extended v1.0.14)
 Answer or cancel a pending prompt. Request:
-`{ "promptId": string (required), "value"?: string (≤ 4000 chars), "cancel"?: boolean }`
-(cancel wins → resolves `null`). Emits `tool.user_prompt.responded`. Response:
-`{ resolved: true }` — or `{ resolved: false, reason }` when unknown/expired. Errors:
-`INVALID_PARAMS`.
+`{ "promptId": string (required), "value"?: string (≤ 4000 chars), "cancel"?: boolean, "file"?: { name, mimeType, size, content? } }`
+(cancel wins → resolves `null`). For `type: 'file'` prompts the client sends the picked
+file as `file` — `content` (base64) is attached only for small files (≤ 256 KB
+client-capped; 700 KB server compose cap) and the tool receives the JSON string
+`{ name, mimeType, size, content? }`. Emits `tool.user_prompt.responded` (with
+`inputType`). Response: `{ resolved: true }` — or `{ resolved: false, reason }` when
+unknown/expired. Errors: `INVALID_PARAMS`.
+
+### GET/POST /api/alerts (v1.0.14)
+The interactive `alert()` dialogs. `GET ?taskId=` → `{ alerts: PendingAlert[] }`
+(`alertId`, `taskId?`, `executionId?`, `toolName?`, `message`, `requestedAt`) — rendered
+as OK cards in Task Preview / Live Monitor / the Tool Editor test panel. `POST { alertId }`
+dismisses the alert; the paused tool resumes. Response: `{ resolved: true }` — or
+`{ resolved: false, reason: 'Alert not found or already dismissed (or expired).' }`.
+The 120 s window auto-dismisses; task stop dismisses observably
+(`tool.user_alert.dismissed`). Errors: `INVALID_PARAMS`.
 
 ### GET /api/confirmations?taskId= (v1.0.8)
 
@@ -194,15 +208,35 @@ Errors: `INVALID_PARAMS` (unknown `type`).
 
 Resolve a pending confirmation: `{ confirmId, accepted }` (`accepted` boolean, required — never implicit). The waiting tool receives the boolean; cancellation/timeout resolve `false`. Emits `tool.confirm.responded`.
 
-### GET /api/config/limits (v1.0.8)
+### GET /api/config/limits (v1.0.8) · PUT (v1.0.14) · presets (v1.0.14)
 
-The Configuration Registry — the resolved metadata of `config/configuration-limits.json`: `{ limits, resolved, source }`. `limits` carries every property's type/nullable/default/min/max/unit/description; `resolved` is the typed snapshot the Settings UI, backend validation and runtime enforcement all share. Exposes configuration METADATA only — no secrets.
+The Configuration Registry API over `config/configuration-limits.json`:
+
+- **GET** — `{ limits, resolved, source }`. `limits` carries every property's
+  type/nullable/default/min/max/unit/description; `resolved` is the typed snapshot the
+  Settings UI, backend validation and runtime enforcement all share. Exposes
+  configuration METADATA only — no secrets.
+- **GET ?preset=standard** — the shipped byte-exact snapshot of the shipped
+  configuration (`{ preset, limits }`).
+- **GET ?preset=unrestricted** — the ⚠ Complete Unrestricted preset: every numeric at
+  its max, capability booleans open, `fs.restricted: false` (the UI warns + confirms
+  before applying it; security boundaries are not configurable). Unknown values → 400
+  `UNKNOWN_PRESET`.
+- **PUT** (v1.0.14, the Limitations page Save/Import) — replaces the limits file with
+  the request body AFTER full validation (structure, required fields, types,
+  min/max relationships): valid → atomic temp-file + rename write, loader cache
+  invalidated (runtime hot-reload ≤ 2 s), response `{ saved: true, limits, resolved,
+  source }`; invalid → 400 `CONFIGURATION_LIMITS_INVALID` with every issue listed and
+  the current file untouched; unwritable file → 500 `LIMITS_WRITE_FAILED`.
 
 ### POST /api/tasks/{id}/event
 Inject a runtime event. Request:
 `{ "type": string (required), "payload"?: object, "priority"?: 1–9 (default 5),
 "source"?: one of runtime|planner|observer|core|tool|environment|user|system (default user) }`.
-Response: 201 `NexToolEvent`. Priority ≤ 5 wakes a waiting live task.
+Response: 201 `NexToolEvent`. **Changed in v1.0.14: ANY priority wakes a waiting live
+task immediately (the priority ≤ 5 gate was removed); admission is observable via the
+`event.*` lifecycle records, and without "Read & Act All Events" an event arriving
+while an action runs is rejected with the observable reason.**
 Errors: `INVALID_PARAMS`.
 
 ```bash
@@ -418,9 +452,11 @@ Network Policy request timeout for the run). Response:
 "timeout", durationMs, result, error, params, logs: string[] }` — logs are captured
 for sandbox runs. Since v1.0.6, nodejs test runs execute against an **ephemeral scratch
 VFS workspace** (wiped after the run), so `require("fs")` resolves to the Virtual FS —
-files written during a test do not persist. Interactive functions are honest in test
-mode: `alert` resolves immediately, `prompt` returns its default (or `null`); tests
-never hang (see [Tool Development](../tools/tool-development.md)). Tests never mutate
+files written during a test do not persist. Interactive functions are interactive in
+test mode since v1.0.14 (changed): `alert`/`confirm`/`askForUserAsChoice`/`prompt`
+register REAL pending interactions that the Tool Editor test panel polls — the run
+waits for the operator like production (v1.0.6–v1.0.13 they auto-resolved: alert
+immediate, prompt/confirm defaults). Tests never mutate
 task state. Since v1.0.91, a tool function executing INSIDE the sandbox can call this
 endpoint itself: `fetch("/api/tools/test", { method: "POST" })` resolves the relative
 URL against the application origin (see [Tool Development](../tools/tool-development.md)).
@@ -668,7 +704,7 @@ severity, resource, message }] }`. Reports clear errors — never creates replac
 
 ## Documentation
 
-### GET /api/docs — `{ version: APP_VERSION ("1.0.11"), count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: APP_VERSION (dynamic — reads src/lib/nexool/version.ts, "1.0.14" at this release), count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`
@@ -684,7 +720,13 @@ enveloped). Not used by the console.
 
 ---
 
-## Operator interactions (v1.0.13)
+## Operator interactions (v1.0.13, extended v1.0.14)
+
+### GET/POST /api/alerts — interactive alert() (v1.0.14)
+
+Documented with the prompts above: `GET ?taskId=` lists pending OK-dialogs,
+`POST { alertId }` dismisses (the paused tool resumes; 120 s auto-dismiss; stop
+dismisses observably via `tool.user_alert.dismissed`).
 
 ### GET/POST /api/choices — `askForUserAsChoice()`
 

@@ -11,40 +11,69 @@ recovering indefinitely until explicitly stopped. It is **opt-in only** — `mod
 auto-switched, the Task Console gates it behind an amber warning + confirmation switch,
 and the config is used exactly as provided.
 
+**v1.0.14 (THE LIVELY AI)** makes Live Mode fully **event-driven**: every event is a
+FIRST-CLASS trigger that wakes the task **immediately** (the old priority ≤ 5 wake gate
+is gone), the task runs its first cycle **on startup** (no first-interval wait), and each
+task owns a **per-task event queue** ("Read & Act All Events") that is drained
+continuously until empty. Every admission decision is observable through the
+`event.*` lifecycle family (see [Events](events.md#the-event-lifecycle-family-v1014)).
+
 ## Activation
 
 - API: `POST /api/tasks` with `config.mode: 'live'` (or top-level `mode: 'live'`).
 - Console: Task Console → mode `live` → keep the opt-in confirmation switch on.
 - Defaults from settings: `liveIntervalMs` 60 000 ms (clamp 1 000–3 600 000).
 
-## Flow diagram
+## Flow diagram (v1.0.14 — event-driven lifecycle)
 
 ```mermaid
 flowchart TD
     A[Create live task] --> B[status running]
-    B --> C[Initial observation cycle<br/>decide → approval gate → execute → observe]
+    B --> C[INITIAL cycle on startup — v1.0.14<br/>OBSERVE → UNDERSTAND → ACT → FINISH<br/>trigger: 'initial' — message-less]
     C --> D{stop flag?}
-    D -- yes --> Z[finalize stopped]
+    D -- yes --> Z[finalize stopped<br/>queued + inbox events → event.cancelled]
     D -- no --> P{paused? v1.0.6}
     P -- yes --> PH[hold: state preserved<br/>events retained · task.paused]
-    PH -- POST /resume --> P2{multi-event mode?}
-    P -- no --> E[status waiting<br/>emit task.waiting]
-    E --> F[waitWithEvents: timer liveIntervalMs OR event wake]
-    P2 -- yes --> Q[drain inbox queue one-by-one<br/>priority → arrival seq]
-    P2 -- no --> K[latest event: one observe cycle]
-    Q --> D2{stop flag?}
-    D2 -- yes --> Z
-    D2 -- no --> E
-    F --> G{wake source}
-    G -- timer --> H[observer.scheduled_tick p9<br/>one observe cycle + env recovery scan]
-    G -- user.feedback p2 --> I[store feedback memory<br/>LLM revises active subgoal<br/>subgoal.created p3]
-    G -- environment.* p2/p4 --> J[runRepairPasses on affected server<br/>health → restart → verify]
-    G -- task.stop p1 --> Z
-    G -- other event priority ≤ 5 --> K
-    H --> D
-    I --> D
-    J --> D
+    PH -- POST /resume --> E
+    P -- no --> E[WAIT — status waiting<br/>emit task.waiting]
+    E --> F{wake source}
+    F -- event ANY priority --> G[EVENT — wake IMMEDIATELY<br/>event.received → admitted]
+    F -- timer liveIntervalMs --> H[INTERVAL — message-less trigger<br/>observer.scheduled_tick p9]
+    G --> I[OBSERVE → UNDERSTAND → ACT → FINISH<br/>CONTEXT.trigger carries the FULL event]
+    H --> I2[OBSERVE → UNDERSTAND → ACT → FINISH<br/>no fabricated event message]
+    I --> Q{Read & Act All Events?}
+    I2 --> Q
+    Q -- on --> R[PROCESS QUEUED EVENTS<br/>drain continuously until empty<br/>no interval waits between events]
+    Q -- off --> E2[WAIT — next cycle]
+    R --> D3{stop flag?}
+    D3 -- yes --> Z
+    D3 -- no --> E
+    E2 --> E
 ```
+
+One scheduler owns the whole lifecycle (spec §1/§2): **RUN → WAIT → EVENT or INTERVAL →
+OBSERVE → UNDERSTAND → ACT → FINISH → PROCESS QUEUED EVENTS → WAIT**. The interval is
+now just one of two trigger kinds — events never wait for the next tick.
+
+## Immediate event reaction (v1.0.14)
+
+- **Events wake Live Mode IMMEDIATELY** — `injectEvent` arms the run handle's wake slot
+  the moment the event is admitted; a waiting task reacts at once, never at the next
+  interval.
+- **Initial execution on startup** — every live task runs its first full
+  observation/action cycle IMMEDIATELY when it starts (`trigger: 'initial'`). The old
+  "wait for the first interval before doing anything" behavior is gone.
+- **ALL events are triggers regardless of priority** — the old *priority ≤ 5 wake gate*
+  (v1.0.0–v1.0.13) was **REMOVED in v1.0.14**. Priority is now ordering/metadata only
+  (queue order: priority ascending, then arrival sequence) and must never silently
+  filter an event away. A priority-9 event wakes a live task exactly like a
+  priority-1 one.
+- **Interval triggers are message-less** — the scheduled tick is
+  `{ trigger: 'interval' }` with **no fabricated event message**; the AI performs its
+  normal scheduled observation. Event triggers carry the **full event**
+  (`id` / `type` / `source` / `message` / `data` / `priority` / `createdAt`) into the
+  AI's decision context (`CONTEXT.trigger` in `coremodule.ts`) — the AI observes WHAT
+  happened, not just that something did.
 
 ## The wait/wake machinery
 
@@ -52,23 +81,30 @@ While waiting, the task row status is `waiting` and a `TaskRunHandle.wake` slot 
 `waitWithEvents(liveIntervalMs, handle)` resolves on whichever comes first:
 
 - **Scheduled tick** — the interval timer (unref'd) expires → `observer.scheduled_tick`
-  (priority 9) → one observation cycle.
-- **Event wake** — `injectEvent` delivers any event with **priority ≤ 5**. Higher
-  priorities are persisted/streamed but do not interrupt the wait.
+  (priority 9) → one observation cycle (message-less interval trigger).
+- **Event wake** — `injectEvent` delivers **any** injected event (v1.0.14: no priority
+  gate; changed in v1.0.14 — before, only priority ≤ 5 woke the task). Higher
+  priorities were persisted/streamed but did not interrupt the wait.
 
-Priority map of waking sources: `task.stop` (1), `user.feedback` (2),
+Priority map of typical waking sources (priorities retained for ordering — all of them
+wake since v1.0.14): `task.stop` (1), `user.feedback` (2),
 `environment.server.crash` (2), `environment.server.degrade`/`.recover` (4),
 manual/custom injections and console presets `user.message` / `environment.custom` /
 `scheduled.force` (default 5).
 
-## Event-driven wake behaviors
+## Event-driven wake behaviors (v1.0.14)
+
+Every event lands in the run handle's inbox, is admitted (`event.admitted`) and wakes the
+loop immediately; then one observe/understand/act/finish cycle runs with the event as
+the trigger. Per-event behavior:
 
 | Wake | Runtime behavior |
 | --- | --- |
-| `user.feedback` | Emits `observer.feedback_applied`; upserts persistent memory `feedback_<taskId>` (`{ message, correctAction, at }`, tags `['feedback','live']`) when `learnFrom.feedback`; asks the LLM (10 s) to revise the active subgoal, falling back to `correctAction` or a generic title; emits `subgoal.created`. |
+| `user.message` | **The live conversation channel (§8)** — the message (and any body) reaches the observe/decide pipeline verbatim so the AI can answer questions, take corrections and act. The cycle is immediate — this is how the operator chats with a live task (and how the [Assistant](frontend.md#v1014-frontend-changes) conversation works). |
+| `user.feedback` | Emits `observer.feedback_applied`; upserts persistent memory `feedback_<taskId>` (`{ message, correctAction, at }`, tags `['feedback','live']`) when `learnFrom.feedback`; asks the LLM (10 s) to revise the active subgoal, falling back to `correctAction` or a generic title; emits `subgoal.created`; then runs an **immediate correction cycle** (v1.0.14 — the revised subgoal is acted upon at once, no interval wait). |
 | `environment.server.crash` etc. | Resolves the serverId from the payload (or the first non-healthy server) and runs `runRepairPasses`: recovery subgoal → `server.health` → if unhealthy `server.restart` (fleet turns healthy after 2 500 ms; pass settles 2 700 ms) → verify `server.health` → subgoal completed/failed. ≤ 4 tool calls per pass. |
-| Scheduled tick | One `liveObserveCycle` ("keep making progress on: <goal>" + serialized fleet state). Afterward, if the goal mentions monitoring (`monitor|recover|production|prod|api|server|health|web|db`) and any server is unhealthy/degraded, repair passes run for each. |
-| Generic event | One observation cycle, skipped if the per-cycle deadline (`Date.now() + taskTimeoutMs`) already passed. |
+| Scheduled tick | One `liveObserveCycle` ("keep making progress on: <goal>" + serialized fleet state), message-less interval trigger. Afterward, if the goal mentions monitoring (`monitor|recover|production|prod|api|server|health|web|db`) and any server is unhealthy/degraded, repair passes run for each. |
+| Generic event (any type, any priority) | One observation cycle carrying the FULL event body via `CONTEXT.trigger`, skipped if the per-cycle deadline (`Date.now() + taskTimeoutMs`) already passed. |
 
 ## One-by-one planner in Live Mode (v1.0.10)
 
@@ -99,33 +135,66 @@ changes shape without changing its safeguards:
   `taskTimeoutMs` apply to one-by-one exactly as to pre-plan (a verification task hit
   `SAFETY_LIMIT` at `maxIterations=12` as designed).
 
-## Multi-event mode — "Read & Act All Events" (v1.0.6)
+## Per-task event queue — "Read & Act All Events" (v1.0.6, event-driven since v1.0.14)
 
-By default (v1.0.5 behavior, `allowMultipleEvents: false`) a live task processes one
-event per wake — an event arriving while a cycle runs is not acted on as its own
-decision. Multi-event mode changes exactly that:
+Multi-event mode gives every live task an **owned, ordered event queue** — the
+"Read & Act All Events" contract: each task owns its queue, and the queue is drained
+CONTINUOUSLY until empty (no interval waits between queued events).
 
 - **Nothing is lost** — events arriving while the loop is busy, paused or waiting land
-  in the run handle's **inbox** (`handle.inbox`) immediately (the wake only interrupts
-  the wait so the loop drains at the next safe point).
+  in the run handle's **inbox** (`handle.inbox`) immediately and are admitted into the
+  persisted task queue (`state.eventQueue`). The inbox is drained **before every wait**
+  (v1.0.14 §2.1), so events that arrived while the previous action ran are processed
+  IMMEDIATELY — never after another interval.
+- **Continuous drain** — after each event's cycle the loop proceeds straight to the next
+  queued event (§2.1: drain continuously until empty). A backlog of 3 events finishes
+  back-to-back even with a 300 s interval.
 - **The queue is durable state** — queued events are stored in the task's state
-  (`state.eventQueue`), so the queue survives page refreshes and SSE reconnects. Live
-  Monitor and Task Preview render it (status per item: queued / processing /
-  processed).
+  (`state.eventQueue`), so the queue survives page refreshes, SSE reconnects and
+  pauses. Live Monitor and Task Preview render it (status per item: queued / processing /
+  processed / failed / dropped / cancelled).
 - **One-by-one processing** — no two event-driven action plans ever run concurrently.
   The queue is drained in deterministic order: **priority ascending (1 = emergency
   first), then arrival sequence (`seq`)**.
-- **Limits & drop policy** — max **50** queued events; a payload over **16 KiB** is
-  truncated to metadata. When the queue is full, the **lowest-priority** item is
-  dropped first; if the incoming event is lower priority than everything queued, the
-  incoming event is dropped. Every drop emits `live.event.dropped` — drops are
-  recorded, never silent. Processed history is trimmed to the last 10 so the queue
-  stays a queue.
-- **Events** — `live.event.queued` (6), `live.event.processing` (6),
-  `live.event.processed` (7), `live.event.dropped` (6).
+- **Limits & admission policy** — max queued events from the central limit
+  `task.eventQueueCap` (shipped 50); a payload over **16 KiB** is truncated to
+  metadata. When the queue is full, the **lowest-priority** item is displaced first; if
+  the incoming event is lower priority than everything queued, the incoming event is
+  **rejected**. Every displacement/rejection emits an observable `event.rejected` with
+  the reason — never silent (v1.0.14: the former `live.event.dropped` type).
+- **Failed events never deadlock the queue (§32)** — a failing event cycle is recorded
+  (`event.failed` with the error) and the NEXT queued event proceeds immediately.
 - **Distinct from `parallelToolCalls`** — multi-event mode sequences *event-driven
   decisions*; parallel tool calls batch *tool executions inside one plan step*. They
   solve different problems and are configured independently (spec §10 vs §14).
+
+### Without "Read & Act All Events" — NO backlog (v1.0.14 §2.2)
+
+The default (`allowMultipleEvents: false`) keeps single-event processing but — changed
+in v1.0.14 — it is now **honest about it**:
+
+- While an action runs (or another event is still pending), later incoming events are
+  **REJECTED** with the observable reason *"Live action already running and Read & Act
+  All Events is disabled."* — an `event.rejected` lifecycle record is emitted and
+  rendered in Events / Task Preview / Live Monitor. **No hidden backlog is allowed to
+  form** (v1.0.6–v1.0.13 silently kept the latest event instead).
+- The **first pending event is still processed at the next safe point** — the
+  single-event path reports the same lifecycle as the queue path
+  (`event.processing` → `event.completed` / `event.failed`).
+- **Pause retention is preserved (§11.4)** — while the task is PAUSED, events are still
+  retained (queued for after resume); user messages must never be lost during an
+  operator pause. The rejection only applies while an action is actively running.
+
+### Event lifecycle states (v1.0.14 §12)
+
+Every injected event moves through an observable lifecycle — emitted as first-class
+`event.*` runtime events and rendered in Events, Task Preview and Live Monitor:
+
+`event.received` → `event.admitted` (or `event.rejected` / `event.ignored`) →
+`event.queued` (queue mode) → `event.processing` → `event.completed`
+(or `event.failed` with the reason; `event.cancelled` on task stop).
+
+Full catalog with payloads: [Events → The event lifecycle family](events.md#the-event-lifecycle-family-v1014).
 
 Configuration: global setting `allowMultipleEvents` (default `false`), per-task
 `config.allowMultipleEvents` — both exposed as the **"Allow Multiple Events at Same
@@ -142,7 +211,8 @@ underlying config). The injected-event endpoint is unchanged:
   the event queue), history. The scheduler holds: no ticks fire while paused, and on
   resume the interval restarts fresh (no burst of missed ticks).
 - **Events during pause are retained** — multi-event mode queues them (nothing lost);
-  single-event mode processes the first after resume.
+  single-event mode keeps the first for processing right after resume (§11.4 behavior,
+  preserved in v1.0.14 — the "no backlog" rejection does NOT apply while paused).
 - `POST /api/tasks/{id}/resume` continues from the preserved state — never a restart.
   The task returns to `waiting`/`running` (`task.resumed`).
 - **Pause during an approval**: the approval stays unresolved (never auto-allowed or
@@ -200,8 +270,10 @@ memory + history) is exposed per task via `GET /api/tasks/{id}/context` — see
   timeout stops the task; a denial skips the tool (feedback optional). See
   [Tool Runtime](../tools/tool-runtime.md#the-approval-gate-v106).
 - A tool's `await prompt(...)` renders an answer/cancel card the same way (120 s
-  timeout → `null`); `await alert(...)` shows as a `tool.user_alert` line. Only that
-  tool waits — the rest of the runtime keeps observing.
+  timeout → `null`); `await alert(...)` — **changed in v1.0.14** — now renders an
+  interactive OK dialog that pauses the tool until dismissed (120 s auto-dismiss),
+  backed by `GET/POST /api/alerts`. Only that tool waits — the rest of the runtime
+  keeps observing.
 
 ## Stopping
 
@@ -209,7 +281,13 @@ memory + history) is exposed per task via `GET /api/tasks/{id}/context` — see
 
 1. `stopFlag` set + `AbortController` aborts any in-flight execution.
 2. Synthetic `task.stop` (priority 1) breaks the wait loop instantly.
-3. Finalize: status `stopped`, summary = last observation, `task.cancelled` event.
+3. **Pending events are cancelled observably (v1.0.14 §31)** — every inbox event emits
+   `event.cancelled` ("Task stopped by user — pending event cancelled."), the in-memory
+   inbox is dropped, and any still-queued/processing entries in the persisted queue are
+   marked `cancelled` with the same reason. Nothing runs after the stop.
+4. Pending interactive alerts auto-dismiss (`tool.user_alert.dismissed`); approvals,
+   prompts, confirmations, choices, verifications and continuations flush as before.
+5. Finalize: status `stopped`, summary = last observation, `task.cancelled` event.
 
 Live tasks never complete on their own — stopping is the only exit besides a crash.
 
@@ -219,10 +297,13 @@ Live tasks never complete on their own — stopping is the only exit besides a c
   observation / event counts, interval + next-tick estimate, fleet cards with injection
   buttons, filtered event terminal; v1.0.6 adds **Pause/Resume** buttons, pending
   **approval cards** (Allow/Deny + optional deny feedback), **prompt cards**
-  (answer/cancel) and the **event-queue panel** (multi-event mode).
+  (answer/cancel) and the **event-queue panel** (multi-event mode); v1.0.14 adds
+  **alert cards** (OK-dismiss) and live `event.*` lifecycle records in the stream.
 - Task Preview: same task view as goal tasks (2.5 s poll while active + SSE timeline)
-  with the same v1.0.6 additions (pause/resume, approvals, prompts, queue).
+  with the same additions (pause/resume, approvals, prompts, queue, alerts).
 - Key events: `task.waiting` (7), `observer.scheduled_tick` (9), `observer.event_wake`
   (5), `observer.feedback_applied` (3), `subgoal.created` (3), `env.server.*` (2–4);
-  v1.0.6: `task.paused` (2), `task.resumed` (3), `tool.approval.*` (2–3),
-  `live.event.*` (6–7).
+  v1.0.6: `task.paused` (2), `task.resumed` (3), `tool.approval.*` (2–3);
+  v1.0.14: the **`event.*` lifecycle family** (`event.received/.admitted/.queued/
+  .processing/.completed/.rejected/.failed/.cancelled`, priority 5–8) — the old
+  `live.event.*` types were retired (see [Events](events.md)).

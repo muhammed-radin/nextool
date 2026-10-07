@@ -64,8 +64,10 @@ protocol as every other event:
   alert lines, likewise backed by `GET /api/prompts` polls.
 - `task.paused` / `task.resumed` — flip the Pause/Resume buttons and the sky-blue
   `paused` status chip.
-- `live.event.queued` / `.processing` / `.processed` / `.dropped` — the event-queue
-  panels (multi-event mode). The queue state itself also lives in the task's persisted
+- `event.queued` / `.processing` / `.completed` / `.rejected` / `.failed` / `.cancelled`
+  — the v1.0.14 event-lifecycle family powering the event-queue panels (multi-event
+  mode); they replace the retired v1.0.6 `live.event.*` types through the same
+  transport. The queue state itself also lives in the task's persisted
   state (`state.eventQueue`), so a refresh/reconnect restores it — the SSE stream is
   only the push channel.
 

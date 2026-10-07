@@ -3,14 +3,14 @@
  */
 import crypto from 'node:crypto';
 import { db } from '@/lib/db';
-import { emitEvent, getMetrics } from '../eventbus';
+import { emitEvent, emitEventLifecycle, getMetrics } from '../eventbus';
 import { getSettings } from '../settings';
 import { getGlobalLiveState } from '../environment';
 import { runTask, type TaskRunHandle, type WakePayload } from './loop';
 import { clampToLimit } from '../config-limits';
 import { combineInstructions, type InstructionsInput } from '../instructions';
 import { cancelPendingApprovalsForTask, listPendingApprovals } from '../approval';
-import { cancelPendingChoicesForTask, cancelPendingConfirmationsForTask, cancelPendingPromptsForTask } from '../tools/sandbox-interactive';
+import { cancelPendingAlertsForTask, cancelPendingChoicesForTask, cancelPendingConfirmationsForTask, cancelPendingPromptsForTask } from '../tools/sandbox-interactive';
 import { cancelPendingVerificationsForTask } from '../verification';
 import { cancelPendingLimitContinuationsForTask } from '../limit-continuation';
 import type {
@@ -165,6 +165,15 @@ export async function stopTask(taskId: string): Promise<TaskDetail | null> {
   if (handle) {
     handle.stopFlag.stopped = true;
     handle.abortController.abort();
+    // v1.0.14 §31 — a stopping task never keeps pending events: every inbox
+    // event is CANCELLED observably, then the in-memory queue is dropped.
+    for (const pending of handle.inbox) {
+      emitEventLifecycle({
+        taskId, eventId: pending.id, eventType: pending.type, state: 'cancelled',
+        reason: 'Task stopped by user — pending event cancelled.', priority: 6,
+      });
+    }
+    handle.inbox.length = 0;
     const event: WakePayload = {
       reason: 'event',
       event: {
@@ -182,6 +191,8 @@ export async function stopTask(taskId: string): Promise<TaskDetail | null> {
   // v1.0.6 — a stopping task never keeps interactive resources pending.
   // v1.0.8 §1.4 — pending confirmations resolve FALSE (never true).
   cancelPendingApprovalsForTask(taskId);
+  // v1.0.14 §20 — pending interactive alerts auto-dismiss on stop.
+  cancelPendingAlertsForTask(taskId);
   cancelPendingPromptsForTask(taskId);
   cancelPendingConfirmationsForTask(taskId);
   // v1.0.13 — pending choice questions resolve null (never a fabricated option).
@@ -279,7 +290,15 @@ export async function resumeTask(taskId: string): Promise<TaskDetail | null> {
   return getTaskDetail(taskId);
 }
 
-/** Inject a runtime event into a task. Wakes live mode when priority <= 5. */
+/** v1.0.14 §5/§1 — inject a runtime event into a task. Events are
+ *  FIRST-CLASS Live triggers: EVERY injected event wakes a waiting Live loop
+ *  immediately regardless of its priority (the old priority<=5 gate is gone —
+ *  priority is ordering/metadata only and must never silently filter an
+ *  event away). Each injection also emits the canonical event lifecycle
+ *  (received → admitted / rejected) so admission is observable.
+ *  Without "Read & Act All Events" there is no backlog: while a previous
+ *  event is still pending admission, later events are REJECTED with an
+ *  observable reason instead of silently queueing (§2.2). */
 export async function injectEvent(
   taskId: string,
   type: string,
@@ -295,13 +314,33 @@ export async function injectEvent(
     data: payload,
     priority: Math.min(Math.max(Math.round(priority), 1), 9),
   });
+  emitEventLifecycle({ taskId, eventId: event.id, eventType: event.type, state: 'received' });
   const handle = runtimeState().handles.get(taskId);
-  if (handle && event.priority <= 5 && !handle.stopFlag.stopped) {
-    // v1.0.6 §10.2 — the event ALWAYS lands in the handle inbox (nothing is
-    // lost while the loop is busy/paused/waiting); the wake just interrupts
-    // the wait so the loop drains the inbox at the next safe point.
+  if (handle && !handle.stopFlag.stopped) {
+    // v1.0.14 §2.2 — queueing disabled and an action is RUNNING (or another
+    // event is still pending): reject this one observably (no hidden backlog
+    // is allowed to form). While PAUSED the documented retention behavior
+    // (§11.4) still applies — user messages must never be lost during an
+    // operator pause.
+    if (handle.queueingDisabled && !handle.pauseFlag.paused && (handle.actionRunning === true || handle.inbox.length >= 1)) {
+      const reason = 'Live action already running and Read & Act All Events is disabled.';
+      emitEventLifecycle({
+        taskId, eventId: event.id, eventType: event.type, state: 'rejected', reason,
+        priority: 6,
+      });
+      return event;
+    }
+    // v1.0.6 §10.2 — the event lands in the handle inbox (nothing is lost
+    // while the loop is busy/paused/waiting); the wake interrupts the wait so
+    // the loop reacts IMMEDIATELY (v1.0.14 §1 — never wait for the interval).
     handle.inbox.push(event);
+    emitEventLifecycle({ taskId, eventId: event.id, eventType: event.type, state: 'admitted' });
     handle.wake?.({ reason: 'event' });
+  } else if (handle?.stopFlag.stopped) {
+    emitEventLifecycle({
+      taskId, eventId: event.id, eventType: event.type, state: 'rejected',
+      reason: 'Task is stopped.', priority: 6,
+    });
   }
   return event;
 }

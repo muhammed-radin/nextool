@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.13** — release name: *"THE OPERATOR CONSOLE — single-user self-hosted architecture, FS Inspector (VFS + real FS), super-powered MCP client with customizable auth, verification latch, subtool API, await alert()/askForUserAsChoice(), safety-limit continuation"* — see the [v1.0.13 release page](release-1.0.13.md) |
-| **Model version** | **llm-core 1.0.0** (provider-served, NOT retrained — releases add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.3** since v1.0.12 — MCP/VFS/identity-aware 447-example curriculum; 1.0.2 in v1.0.11, 1.0.1 in v1.0.10). The UI always reads the version dynamically — never hard-coded. |
+| **Application version** | **1.0.14** — release name: *"THE LIVELY AI — event-driven Live Mode (events are first-class triggers, immediate wake, per-task Read & Act All Events queue, event admission/rejection lifecycle), AskSelf + AskForUser tools, Limitations control page with Standard/Unrestricted presets, fully interactive Tool Editor test runtime (await alert/confirm/askForUserAsChoice/prompt with advanced input types), production Assistant chat experience, real-directory VFS/"* — see [What's new in v1.0.14](#whats-new-in-v1014) and the [v1.0.13 release page](release-1.0.13.md) for history |
+| **Model version** | **llm-core 1.0.0** (provider-served, NOT retrained — releases add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.3** since v1.0.12 — MCP/VFS/identity-aware 447-example curriculum; unchanged in v1.0.14 — the app release does NOT change the model version; 1.0.2 in v1.0.11, 1.0.1 in v1.0.10). The UI always reads the version dynamically — never hard-coded. |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
@@ -24,13 +24,13 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | --- | --- | --- |
 | Getting Started | [Getting Started](getting-started.md) | Clone → run: prerequisites, install, env, first task, first live task, first trained model. |
 | Getting Started | [Installation](installation.md) | Detailed setup, dependencies, first-boot verification, install troubleshooting. |
-| Getting Started | [Configuration](configuration.md) | Every setting field with type, default, min/max; per-task config; **v1.0.8 central configuration-limits.json architecture** (single authoritative limits file, startup validation, self-host customization); v1.0.7 tool timeout, application reset and maintenance cleanup. |
+| Getting Started | [Configuration](configuration.md) | Every setting field with type, default, min/max; per-task config; **v1.0.8 central configuration-limits.json architecture** (single authoritative limits file, startup validation, self-host customization); **v1.0.14 the Limitations page** (console → More → Limitations: render/save/export/import the limits JSON, Standard/Unrestricted presets, runtime hot reload); v1.0.7 tool timeout, application reset and maintenance cleanup. |
 | Getting Started | [Project Structure](project-structure.md) | Every directory and file explained, with dependencies. |
-| Architecture | [Architecture](architecture.md) | Full-stack diagram, Mermaid component map, end-to-end data flow. |
+| Architecture | [Architecture](architecture.md) | Full-stack diagram, Mermaid component map, end-to-end data flow; **v1.0.14 event-driven Live Mode state machine + access boundaries (real fs ↔ VFS/ ↔ mcp/restricted)**. |
 | Architecture | [Main](main.md) | Orchestrator responsibilities, lifecycle, Goal vs Live. |
 | Architecture | [Planner](planner.md) | Plan decomposition, parallel groups, fallback, events; **v1.0.10 planner modes: `pre-plan` + `one-by-one`** (per-task override, single-step contract, repetition guard); **v1.0.11 pre-plan failure recovery** (frozen main plan, recovery subgoal with its own pre-plan, bounded attempts, state-aware resume). |
 | Architecture | [Observer](observer.md) | Interpretation rules and goal verification (LLM + heuristic). |
-| Architecture | [Events](events.md) | Every emitted event type with priority, payload and source. |
+| Architecture | [Events](events.md) | Every emitted event type with priority, payload and source; **v1.0.14 the `event.*` lifecycle family (received/admitted/queued/processing/completed/rejected/failed/cancelled — the retired v1.0.6 `live.event.*` types)**. |
 | Architecture | [Scheduler](scheduler.md) | Live wait/wake machinery, wake sources, repair passes. |
 | Architecture | [Runtime](runtime.md) | Task lifecycle (incl. `awaiting_approval` / `paused` — v1.0.6), limits, timeouts, cancellation, error codes. |
 | Architecture | [Security](security.md) | Sandbox boundaries: host filesystem isolation, Virtual FS, network policy, module allowlists, approval, honest limitations (v1.0.6). |
@@ -42,9 +42,9 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | AI Core | [Evaluation](evaluation.md) | Pre-engine evaluation notes and the manual procedure (kept for history). |
 | AI Core | [Benchmarks](benchmarks.md) | The real `tool-selection` benchmark: model keys, split preference, exact metric definitions, history. |
 | Modes | [Goal Mode](goal-mode.md) | Full lifecycle with sequence diagram and a real example. |
-| Modes | [Live Mode](live-mode.md) | Activation, intervals, event-driven wake, multi-event queue (v1.0.6), pause/resume, feedback, stopping. |
-| Tools | [Tools](tools.md) | Writing tools: definitions (incl. `nodejs` and the v1.0.11 `freedom-node` environments, metadata, `autoExecute`), handler kinds, registration paths (incl. Tool IDE), JSON export/import (v1.0.4, nodejs + autoExecute round trip), full example. |
-| Tools | [Tool Development](tool-development.md) | The Tool IDE: environments (`js-function` + `nodejs` with Virtual FS, controlled network, virtual child_process — v1.0.6; **`freedom-node` — intentionally unrestricted, configuration-gated — v1.0.11**), metadata editor, schema form, Monaco toggle, testing, editor source-sync, worked examples. |
+| Modes | [Live Mode](live-mode.md) | Activation, **v1.0.14 event-driven lifecycle (immediate wake, initial execution, per-task event queue, event admission lifecycle)**, pause/resume, feedback, stopping. |
+| Tools | [Tools](tools.md) | Writing tools: definitions (incl. `nodejs` and the v1.0.11 `freedom-node` environments, metadata, `autoExecute`), handler kinds, **v1.0.14 `ask.self` (AskSelf) + `ask.user` (AskForUser) built-ins**, registration paths (incl. Tool IDE), JSON export/import (v1.0.4, nodejs + autoExecute round trip), full example. |
+| Tools | [Tool Development](tool-development.md) | The Tool IDE: environments (`js-function` + `nodejs` with **the real-directory `VFS/`** — v1.0.14, controlled network, virtual child_process — v1.0.6; **`freedom-node` — intentionally unrestricted, configuration-gated — v1.0.11**), metadata editor, schema form, Monaco toggle, **v1.0.14 fully interactive test runtime + prompt() advanced input types**, editor source-sync, worked examples. |
 | Tools | [Tool Runtime](tool-runtime.md) | Async execution, parallel groups, timeouts, failure/cancel states; v1.0.6 approval gate, `nodejs` runner + `/api/tools/environments` capability source. |
 | Data | [Memory](memory.md) | Persistent Memory vs Live State — storage, retrieval, lifecycle. |
 | Data | [Live State](live-state.md) | Virtual server fleet, runtimeStatus, counters. |
@@ -52,7 +52,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Data | [History](history.md) | HistoryEntry records, retention, querying. |
 | Realtime | [Realtime](realtime.md) | SSE protocol, connection states, backoff policy, frontend wiring. |
 | API | [API Reference](api.md) | Every endpoint: method, path, request/response, errors, curl. |
-| Frontend | [Frontend](frontend.md) | SPA shell, 16 views, real brand logo, docs-viewer link resolution (v1.0.5), approval/prompt/pause controls (v1.0.6), dynamic terminal/checklist, JSON tree, zustand + providers. |
+| Frontend | [Frontend](frontend.md) | SPA shell, real brand logo, docs-viewer link resolution (v1.0.5), approval/prompt/pause controls (v1.0.6), dynamic terminal/checklist, JSON tree, zustand + providers; **v1.0.14 Limitations + Assistant views (glassmorphism chat with the NexTool robot) + interactive Tool Editor test panel**. |
 | Frontend | [UI Design System](ui.md) | Blue-gradient glassmorphism layers, typography, JSON-tree theme, do-not rules. |
 | Frontend | [Mobile & Responsive](mobile.md) | Bottom nav, safe areas, breakpoints, touch targets, priority layouts. |
 | Operations | [Deployment](deployment.md) | Env vars, standalone build/start, proxies, CLI availability, model/icon artifacts. |
@@ -60,12 +60,84 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Operations | [Testing](testing.md) | `bun test` unit suite (371 tests across 11 files) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
-| Reference | [Release 1.0.13](release-1.0.13.md) | THE OPERATOR CONSOLE: single-user product model, environment rules, FS Inspector file manager, MCP customizable auth/OAuth, denial escalation, continuation, tool runtime interactivity. |
+| Reference | [Release 1.0.14](release-1.0.14.md) | THE LIVELY AI (current release page): event-driven Live Mode, per-task Read & Act All Events queue + event lifecycle, AskSelf/AskForUser, Limitations page + presets, interactive Tool Editor test runtime, Assistant chat, real-directory VFS/. |
+| Reference | [Release 1.0.13](release-1.0.13.md) | THE OPERATOR CONSOLE (historical v1.0.13 page): single-user product model, environment rules, FS Inspector file manager, MCP customizable auth/OAuth, denial escalation, continuation, tool runtime interactivity. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
 
-## What's new in v1.0.11
+## What's new in v1.0.14
+
+**One-line summary:** THE LIVELY AI — Live Mode becomes fully **event-driven** (events
+are first-class triggers with immediate wake, initial execution on startup, a per-task
+"Read & Act All Events" queue drained continuously, and an observable
+`event.*` admission lifecycle), the **AskSelf + AskForUser** builtin tools, the
+**Limitations** control page (render/save/import/export the central limits JSON with
+Standard/Unrestricted presets and runtime hot reload), a **fully interactive Tool
+Editor test runtime** (`await alert/confirm/askForUserAsChoice/prompt` wait for the
+operator, with 14 advanced prompt input types incl. file upload), the production
+**Assistant** chat experience (glassmorphism + the NexTool robot), and the **VFS
+becomes a real `VFS/` directory** (automatic one-time migration from `data/vfs`).
+llm-core stays 1.0.0 (provider-served, never retrained); the trained classifier
+generation stays 1.0.3.
+
+- **Event-driven Live Mode** — EVERY injected event wakes a live task IMMEDIATELY
+  regardless of priority (the old priority ≤ 5 wake gate is REMOVED — priority is
+  ordering/metadata only); the first cycle runs on startup (no first-interval wait);
+  interval triggers are message-less while event triggers carry the FULL event into the
+  decision context (`CONTEXT.trigger`); `user.message` is the live conversation channel
+  and `user.feedback` runs an immediate correction cycle. Without "Read & Act All
+  Events" there is NO backlog — extra events while an action runs are REJECTED with the
+  observable reason "Live action already running and Read & Act All Events is
+  disabled."; with it, each task's queue is drained continuously until empty. Stopping
+  cancels pending/queued events observably; failed queued events never deadlock the
+  queue. See [Live Mode](live-mode.md) and [Architecture](architecture.md).
+- **Event lifecycle family** — `event.received / .admitted / .queued / .processing /
+  .completed / .rejected / .ignored / .failed / .cancelled` make every admission
+  decision observable in Events / Task Preview / Live Monitor. The v1.0.6
+  `live.event.queued/processing/processed/dropped` types are RETIRED (replaced by the
+  family). See [Events](events.md#the-event-lifecycle-family-v1014).
+- **AskSelf + AskForUser** — new builtin tools: `ask.self` generates/derives content
+  from NexTool itself (`{ success, opinion }`; usable as a subtool via
+  `context.tools.call`), `ask.user` pauses the tool until the operator answers
+  (`{ success, question, answer }` — `success: false` on timeout/cancel; never
+  fabricates answers). See [Tools](tools.md#askself-askself-and-askforuser-askuser--v1014).
+- **Limitations page** — console → More → Limitations: loads the complete
+  configuration-limits JSON, renders every property with type/min/max/default/unit/
+  enum/nullable metadata, saves via `PUT /api/config/limits` (validate-before-write,
+  atomic file replace, hot reload ≤ 2 s), Export/Import JSON (validated server-side),
+  the **Standard/Default** preset, the **⚠ Complete Unrestricted** preset (visually
+  warned + confirm dialog — security boundaries can never be weakened) and a Raw JSON
+  editor mode. See [Configuration](configuration.md#the-limitations-page-v1014).
+- **Interactive Tool Editor test runtime** — `await alert()/confirm()/
+  askForUserAsChoice()/prompt()` now WAIT for the operator in the Tool Editor test too
+  (no auto-resolve; the test panel renders interaction cards and polls them);
+  `prompt()` accepts advanced typed specs (text/textarea/number/email/password/url/
+  search/date/time/datetime-local/month/week/color/file — `file` resolves to a JSON
+  string `{ name, mimeType, size, content? }`, content only for small files ≤ 256 KB
+  client-capped, 700 KB server compose cap); `alert()` is now an interactive OK dialog
+  (pauses the tool; 120 s auto-dismiss) served by `GET/POST /api/alerts`. See
+  [Tool Development](tool-development.md#alertmessage-promptmessage-defaultvalue-and-confirmmessage--runtime-interaction).
+- **Assistant page** — the production chat experience (console view `assistant`):
+  glassmorphism chat, the NexTool robot centerpiece with runtime-driven expressions,
+  progress derived from real task events, humanized observations, interaction cards
+  answered inline — no code/JSON internals rendered. See [Frontend](frontend.md#v1014-frontend-changes).
+- **Real-directory VFS/** — the shared VFS root is now the real host directory `VFS/`
+  inside the project storage root; the legacy `data/vfs` location is migrated once
+  automatically on first VFS use (never deletes/overwrites; logged
+  `[vfs] v1.0.14 migration`); the sandbox is unchanged (lexical validation +
+  per-component lstat walk + symlink refusal + realpath-pinned root); VFS limits are
+  enforced from the central config (Limitations-page changes take effect at runtime);
+  the terminal stays virtual (`child_process` isolation); freedom-node can access
+  `VFS/` because it physically exists in the host fs while mcp/restricted environments
+  stay VFS-only. See [Tool Development](tool-development.md#the-virtual-file-system-v106)
+  and [Architecture → Access boundaries](architecture.md#access-boundaries-real-fs--vfs--mpcrestricted).
+- Also in v1.0.14: the FS Inspector file listing overflow fix (§36 — true
+  `overflow-y-auto` container), `tool.user_alert.dismissed` + the `/api/alerts` route,
+  and `tool.user_alert` becoming an interactive dialog that pauses the tool until
+  dismissed.
+
+### What's new in v1.0.11
 
 **One-line summary:** THE EMPOWERMENT — pre-plan tasks recover from failed steps
 instead of blind-retrying once and hard-stopping (frozen main plan → recovery subgoal
@@ -160,7 +232,9 @@ executions. llm-core stays 1.0.0 (provider-served, never retrained).
   runtime) until the user answers or cancels in the console UI, or a 120 s timeout
   returns `null`. Standard globals (timers included, deadline-bounded) are documented
   per environment. In test mode `alert` resolves immediately and `prompt` returns its
-  default (or `null`) — tests never hang. See [Tool Development](tool-development.md).
+  default (or `null`) — tests never hang. **(Changed in v1.0.14: ALL interactions are
+  now interactive in every mode incl. the Tool Editor test — the runtime above is the
+  historical v1.0.6 behavior.)** See [Tool Development](tool-development.md).
 - **Virtual File System (VFS)** — a real, persistent **per-tool** filesystem backed by
   the `VirtualFile` SQLite table (never the host fs): scaffold `/input /output /tmp
   /data /workspace`, a Node-shaped `fs` module (`readFile`, `writeFile`, `mkdir`,
@@ -168,7 +242,9 @@ executions. llm-core stays 1.0.0 (provider-served, never retrained).
   + `*Sync` + `fs.usage()`), path-safety with decode-before-validate, and node-shaped
   errors. Escape attempts fail with
   `VirtualFSAccessError: Access to the NexTool host filesystem is not permitted.`
-  Limits: 512 KiB per file, 8 MiB total, 500 entries, path ≤ 512 chars, depth ≤ 24.
+  **(Changed since: v1.0.12 made it ONE shared runtime-owned store; v1.0.14
+  made the root the REAL `VFS/` directory with a one-time automatic migration from
+  `data/vfs`.)** Limits: 512 KiB per file, 8 MiB total, 500 entries, path ≤ 512 chars, depth ≤ 24.
   Tool IDE tests run in an **ephemeral scratch workspace** wiped after the run. See
   [Tool Development](tool-development.md) and [Security](security.md).
 - **Virtual Node.js environment expansion** — `nodejs` tools gain context-provided
@@ -196,9 +272,11 @@ executions. llm-core stays 1.0.0 (provider-served, never retrained).
   arriving while busy/paused/waiting land in a durable handle inbox, queue in task
   state (survives refresh/reconnect), and get processed **one-by-one** ordered by
   priority then arrival. Queue cap 50 (lowest priority dropped first, drops always
-  recorded), 16 KiB payload cap, `live.event.queued/processing/processed/dropped`
-  events, queue visible in Live Monitor + Task Preview. Distinct from
-  `parallelToolCalls`. See [Live Mode](live-mode.md).
+  recorded), 16 KiB payload cap, queue visible in Live Monitor + Task Preview. Distinct
+  from `parallelToolCalls`. **(Changed in v1.0.14: the queue drains continuously with
+  NO interval waits, the `live.event.*` event types were replaced by the `event.*`
+  lifecycle family, and without the switch events are REJECTED observably instead of
+  silently kept.)** See [Live Mode](live-mode.md).
 - **Pause / resume live tasks** — `POST /api/tasks/{id}/pause` and `/resume`. Pause is
   not stop: task/plan/subgoal/context/Live State/event queue/history are preserved and
   only **new** autonomous actions stop (the current atomic tool execution finishes

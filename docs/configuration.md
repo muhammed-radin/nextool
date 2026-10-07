@@ -362,10 +362,13 @@ These bound both the Settings defaults and per-task configuration values —
 ### Frontend / backend / runtime agreement (§8)
 
 - **Settings UI:** `GET /api/config/limits` exposes the resolved metadata; numeric inputs
-  derive min/max/default/unit from it — never duplicated in React components.
+  derive min/max/default/unit from it — never duplicated in React components. Since
+  v1.0.14 the **Limitations** page additionally SAVEs the file (`PUT /api/config/limits`)
+  and applies presets.
 - **Backend:** `settings.ts` clamps and `schemas.ts` zod bounds resolve the same limits.
 - **Runtime:** network, VFS, execution and child-process enforcement resolve the same
-  limits live (getter per operation, no cached stale snapshot).
+  limits live (getter per operation, no cached stale snapshot) — a Limitations-page save
+  therefore takes effect at runtime within ≤ 2 s without a restart.
 - The Task Console's execution-limits fields read the same metadata
   (`task.*` properties).
 
@@ -375,6 +378,43 @@ These bound both the Settings defaults and per-task configuration values —
 bun run cli config limits     # print the resolved limits
 bun run cli config validate   # validate configuration-limits.json
 ```
+
+### The Limitations page (v1.0.14)
+
+Since v1.0.14 the limits file is no longer host-edit-only: the console ships a
+**Limitations** page (console → **More → Limitations**) — a complete control surface for
+`config/configuration-limits.json` (spec §17/§18):
+
+- **Full metadata rendering** — the page loads the complete configuration-limits JSON
+  (`GET /api/config/limits`) and renders EVERY property with its
+  `type / min / max / default / unit / enum / nullable` metadata — structured editors
+  per section (network · vfs · fs · execution · childProcess · task), never a hand-built
+  subset.
+- **Raw JSON editor mode** — a toggle switches the page to the raw JSON text of the
+  whole limits file (with the same validate-before-save pipeline).
+- **Save (§17.2/§18.1)** — writes via **`PUT /api/config/limits`**: the payload is
+  validated server-side (structure, required fields, types, min/max relationships)
+  BEFORE anything is written; only a fully valid object replaces the file (atomic
+  temp-file + rename), the loader cache is invalidated and the change hot-reloads into
+  the REAL runtime within ≤ 2 s — VFS caps, execution ceilings, network policy and task
+  limits all follow without a restart. Invalid payloads fail with 400
+  `CONFIGURATION_LIMITS_INVALID` listing every issue; the current file is untouched.
+- **Export / Import JSON** — the page downloads the current limits JSON and imports a
+  previously exported file; import runs through the SAME server-side validation —
+  nothing is overwritten until validation succeeds.
+- **Standard / Default preset** — a shipped byte-exact snapshot of the shipped
+  configuration (`GET /api/config/limits?preset=standard`, generated programmatically
+  from the real file). Applying it restores every default.
+- **⚠ Complete Unrestricted preset** — `?preset=unrestricted`: every numeric property at
+  its maximum, capability booleans open, `fs.restricted: false`. The UI renders a
+  persistent warning banner AND a confirmation dialog before applying. Even this preset
+  cannot weaken the security boundaries (§7.10): it changes CONFIGURED LIMITS only —
+  never host filesystem, host process or sandbox-escape privileges (the sandbox
+  architecture is not configurable).
+
+Error reporting: `UNKNOWN_PRESET` (unknown `?preset=` value),
+`CONFIGURATION_LIMITS_INVALID` (validation), `LIMITS_WRITE_FAILED` (host file not
+writable). See [API](api.md#get-apiconfiglimits-v108).
 
 ## Tool execution timeout (v1.0.7)
 

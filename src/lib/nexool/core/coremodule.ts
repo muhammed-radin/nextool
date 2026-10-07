@@ -17,6 +17,11 @@ export interface CoreContextBundle {
   history?: Record<string, unknown>[];
   stateSummary?: string;
   lastObservation?: string;
+  /** v1.0.14 §14 — structured Live-cycle trigger: `{ type: 'interval' }` for
+   *  a message-less scheduled check, or `{ type: 'event', event: { id, type,
+   *  source, message, data, priority, createdAt } }` when an event woke the
+   *  Live loop. The AI sees WHAT happened, not just that it was woken. */
+  trigger?: Record<string, unknown>;
 }
 
 export interface DecideInput {
@@ -84,6 +89,8 @@ function buildUserMessage(input: DecideInput): string {
       history: (ctx.history ?? []).slice(-5),
       state: ctx.stateSummary,
       lastObservation: ctx.lastObservation,
+      // v1.0.14 §14 — the Live trigger (interval vs full event body).
+      trigger: ctx.trigger,
     },
     reasoningLevel: input.reasoningLevel,
   });

@@ -796,8 +796,13 @@ function FilesTab({
         </div>
       ) : null}
 
-      {/* listing — mobile gets a taller viewport (55vh) so the file tree is usable */}
-      <ScrollArea className="glass-card max-h-[55vh] rounded-lg border border-white/[0.06] sm:max-h-[26rem] md:max-h-96">
+      {/* listing — v1.0.14 §36: TRUE internal vertical scrolling. The file
+          list scrolls INSIDE this container (overflow-y auto) on every
+          breakpoint — it can never overflow the glass card or grow the page.
+          Radix ScrollArea with only max-h does not bound its viewport, so a
+          plain bounded scroller is used here deliberately. Horizontal
+          overflow is handled by truncating long names (title tooltip). */}
+      <div className="glass-card nextool-scroll max-h-[55vh] overflow-x-hidden overflow-y-auto rounded-lg border border-white/[0.06] sm:max-h-[26rem] md:max-h-96">
         <Table>
           <TableHeader>
             <TableRow className="border-white/[0.06] hover:bg-transparent">
@@ -903,7 +908,7 @@ function FilesTab({
                           <DropdownMenuItem onClick={() => void mutation(async () => { await inspectorPost(mode, { op: 'duplicate', paths: [full] }); }, 'Duplicated')}>
                             <Copy className="size-3.5" aria-hidden /> Duplicate
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={copyPath}>
+                          <DropdownMenuItem onClick={() => copyPath(entry)}>
                             <Copy className="size-3.5" aria-hidden /> Copy path
                           </DropdownMenuItem>
                           {entry.kind === 'file' ? (
@@ -934,7 +939,7 @@ function FilesTab({
               : null}
           </TableBody>
         </Table>
-      </ScrollArea>
+      </div>
 
       <input
         ref={uploadInputRef}

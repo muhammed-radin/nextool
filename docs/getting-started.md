@@ -67,14 +67,16 @@ bun run dev           # next dev -p 3000, logs tee'd to dev.log
 ```
 
 Open `http://localhost:3000`. The console is a single-page app — the only server route is
-`/`; all 16 screens (Dashboard, Task Console, Live Monitor, Tools, Tool IDE, Training,
-Benchmark, Memory, Live State, Events, History, Models, Datasets, Documentation,
-Settings, Task Preview) are client-side views inside that one page.
+`/`; all 20 screens (Dashboard, Task Console, Live Monitor, Tools, Tool IDE, Connectors,
+Training, Benchmark, Memory, Live State, FS Inspector, Events, History, Models, Datasets,
+Documentation, Settings, Limitations, Assistant, Task Preview) are client-side views
+inside that one page.
 
-On first use the tool registry seeds 15 built-in tools into the `ToolRecord` table
-(`server.*` virtual fleet tools, `system.info`, `math.evaluate`, `memory.*`,
-`notification.send`, `image.generate`, and utility tools). Seeding happens automatically
-on the first registry query.
+On first use the tool registry seeds 33 built-in tools into the `ToolRecord` table — the
+17 `BUILTIN_TOOLS` (`server.*` virtual fleet tools, `system.info`, `math.evaluate`,
+`memory.*`, `notification.send`, `image.generate`, utility tools, and the v1.0.14
+`ask.self`/`ask.user`) plus the 16 `fs.*` tools over the shared VFS. Seeding happens
+automatically on the first registry query.
 
 ## Verify the runtime is up
 
@@ -129,13 +131,17 @@ Live Mode is an explicit opt-in — the runtime never auto-switches a task into 
 1. In **Task Console**, select mode **live**, keep the amber confirmation switch ON.
 2. Use a monitoring-flavored request, e.g. `Monitor the production API servers and inform
    me if anything becomes unhealthy`.
-3. Submit. The task runs one observation cycle, then parks in `waiting` and schedules a
-   tick every `liveIntervalMs` (default 60000 ms).
+3. Submit. Since v1.0.14 the task runs its first observation cycle IMMEDIATELY on
+   startup, then parks in `waiting` — from there it reacts to EVERY injected event
+   instantly (any priority) plus a scheduled tick every `liveIntervalMs`
+   (default 60000 ms).
 
 To see event-driven automation immediately, open **Live State** (or **Live Monitor**),
 press **Crash** on a server. The environment broadcast wakes the live task instantly, a
 recovery subgoal is created, and the runtime runs health → restart → verify until the
-server is healthy again.
+server is healthy again. You can also send the task a message from Task Preview
+("Send event" → `user.message`) — it is the live conversation channel and gets an
+immediate observe/act cycle.
 
 ## Train + benchmark + export your first model
 

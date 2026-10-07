@@ -156,7 +156,14 @@ export interface QueuedLiveEvent {
   message: string;
   priority: number;
   queuedAt: string;
-  status: 'queued' | 'processing' | 'processed' | 'dropped';
+  /** v1.0.14 §33 — the original event source travels with the queue entry. */
+  source?: string;
+  /** v1.0.14 — full lifecycle: queued → processing → processed, with
+   *  failed (cycle threw), cancelled (task stopped) and dropped/rejected
+   *  (admission refused) terminal states. */
+  status: 'queued' | 'processing' | 'processed' | 'dropped' | 'failed' | 'cancelled';
+  /** v1.0.14 — observable reason when the event did not complete normally. */
+  statusReason?: string;
   data?: Record<string, unknown>;
 }
 

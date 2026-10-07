@@ -115,6 +115,46 @@ export function subscribe(fn: (e: NexToolEvent) => void): () => void {
   };
 }
 
+// ---------- event lifecycle (v1.0.14 §12) ----------
+
+/** v1.0.14 — canonical Live-event lifecycle states. Every injected event is
+ *  received → admitted (or rejected/ignored) → queued (queue mode) →
+ *  processing → completed (or failed/cancelled). The lifecycle is emitted as
+ *  first-class `event.*` runtime events so admission decisions are observable
+ *  in Events, Task Preview and Live Monitor — never silent. */
+export type EventLifecycleState =
+  | 'received'
+  | 'admitted'
+  | 'queued'
+  | 'processing'
+  | 'completed'
+  | 'rejected'
+  | 'ignored'
+  | 'failed'
+  | 'cancelled';
+
+/** Emit one `event.<state>` lifecycle record for a Live trigger event.
+ *  Fire-and-forget (never throws, never blocks the scheduler). */
+export function emitEventLifecycle(opts: {
+  taskId?: string;
+  eventId: string;
+  eventType: string;
+  state: EventLifecycleState;
+  reason?: string;
+  extra?: Record<string, unknown>;
+  priority?: number;
+}): void {
+  const { taskId, eventId, eventType, state, reason, extra, priority } = opts;
+  void emitEvent({
+    taskId,
+    type: `event.${state}`,
+    source: 'runtime',
+    message: `Event ${state}: ${eventType}${reason ? ` — ${reason}` : ''}.`,
+    data: { eventId, eventType, lifecycle: state, ...(reason ? { reason } : {}), ...(extra ?? {}) },
+    priority: priority ?? 8,
+  });
+}
+
 /** Events seen in this process, newest last, optionally filtered by time. */
 export function recentEvents(sinceIso?: string, limit = 200): NexToolEvent[] {
   const list = state().recent;

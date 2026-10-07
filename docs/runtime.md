@@ -33,7 +33,7 @@ stateDiagram-v2
     awaiting_approval --> paused: POST /pause (approval stays unresolved)
     paused --> running: POST /resume (goal task)
     paused --> waiting: POST /resume (live task)
-    waiting --> running: tick or wake (priority ≤ 5)
+    waiting --> running: tick or event wake (ANY priority — v1.0.14)
     waiting --> stopped: stop requested
     completed --> [*]
     failed --> [*]
@@ -56,7 +56,7 @@ polls the detail every 2.5 s while a task is active and merges SSE events on top
 | Iterating | CoreModule decides, **approval gate (v1.0.6)**, tools execute (independent steps concurrently in capped parallel batches — v1.0.3), observer interprets, state persists. | `core.decision` (4), `tool.approval.required/allowed/denied` (2–3), `planner.parallel_batch` (5), `planner.partial_failure` (4), `tool.started/completed/…` (4–6), `observer.observed` (6) |
 | Awaiting approval (v1.0.6) | Task parked while the user decides on the pending tool. | `tool.approval.required` (2) → `tool.approval.allowed` (3) / `tool.approval.denied` (2) / `tool.approval.timeout` (2) + `tool.execution.blocked` (2) |
 | Paused (v1.0.6) | Suspended by the user; state preserved, no new autonomous actions. | `task.paused` (2) → `task.resumed` (3) |
-| Waiting (live) | Parked between cycles. | `task.waiting` (7), `observer.scheduled_tick` (9) |
+| Waiting (live) | Parked between cycles — event-driven since v1.0.14 (immediate wake, per-cycle deadline, observable `event.*` lifecycle). | `task.waiting` (7), `observer.scheduled_tick` (9), `observer.event_wake` (5), `event.*` lifecycle (5–8) |
 | Terminated | `FinalResult` written, status set. | `task.completed` / `task.failed` / `task.cancelled` (3) |
 
 ## Limits (resolved from the central configuration; per-task overrides clamped)

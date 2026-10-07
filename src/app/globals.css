@@ -298,3 +298,26 @@ main [class~="grid"] > * {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- v1.0.14 Assistant robot animations (§23.2) ---------- */
+
+@keyframes robot-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes robot-bob-fast {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+@keyframes robot-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+@keyframes robot-antenna-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.86); }
+}
+.robot-bob { animation: robot-bob 3.4s ease-in-out infinite; }
+.robot-bob-fast { animation: robot-bob-fast 1.6s ease-in-out infinite; }
+.robot-blink { transform-origin: center; animation: robot-blink 4.2s ease-in-out infinite; }
+.robot-antenna { animation: robot-antenna-pulse 2s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }

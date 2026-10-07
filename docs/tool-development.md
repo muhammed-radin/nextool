@@ -168,32 +168,58 @@ layer, so NexTool rejects it instead of faking it.
 
 ### alert(message), prompt(message, defaultValue?) and confirm(message) — runtime interaction
 
-These are **NexTool runtime functions**, not the browser's blocking dialogs:
+These are **NexTool runtime functions**, not the browser's blocking dialogs — and since
+**v1.0.14** ALL of them are **interactive in every runtime mode**, including the Tool
+Editor test:
 
 ```js
-await alert('Server recovery completed.');      // → emits tool.user_alert, resolves immediately
+await alert('Server recovery completed.');      // → v1.0.14: interactive OK dialog — PAUSES this tool
 const name = await prompt('Enter the server:'); // → PAUSES this tool until answered
 const ok = await confirm('Delete the files?');  // → v1.0.8: PAUSES this tool, ALWAYS boolean
 ```
 
 | Function | Behavior | Events |
 | --- | --- | --- |
-| `await alert(message)` | Emits a `tool.user_alert` runtime event (visible in Task Preview / Live Monitor / Events) and resolves immediately. Message ≤ 2000 chars. | `tool.user_alert` |
-| `await prompt(message, defaultValue?)` | Registers a pending prompt and pauses **only this tool** — the task loop, scheduler and other tools keep running. Resolves with the user's answer (≤ 4000 chars), `null` on cancel, or `null` after the **120 s timeout**. Message ≤ 2000 chars. | `tool.user_prompt.requested` → `tool.user_prompt.responded` |
-| `await confirm(message, options?)` **v1.0.8** | Registers a pending confirmation, shows the NexTool confirmation UI and pauses **only this tool**. **ALWAYS resolves to a boolean** — never `"yes"`/`"no"` strings. Cancellation, task stop or the **120 s timeout** resolve **`false`** (an unresolved confirmation is never treated as true). Optional `{ default?: boolean }` is the TEST-mode answer. | `tool.confirm.requested` → `tool.confirm.responded` |
+| `await alert(message)` | **v1.0.14 — an INTERACTIVE OK dialog.** Emits `tool.user_alert` and **pauses this tool** until the operator presses OK (or 120 s auto-dismiss, or task stop). Message ≤ 2 000 chars. Resolved through `GET/POST /api/alerts`; dismissal emits `tool.user_alert.dismissed`. *(changed in v1.0.14 — v1.0.6–v1.0.13 alert() resolved immediately without waiting)* | `tool.user_alert` → `tool.user_alert.dismissed` |
+| `await prompt(message \| spec, defaultValue?)` | Registers a pending prompt and pauses **only this tool** — the task loop, scheduler and other tools keep running. Resolves with the user's answer (≤ 4 000 chars), `null` on cancel, or `null` after the **120 s timeout**. Message ≤ 2 000 chars. Accepts a plain string OR a **structured spec object** (see below — v1.0.14). | `tool.user_prompt.requested` → `tool.user_prompt.responded` |
+| `await confirm(message, options?)` **v1.0.8** | Registers a pending confirmation, shows the NexTool confirmation UI and pauses **only this tool**. **ALWAYS resolves to a boolean** — never `"yes"`/`"no"` strings. Cancellation, task stop or the **120 s timeout** resolve **`false`** (an unresolved confirmation is never treated as true). Optional `{ default?: boolean }` — since v1.0.14 the test runtime waits for a real answer like production, so the default is a fallback for unattended expiry only. | `tool.confirm.requested` → `tool.confirm.responded` |
 
-While a prompt/confirm waits, the tool's execution deadline is **deferred** (neither the
+#### prompt() advanced input types (v1.0.14)
+
+The message argument can be a structured spec — `string | { message, type?, placeholder?, defaultValue? }` — with **14 input types**:
+
+```js
+const due  = await prompt({ message: 'Due date?', type: 'date', defaultValue: '2026-01-31' });
+const note = await prompt({ message: 'Incident notes', type: 'textarea', placeholder: 'What happened?' });
+const file = await prompt({ message: 'Attach the config file', type: 'file' }); // → JSON string
+const ok2  = await prompt({ message: 'Webhook URL', type: 'url', placeholder: 'https://…' });
+```
+
+| Aspect | Contract |
+| --- | --- |
+| Types | `text` (default), `textarea`, `number`, `email`, `password`, `url`, `search`, `date`, `time`, `datetime-local`, `month`, `week`, `color`, `file` — invalid types are rejected honestly. |
+| `placeholder` / `defaultValue` | Optional strings (≤ 200 / ≤ 4 000 chars) rendered by the interaction card. |
+| `type: 'file'` | The operator picks a file in the console/assistant card; the answer is a **JSON string** `{ name, mimeType, size, content? }`. `content` (base64) is attached ONLY for small files — ≤ 256 KiB is requested by the client, capped at 700 KB server-side during composition; larger files resolve with metadata only. |
+| Events | `tool.user_prompt.requested` carries `inputType`/`placeholder`; `tool.user_prompt.responded` carries `inputType`. |
+
+While a prompt/confirm/alert waits, the tool's execution deadline is **deferred** (neither the
 sandbox watchdog nor the executor timeout kills a legitimately waiting tool) and the full
 budget is **reset** once the interaction completes. The runtime is never frozen: at most
-this one Promise pends. The console UI renders pending prompts as answer/cancel cards and
-pending confirmations as **Confirm/Cancel cards** in Task Preview and Live Monitor; they
-are resolved through `POST /api/prompts` and `POST /api/confirmations`. Stopping the task
-flushes pending prompts with `null` and pending confirmations with **`false`**.
+this one Promise pends. The console UI renders pending prompts as answer/cancel cards,
+pending confirmations as **Confirm/Cancel cards** and pending alerts as **OK cards** in
+Task Preview and Live Monitor; they are resolved through `POST /api/prompts`,
+`POST /api/confirmations` and `POST /api/alerts`. Stopping the task flushes pending
+prompts with `null`, pending confirmations with **`false`** and pending alerts with an
+observable `tool.user_alert.dismissed`.
 
-**Test mode honesty**: in Tool IDE "Test Tool" runs (`context.mode: 'test'`), `alert`
-resolves immediately, `prompt` resolves with its default value (or `null`) and `confirm`
-resolves with its declared default (or the conservative `false`) — tests never hang
-waiting for interactive input that nobody can answer.
+**INTERACTIVE test runtime (v1.0.14 — changed):** `await alert()` / `confirm()` /
+`askForUserAsChoice()` / `prompt()` now WAIT for the operator in the Tool Editor test
+run too (`context.mode: 'test'` is no longer auto-resolved). The test panel renders the
+same interaction cards as production (prompt cards — including the typed inputs and the
+file chooser — confirm/alert/choice cards) and polls them until answered; no interaction
+auto-resolves, so what you test is exactly what production runs. *(v1.0.6–v1.0.13
+deprecated behavior: test runs resolved `alert` immediately, `prompt` with its default
+and `confirm`/choices with their defaults.)*
 
 ### askForUserAsChoice(message, choices, options?) — multiple-choice operator question (v1.0.13)
 
@@ -218,7 +244,7 @@ if (action === null) return { skipped: true }; // cancelled or 120 s timeout
 | Deadline | Same deferral model as prompt/confirm: the execution deadline is deferred while the question pends and reset after the answer. |
 | UI | One button per option (+ Cancel) in Live Monitor / Task Preview; resolved via `POST /api/choices`. |
 | Events | `tool.user_choice.requested` → `tool.user_choice.responded`. |
-| Test mode | Resolves immediately with `{ default }` when it matches an option, otherwise the FIRST option's value — tests never hang. |
+| Test mode | **Changed in v1.0.14 — interactive everywhere**: the Tool Editor test now waits for the operator to pick an option exactly like production (no default auto-resolution). |
 
 ### context.tools.call(name, params?) — the SUBTOOL API (v1.0.13)
 
@@ -514,15 +540,28 @@ review the function source before registering it. See
 `require('fs')` / `import fs from 'fs'` in a `nodejs` tool resolves to the NexTool
 **Virtual File System** (`src/lib/nexool/tools/vfs.ts` + `sandbox-fs.ts`) — a real,
 persistent filesystem that belongs to the tool runtime, never to the NexTool project or
-the host. Storage is the SQLite `VirtualFile` table; tool code has no path to anything
-else.
+the host.
+
+**v1.0.14 — the VFS is a REAL host directory.** The one shared VFS root is the genuine
+directory **`VFS/` inside the project storage root** (§24) — no longer a hidden data
+folder. On first VFS use the runtime performs a **one-time automatic migration** from
+the legacy `data/vfs` location (§24.5): existing entries are MOVED into `VFS/` (never
+deleted, never overwritten — a still-present legacy dir is left untouched and warned
+about) and the migration is logged (`[vfs] v1.0.14 migration: moved N entries …`).
+Everything else about the sandbox is unchanged: lexical validation, a per-component
+`lstat` walk, symlink refusal and a realpath-pinned root (below). Because `VFS/`
+physically exists in the host fs, `freedom-node` tools can reach the SAME tree at the
+real `VFS/` path — while `mcp`/restricted environments stay VFS-only (virtual paths,
+no host visibility). The virtual `child_process` operates on this tree through the
+sandbox's own restricted layer — a virtual terminal session, never a host shell.
 
 ### Lifecycle and isolation
 
 - **Persistent per tool** — each tool owns an isolated workspace (scoped by the tool
-  name). Files survive across executions and restarts (they are DB rows).
+  name). Files survive across executions and restarts (v1.0.14: real files under
+  `VFS/`; historically the SQLite `VirtualFile` table).
 - **Snapshot + write-through** — each execution loads a workspace snapshot and writes
-  through to the database as operations complete.
+  through to storage as operations complete.
 - **Concurrent executions are last-write-wins** — two simultaneous executions of the
   same tool each write their own snapshot; the last completed write persists. This is
   the documented model — don't rely on read-modify-write across concurrent executions.
@@ -562,16 +601,20 @@ Ordinary node-shaped errors (`ENOENT` …) are used for everything that is merel
 
 ### VFS limits
 
-| Limit | Value |
+| Limit | Shipped value (central limit) |
 | --- | --- |
-| Max file size | 512 KiB (also the max read/write size) |
-| Max total workspace size | 8 MiB |
-| Max entries | 500 per tool |
-| Path length | ≤ 512 chars |
-| Path depth | ≤ 24 |
+| Max file size | 2 MiB (`vfs.maxFileBytes`; also the max read/write size) |
+| Max total size | 700 MiB (`vfs.maxTotalBytes`) |
+| Max entries | 4 000 (`vfs.maxEntries`) |
+| Max depth | 56 levels (`vfs.maxDepth`) |
+| Path length | ≤ 512 chars (`vfs.maxPathLength`) |
 
-Limits are centrally defined (`VFS_LIMITS`) and served verbatim by
-`GET /api/tools/environments` (`vfs.limits`).
+Limits are centrally defined in `config/configuration-limits.json` (`vfs.*`) and served
+verbatim by `GET /api/tools/environments` (`vfs.limits`) — **changed in v1.0.14**:
+enforcement reads the central config live on every operation, and the console
+**Limitations** page (see [Configuration](configuration.md#the-limitations-page-v1014))
+can edit the `vfs.*` values at runtime — changes take effect WITHOUT a restart (hot
+reload ≤ 2 s).
 
 ### VFS example
 
@@ -787,8 +830,13 @@ left rail and a main pane.
   authors can compare the two environments at a glance, straight from the runtime.
 - **Test** — runs the tool against the real sandbox with your test params JSON (see the
   worked examples below). v1.0.6: tests get an **ephemeral scratch VFS workspace**
-  (wiped after the run), and interactive functions are honest in test mode — `alert`
-  resolves immediately, `prompt` returns its default (or `null`); tests never hang.
+  (wiped after the run). **v1.0.14 — INTERACTIVE test runtime:** the test panel renders
+  interaction cards (prompts with typed inputs incl. the file chooser, confirms, alerts,
+  choices) and POLLS them until the operator answers — `alert`/`confirm`/
+  `askForUserAsChoice`/`prompt` no longer auto-resolve in tests, so the tested run is
+  byte-for-byte the production behavior (the historical "tests never hang by returning
+  defaults" behavior was replaced; a test now finishes when YOU finish the
+  interactions).
 
 ### Dynamic handler tools in the IDE
 
@@ -857,7 +905,9 @@ http/https, ≤ 1 MiB, ≤ 10 s, counted against 10 requests); `alert` emits
 in Task Preview / Live Monitor, cancels it, or 120 s elapse (→ `null`). The tool's
 deadline is deferred while waiting.
 
-**Test it before saving** — in test mode the prompt returns its default immediately:
+**Test it before saving** — the Tool Editor test run is interactive since v1.0.14: the
+prompt card appears in the test panel and the run waits for your answer exactly like
+production (v1.0.6–v1.0.13 note: it used to return the default immediately):
 
 ```bash
 curl -X POST http://localhost:3000/api/tools/test -H 'Content-Type: application/json' \

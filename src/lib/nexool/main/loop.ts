@@ -3,7 +3,7 @@
  * UNDERSTAND → PLAN → SELECT TOOL → GENERATE PARAMS → EXECUTE → OBSERVE → UPDATE STATE → REPLAN → COMPLETE
  */
 import { db } from '@/lib/db';
-import { emitEvent } from '../eventbus';
+import { emitEvent, emitEventLifecycle } from '../eventbus';
 import { getSettings } from '../settings';
 import { getEnabledToolDefs } from '../tools/registry';
 import { executeTool, executeParallelBatch } from '../tools/executor';
@@ -48,6 +48,43 @@ export interface TaskRunHandle {
   /** v1.0.6 §10.2 — events injected while the loop is BUSY wait here so
    *  multi-event mode never loses them (single-event mode keeps the first). */
   inbox: NexToolEvent[];
+  /** v1.0.14 §2.2 — set by runTask from the resolved config: when the task
+   *  has "Read & Act All Events" DISABLED, injectEvent rejects additional
+   *  events while one is already pending (no hidden backlog). */
+  queueingDisabled?: boolean;
+  /** v1.0.14 §2.2 — true while a Live action/cycle is executing (injectEvent
+   *  consults it to reject events observably when queueing is disabled). */
+  actionRunning?: boolean;
+}
+
+/** v1.0.14 §13/§14 — structured trigger context for a Live cycle. Interval
+ *  triggers are message-less ("time to check again" — never a fabricated
+ *  event); event triggers carry the FULL event (id, type, source, message,
+ *  data, priority, createdAt) so the AI observes WHAT happened. */
+export type LiveTrigger =
+  | { type: 'initial' }
+  | { type: 'interval' }
+  | { type: 'event'; event: NexToolEvent };
+
+/** §14 — event triggers expose their full body to the decision pipeline;
+ *  interval/initial triggers stay message-less by design (§13). */
+export function summarizeTrigger(trigger: LiveTrigger): Record<string, unknown> {
+  if (trigger.type === 'event') {
+    const e = trigger.event;
+    return {
+      type: 'event',
+      event: {
+        id: e.id,
+        type: e.type,
+        source: e.source,
+        message: e.message,
+        data: e.data,
+        priority: e.priority,
+        createdAt: e.createdAt,
+      },
+    };
+  }
+  return { type: trigger.type };
 }
 
 // ---------- helpers ----------
@@ -447,11 +484,15 @@ function blockedStopReason(ctx: RunContext): string | null {
 // ---------- context bundle ----------
 
 
-async function buildContextBundle(ctx: RunContext): Promise<{
+async function buildContextBundle(
+  ctx: RunContext,
+  trigger?: LiveTrigger,
+): Promise<{
   memory: Record<string, unknown>[];
   history: Record<string, unknown>[];
   stateSummary: string;
   lastObservation?: string;
+  trigger?: Record<string, unknown>;
 }> {
   let memory: Record<string, unknown>[] = [];
   if (ctx.config.useMemory) {
@@ -481,6 +522,11 @@ async function buildContextBundle(ctx: RunContext): Promise<{
       servers: listServers().map((s) => `${s.id}=${s.health}`),
     }),
     lastObservation: ctx.state.lastObservation,
+    // v1.0.14 §14 — the trigger travels with the cycle context: the Core sees
+    // whether this run was event-driven (with the FULL event body) or a
+    // message-less interval check. Events keep their id/type/source/message/
+    // data/createdAt — never reduced to a generic "continue task" string.
+    trigger: trigger ? summarizeTrigger(trigger) : undefined,
   };
 }
 
@@ -516,8 +562,9 @@ async function decideAndExecute(
   ctx: RunContext,
   objective: string,
   contextBundleOverride?: Partial<Awaited<ReturnType<typeof buildContextBundle>>>,
+  trigger?: LiveTrigger,
 ): Promise<{ decision: Awaited<ReturnType<typeof decide>>; result?: ActionResult }> {
-  const bundle = { ...(await buildContextBundle(ctx)), ...contextBundleOverride };
+  const bundle = { ...(await buildContextBundle(ctx, trigger)), ...contextBundleOverride };
 
   const decision = await decide({
     objective,
@@ -1327,7 +1374,7 @@ async function runRepairPasses(ctx: RunContext, serverId: string): Promise<boole
   return false;
 }
 
-async function liveObserveCycle(ctx: RunContext, objective: string): Promise<void> {
+async function liveObserveCycle(ctx: RunContext, objective: string, trigger?: LiveTrigger): Promise<void> {
   // v1.0.10 §8 — Live Mode one-by-one planning: each tick/event first plans
   // exactly ONE next action/subgoal from the CURRENT world state, then that
   // single step is executed and observed. No giant pre-plan is generated;
@@ -1338,7 +1385,7 @@ async function liveObserveCycle(ctx: RunContext, objective: string): Promise<voi
     oneByOneStep = await planAndTrackOneByOneStep(ctx, objective);
     effectiveObjective = oneByOneStep.title;
   }
-  const { decision, result } = await decideAndExecute(ctx, effectiveObjective);
+  const { decision, result } = await decideAndExecute(ctx, effectiveObjective, undefined, trigger);
   if (result) {
     recordExecution(ctx, decision.tool as string, result);
     if (oneByOneStep) {
@@ -1395,7 +1442,9 @@ function stateQueue(ctx: RunContext): QueuedLiveEvent[] {
   return ctx.state.eventQueue;
 }
 
-/** §10.2 — accept an event into the queue with the documented drop policy. */
+/** §10.2 / v1.0.14 §12 — accept an event into the queue with the documented
+ *  drop policy. Lifecycle: event.queued on admission; event.rejected with an
+ *  observable reason when the queue is full (never silent). */
 function enqueueLiveEvent(ctx: RunContext, event: NexToolEvent): QueuedLiveEvent | null {
   const queue = stateQueue(ctx);
   // payload guard
@@ -1410,6 +1459,9 @@ function enqueueLiveEvent(ctx: RunContext, event: NexToolEvent): QueuedLiveEvent
     message: event.message,
     priority: event.priority,
     queuedAt: new Date().toISOString(),
+    // v1.0.14 §33 — keep the original source so the reconstructed event
+    // stays faithful to what actually happened.
+    source: event.source,
     status: 'queued',
     data,
   };
@@ -1424,36 +1476,38 @@ function enqueueLiveEvent(ctx: RunContext, event: NexToolEvent): QueuedLiveEvent
     if (queue[lowestIdx].priority <= event.priority) {
       const dropped = queue.splice(lowestIdx, 1)[0];
       dropped.status = 'dropped';
-      void emitEvent({
-        taskId: ctx.taskId, type: 'live.event.dropped', source: 'runtime',
-        message: `Event queue full (${cap}) — dropped "${dropped.type}" (priority ${dropped.priority}) for "${event.type}".`,
-        data: { dropped: dropped.type, droppedSeq: dropped.seq, incoming: event.type },
-        priority: 6,
+      dropped.statusReason = `Event queue full (${cap}) — displaced by higher-priority "${event.type}".`;
+      emitEventLifecycle({
+        taskId: ctx.taskId, eventId: dropped.eventId, eventType: dropped.type,
+        state: 'rejected', reason: dropped.statusReason,
+        extra: { droppedSeq: dropped.seq, incoming: event.type }, priority: 6,
       });
     } else {
-      void emitEvent({
-        taskId: ctx.taskId, type: 'live.event.dropped', source: 'runtime',
-        message: `Event queue full (${cap}) — incoming "${event.type}" (priority ${event.priority}) was dropped.`,
-        data: { incoming: event.type, priority: event.priority },
+      const reason = `Event queue full (${cap}) — incoming event lost to a higher-priority queue.`;
+      emitEventLifecycle({
+        taskId: ctx.taskId, eventId: event.id, eventType: event.type,
+        state: 'rejected', reason, extra: { incoming: event.type, priority: event.priority },
         priority: 6,
       });
       return null;
     }
   }
   queue.push(queued);
-  void emitEvent({
-    taskId: ctx.taskId, type: 'live.event.queued', source: 'runtime',
-    message: `Event queued: ${event.type} (priority ${event.priority}, seq ${queued.seq}).`,
-    data: { seq: queued.seq, eventId: event.id, type: event.type, queueLength: queue.length },
-    priority: 6,
+  emitEventLifecycle({
+    taskId: ctx.taskId, eventId: event.id, eventType: event.type, state: 'queued',
+    extra: { seq: queued.seq, queueLength: queue.length },
   });
   return queued;
 }
 
 /**
- * §10.3 — drain the queue ONE-BY-ONE, in deterministic order (§10.4:
- * priority 1 = emergency first, then arrival sequence). No two event-driven
- * action plans ever run concurrently.
+ * §10.3 / v1.0.14 §2.1 — drain the queue ONE-BY-ONE, in deterministic order
+ * (§10.4: priority 1 = emergency first, then arrival sequence). No two
+ * event-driven action plans ever run concurrently. After each event the loop
+ * CONTINUES immediately — queued events never wait for the next interval
+ * (§2.1: the queue must be drained continuously until empty). A failing
+ * event cycle never deadlocks the queue (§32): the failure is recorded and
+ * the next queued event proceeds.
  */
 async function drainEventQueue(ctx: RunContext): Promise<void> {
   const queue = stateQueue(ctx);
@@ -1467,37 +1521,49 @@ async function drainEventQueue(ctx: RunContext): Promise<void> {
     current.status = 'processing';
     ctx.state.currentEventSeq = current.seq;
     await persistState(ctx);
-    void emitEvent({
-      taskId: ctx.taskId, type: 'live.event.processing', source: 'runtime',
-      message: `Processing queued event: ${current.type} (seq ${current.seq}).`,
-      data: { seq: current.seq, type: current.type },
-      priority: 6,
+    emitEventLifecycle({
+      taskId: ctx.taskId, eventId: current.eventId, eventType: current.type,
+      state: 'processing', extra: { seq: current.seq },
     });
 
     const synthetic: NexToolEvent = {
       id: current.eventId,
       taskId: ctx.taskId,
       type: current.type,
-      source: 'environment',
+      // v1.0.14 §33 — preserve the original source (falls back to
+      // 'environment' only for pre-v1.0.14 queue entries without one).
+      source: (current.source as NexToolEvent['source']) ?? 'environment',
       message: current.message,
       data: current.data,
       priority: current.priority,
       createdAt: current.queuedAt,
     };
-    await processLiveEvent(ctx, synthetic);
-
-    current.status = 'processed';
+    // v1.0.14 §32 — a failed event cycle must not deadlock the queue: record
+    // the failure observably, then move on to the next queued event.
+    try {
+      await processLiveEvent(ctx, synthetic);
+      current.status = 'processed';
+    } catch (err) {
+      console.error('[loop] queued event cycle failed:', err);
+      current.status = 'failed';
+      current.statusReason = err instanceof Error ? err.message : String(err);
+      emitEventLifecycle({
+        taskId: ctx.taskId, eventId: current.eventId, eventType: current.type,
+        state: 'failed', reason: current.statusReason, extra: { seq: current.seq },
+        priority: 5,
+      });
+    }
     ctx.state.currentEventSeq = undefined;
-    void emitEvent({
-      taskId: ctx.taskId, type: 'live.event.processed', source: 'runtime',
-      message: `Processed queued event: ${current.type} (seq ${current.seq}).`,
-      data: { seq: current.seq, type: current.type },
-      priority: 7,
-    });
+    if (current.status === 'processed') {
+      emitEventLifecycle({
+        taskId: ctx.taskId, eventId: current.eventId, eventType: current.type,
+        state: 'completed', extra: { seq: current.seq }, priority: 7,
+      });
+    }
     // §10.7 — trim processed history so the queue stays a QUEUE in state.
-    const processed = queue.filter((q) => q.status === 'processed');
-    if (processed.length > 10) {
-      for (const q of processed.slice(0, processed.length - 10)) {
+    const settled = queue.filter((q) => q.status === 'processed' || q.status === 'failed');
+    if (settled.length > 10) {
+      for (const q of settled.slice(0, settled.length - 10)) {
         const idx = queue.indexOf(q);
         if (idx !== -1) queue.splice(idx, 1);
       }
@@ -1507,20 +1573,39 @@ async function drainEventQueue(ctx: RunContext): Promise<void> {
 }
 
 /**
- * One event's observe → decide → act cycle (§10.6). Extracted from the
- * v1.0.0-v1.0.5 wake handler so single-event mode and queue processing
- * share EXACTLY the same behavior.
+ * One event's observe → decide → act cycle (§10.6 / v1.0.14 §14). Extracted
+ * from the v1.0.0-v1.0.5 wake handler so single-event mode and queue
+ * processing share EXACTLY the same behavior. The event's FULL context
+ * (id/type/source/message/data/createdAt) is passed to the observation and
+ * decision pipeline — never reduced to a generic "continue task" string.
  */
 async function processLiveEvent(ctx: RunContext, event: NexToolEvent): Promise<void> {
   const cycleDeadline = Date.now() + ctx.config.taskTimeoutMs;
+  const trigger: LiveTrigger = { type: 'event', event };
   void emitEvent({
     taskId: ctx.taskId, type: 'observer.event_wake', source: 'observer',
-    message: `Woken by event: ${event.type} (priority ${event.priority}).`,
-    data: { eventId: event.id, type: event.type },
+    message: `Woken by event: ${event.type} (priority ${event.priority}, source ${event.source}).`,
+    data: { eventId: event.id, type: event.type, source: event.source },
     priority: 5,
   });
 
-  if (event.type === 'user.feedback') {
+  if (event.type === 'user.message') {
+    // v1.0.14 §8 — a user message event is the live conversation channel.
+    // The message (and any body) reaches the observe/decide pipeline verbatim
+    // so the AI can answer questions, take corrections and act on feedback.
+    const message = typeof event.data?.message === 'string' && event.data.message.trim()
+      ? event.data.message.trim()
+      : event.message;
+    try {
+      await liveObserveCycle(
+        ctx,
+        `User message received. Respond to the user and act if needed. Message: "${message.slice(0, 2000)}" Keep making progress on: ${ctx.goal}`,
+        trigger,
+      );
+    } catch (err) {
+      console.error('[loop] user.message cycle failed:', err);
+    }
+  } else if (event.type === 'user.feedback') {
     const message = String(event.data?.message ?? '');
     const correctAction = event.data?.correctAction ? String(event.data.correctAction) : undefined;
     void emitEvent({
@@ -1571,6 +1656,17 @@ async function processLiveEvent(ctx: RunContext, event: NexToolEvent): Promise<v
       message: `Subgoal revised after feedback: ${title}`, data: { subgoal: sg }, priority: 3,
     });
     await persistState(ctx);
+    // v1.0.14 §8/§10 — a user correction is acted upon IMMEDIATELY: the
+    // revised subgoal feeds an instant observe/act cycle (no interval wait).
+    try {
+      await liveObserveCycle(
+        ctx,
+        `User correction received: "${message.slice(0, 1000)}". Re-observe the current state and recover/correct the previous decision. Keep making progress on: ${ctx.goal}`,
+        trigger,
+      );
+    } catch (err) {
+      console.error('[loop] feedback correction cycle failed:', err);
+    }
   } else if (event.type.startsWith('environment.')) {
     // environment event → immediate recovery
     const serverId = event.data?.serverId ? String(event.data.serverId) : undefined;
@@ -1583,10 +1679,16 @@ async function processLiveEvent(ctx: RunContext, event: NexToolEvent): Promise<v
       }
     }
   } else {
-    // generic event: one observe cycle bounded by cycle deadline
+    // generic event: one observe cycle bounded by cycle deadline. The FULL
+    // event body (message + data) travels into the cycle via the trigger —
+    // the AI observes the actual event content, not just the wake-up.
     if (Date.now() < cycleDeadline) {
       try {
-        await liveObserveCycle(ctx, `Event-driven observation (${event.type}): keep making progress on: ${ctx.goal}. Event: ${event.message}`);
+        await liveObserveCycle(
+          ctx,
+          `Event-driven observation (${event.type}, source ${event.source}): keep making progress on: ${ctx.goal}. Event message: ${event.message}`,
+          trigger,
+        );
       } catch (err) {
         console.error('[loop] event cycle failed:', err);
       }
@@ -1598,9 +1700,11 @@ async function processLiveEvent(ctx: RunContext, event: NexToolEvent): Promise<v
 
 /**
  * Drain events that arrived while the loop was busy/paused/waiting.
- * Multi-event mode: EVERY event is queued and processed one-by-one.
- * Single-event mode (default): the FIRST event is processed now; later
- * simultaneous events are skipped per the documented single-event behavior.
+ * Multi-event mode (Read & Act All Events): EVERY event is queued and
+ * processed one-by-one, immediately, with no interval waits in between.
+ * Single-event mode (default / queueing disabled): the FIRST event is
+ * processed now; later simultaneous events are REJECTED with an observable
+ * reason (v1.0.14 §2.2 — no queue, no hidden backlog, never silent).
  */
 async function drainInbox(ctx: RunContext): Promise<void> {
   const inbox = ctx.handle.inbox;
@@ -1613,28 +1717,43 @@ async function drainInbox(ctx: RunContext): Promise<void> {
     await drainEventQueue(ctx);
   } else {
     const event = inbox.shift() as NexToolEvent;
-    const skipped = inbox.length;
-    inbox.length = 0;
-    if (skipped > 0) {
-      void emitEvent({
-        taskId: ctx.taskId, type: 'live.event.dropped', source: 'runtime',
-        message: `Single-event mode: ${skipped} simultaneous event(s) skipped while processing ${event.type}.`,
-        priority: 7,
+    const skipped = inbox.splice(0, inbox.length);
+    for (const s of skipped) {
+      emitEventLifecycle({
+        taskId: ctx.taskId, eventId: s.id, eventType: s.type, state: 'rejected',
+        reason: 'Live action already running and Read & Act All Events is disabled.',
+        priority: 6,
       });
     }
-    await processLiveEvent(ctx, event);
+    // v1.0.14 §12 — the single-event path reports the same lifecycle as the
+    // queue path (processing → completed/failed), never silently.
+    emitEventLifecycle({ taskId: ctx.taskId, eventId: event.id, eventType: event.type, state: 'processing' });
+    try {
+      await processLiveEvent(ctx, event);
+      emitEventLifecycle({ taskId: ctx.taskId, eventId: event.id, eventType: event.type, state: 'completed', priority: 7 });
+    } catch (err) {
+      console.error('[loop] single-event cycle failed:', err);
+      emitEventLifecycle({
+        taskId: ctx.taskId, eventId: event.id, eventType: event.type, state: 'failed',
+        reason: err instanceof Error ? err.message : String(err), priority: 5,
+      });
+    }
   }
 }
 
 async function runLiveMode(ctx: RunContext): Promise<Termination> {
   const { config } = ctx;
 
-  // initial pass: one full observation cycle before entering the wait loop
+  // v1.0.14 §6 — INITIAL EXECUTION: every Live task runs its first full
+  // observation/action cycle IMMEDIATELY on startup (never "wait for the
+  // first interval"). The trigger is 'initial' — message-less by design.
+  ctx.handle.actionRunning = true;
   try {
-    await liveObserveCycle(ctx, `Initial observation: ${ctx.goal}. Environment state: ${JSON.stringify(listServers())}`);
+    await liveObserveCycle(ctx, `Initial observation: ${ctx.goal}. Environment state: ${JSON.stringify(listServers())}`, { type: 'initial' });
   } catch (err) {
     console.error('[loop] live initial pass failed:', err);
   }
+  ctx.handle.actionRunning = false;
   if (ctx.handle.stopFlag.stopped) {
     return { finalStatus: 'stopped', taskStatus: 'stopped', statusDetail: 'Live task stopped by user.', summary: ctx.state.lastObservation ?? 'Live task stopped.' };
   }
@@ -1647,7 +1766,7 @@ async function runLiveMode(ctx: RunContext): Promise<Termination> {
   await persistTask(ctx.taskId, { status: 'waiting' });
   void emitEvent({
     taskId: ctx.taskId, type: 'task.waiting', source: 'runtime',
-    message: `Live task waiting — scheduled tick every ${config.liveIntervalMs}ms plus event-driven wake-ups${config.allowMultipleEvents ? ' (multi-event mode: incoming events are queued)' : ''}.`,
+    message: `Live task waiting — reacts to events IMMEDIATELY plus a scheduled check every ${config.liveIntervalMs}ms${config.allowMultipleEvents ? ' (Read & Act All Events: incoming events are queued and processed one-by-one)' : ''}.`,
     priority: 7,
   });
   await persistState(ctx);
@@ -1660,23 +1779,35 @@ async function runLiveMode(ctx: RunContext): Promise<Termination> {
     await waitWhilePaused(ctx);
     if (ctx.handle.stopFlag.stopped) break;
 
-    // §10.2 — events injected while busy/paused wait in the inbox.
+    // v1.0.14 §2.1 — the queue/inbox drain happens BEFORE every wait: events
+    // that arrived while the previous action was running are processed
+    // IMMEDIATELY, never after another interval wait.
     if (ctx.handle.inbox.length > 0) {
+      ctx.handle.actionRunning = true;
       await drainInbox(ctx);
+      ctx.handle.actionRunning = false;
       if (ctx.handle.stopFlag.stopped || ctx.blockedStop) break;
       continue;
     }
     // §10.5 — queued events persisted in state survive refresh/reconnect/pause.
     if (config.allowMultipleEvents && stateQueue(ctx).some((q) => q.status === 'queued')) {
+      ctx.handle.actionRunning = true;
       await drainEventQueue(ctx);
+      ctx.handle.actionRunning = false;
       if (ctx.handle.stopFlag.stopped || ctx.blockedStop) break;
       continue;
     }
 
+    // v1.0.14 §2.2 — entering the WAITING state: injectEvent may admit
+    // immediately from here on.
+    ctx.handle.actionRunning = false;
     const wake = await waitWithEvents(config.liveIntervalMs, ctx.handle);
     if (ctx.handle.stopFlag.stopped) break;
     // pause wake-up: loop back to the paused hold (§11 — no new actions).
     if (ctx.handle.pauseFlag.paused) continue;
+
+    // v1.0.14 §2.2 — a cycle is running from here until the next wait.
+    ctx.handle.actionRunning = true;
 
     if (wake.reason === 'timeout') {
       void emitEvent({
@@ -1687,9 +1818,12 @@ async function runLiveMode(ctx: RunContext): Promise<Termination> {
       });
       const servers = listServers();
       try {
+        // v1.0.14 §13 — the interval is a message-less trigger: the AI
+        // performs its normal scheduled observation (no fabricated event).
         await liveObserveCycle(
           ctx,
           `Scheduled observation: keep making progress on: ${ctx.goal}. Environment state: ${JSON.stringify(servers)}`,
+          { type: 'interval' },
         );
       } catch (err) {
         console.error('[loop] scheduled cycle failed:', err);
@@ -1712,6 +1846,21 @@ async function runLiveMode(ctx: RunContext): Promise<Termination> {
     }
     if (ctx.blockedStop) break;
   }
+
+  // v1.0.14 §31 — stopping a Live task ends event processing cleanly: any
+  // still-queued events are marked CANCELLED (observable, never silently
+  // forgotten) and nothing keeps running after the stop.
+  const remaining = stateQueue(ctx).filter((q) => q.status === 'queued' || q.status === 'processing');
+  for (const q of remaining) {
+    q.status = 'cancelled';
+    q.statusReason = 'Task stopped by user — queued event cancelled.';
+    emitEventLifecycle({
+      taskId: ctx.taskId, eventId: q.eventId, eventType: q.type, state: 'cancelled',
+      reason: q.statusReason, extra: { seq: q.seq }, priority: 6,
+    });
+  }
+  if (remaining.length > 0) await persistState(ctx);
+  ctx.handle.inbox.length = 0;
 
   const blockedEnd = blockedStopReason(ctx);
   if (blockedEnd) {
@@ -1757,6 +1906,10 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
     failureLog: [], oneByOneSubgoalByStep: new Map(), identicalFailureStreak: 0, recoveryAttemptsByStep: new Map(),
     limitContinuationsUsed: 0,
   };
+
+  // v1.0.14 §2.2 — publish the resolved queueing policy onto the handle so
+  // injectEvent can reject (observably) extra events while one is pending.
+  handle.queueingDisabled = !config.allowMultipleEvents;
 
   // v1.0.6 §11.9 — resume support: a task re-created as paused waits at the
   // first safe point; paused flag is mirrored into the persisted state.

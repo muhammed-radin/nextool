@@ -50,7 +50,7 @@ console/entity references match the actual UI.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Live task never triggers on schedule | Process restarted while the task was `waiting` — in-memory timer is gone | Stop and re-create the task (it stays `waiting` in the DB otherwise). |
-| `task.waiting` but environment crash didn't wake it | Wake requires priority ≤ 5, or broadcast failed | Crash broadcasts use priority 2; check Events for `environment.server.crash`; verify with `POST /api/tasks/{id}/event` (`scheduled.force`). |
+| `task.waiting` but environment crash didn't wake it | Broadcast failed, or the event was rejected observably (queue-off while an action ran) | Check Events for `environment.server.crash` AND for `event.rejected`/`event.failed` lifecycle records (v1.0.14 — every admission decision is observable; wake works for ANY priority since v1.0.14). Verify with `POST /api/tasks/{id}/event` (`scheduled.force`). |
 | Live task ignores user feedback | `learnFrom.feedback` off or feedback wasn't delivered | Send via the Task Preview Feedback dialog (priority 2); confirm the `user.feedback` event exists. |
 | Recovery loop keeps failing | Server can't reach `healthy` (restart path verifies health) | Inspect the repair-pass events; inject `server.recover` manually to force health. |
 
@@ -60,7 +60,7 @@ console/entity references match the actual UI.
 | --- | --- | --- |
 | Task stuck in `awaiting_approval` | A tool with `autoExecute: false` (the default) is waiting for its Allow/Deny decision | Open Task Preview or Live Monitor and use the pending-approval card (**Allow** / **Deny** with optional feedback); no decision within **5 minutes** → `tool.approval.timeout` and the task stops — it is never silently executed. Prevent the wait globally/per-task with `autoExecuteTools`, or per-tool via the IDE Auto-Execute switch. |
 | Task shows `paused` but the tool prompt/approval card is still pending | Pause preserves the approval/prompt unresolved — never auto-allowed or denied | Resume the task and answer the card; the 5-minute approval timeout (and the 120 s prompt timeout) remain well-defined during pause. |
-| Tool prompt waiting forever | `await prompt(...)` pauses that tool until someone answers, cancels, or 120 s elapse | Answer or cancel in the console's prompt card (Task Preview / Live Monitor, `POST /api/prompts`); after 120 s it resolves `null` by itself. Test runs never wait — the default (or `null`) is returned immediately. |
+| Tool prompt waiting forever | `await prompt(...)` pauses that tool until someone answers, cancels, or 120 s elapse | Answer or cancel in the console's prompt card (Task Preview / Live Monitor / the Tool Editor test panel — v1.0.14 interactive test runtime, `POST /api/prompts`); after 120 s it resolves `null` by itself. Test runs wait like production since v1.0.14 (previously they returned the default immediately). |
 | Paused task can't resume after a server restart | Honest limitation — the run handle (and its resume signal) lives in memory; the task row stays `paused` in the DB | Stop the task and re-create it; Stop still works on an orphaned `paused` task. Avoid long pauses across deployments. |
 | Paused task resumed but nothing happened yet | Resume restarts the live interval fresh (no burst of missed ticks) and processes retained events first | This is by design (§11.5); the first cycle runs after the next interval tick, or immediately after the retained event queue is drained (multi-event mode). |
 

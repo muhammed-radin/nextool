@@ -44,17 +44,21 @@ import InspectorView from './views/inspector';
 import ModelsView from './views/models';
 import DatasetsView from './views/datasets';
 import SettingsView from './views/settings';
+import LimitationsView from './views/limitations';
+import AssistantView from './views/assistant';
 import DocsView from './views/docs';
 import {
   Activity,
   Bell,
   BookOpen,
+  Bot,
   Box,
   Cable,
   Database,
   FileJson,
   FlaskConical,
   FolderTree,
+  Gauge,
   GraduationCap,
   History,
   LayoutDashboard,
@@ -83,7 +87,9 @@ const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'models', label: 'Models', icon: Box },
   { view: 'datasets', label: 'Datasets', icon: FileJson },
   { view: 'docs', label: 'Documentation', icon: BookOpen },
+  { view: 'limitations', label: 'Limitations', icon: Gauge },
   { view: 'settings', label: 'Settings', icon: SlidersHorizontal },
+  { view: 'assistant', label: 'Assistant', icon: Bot },
 ];
 
 /** Mobile bottom-nav primary destinations (everything else lives in "More"). */
@@ -529,6 +535,10 @@ function ViewRouter() {
         return <DocsView />;
       case 'settings':
         return <SettingsView />;
+      case 'limitations':
+        return <LimitationsView />;
+      case 'assistant':
+        return <AssistantView />;
       case 'task-preview':
         return selectedTaskId ? <TaskPreviewView key={selectedTaskId} taskId={selectedTaskId} /> : <DashboardView />;
       default:

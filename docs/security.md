@@ -28,22 +28,36 @@ from the same constants, so the documentation, the IDE and the runtime cannot dr
 
 ## Virtual filesystem (VFS)
 
-The VFS (`tools/vfs.ts`, `tools/sandbox-fs.ts`) is a real, per-tool filesystem backed
-by the SQLite `VirtualFile` table — **never** the host fs:
+The VFS (`tools/vfs.ts`, `tools/sandbox-fs.ts`) is a real, persistent filesystem that
+belongs to the tool runtime — **never** the host fs outside its root. **Changed in
+v1.0.14 (§24): the root is now a REAL host directory, `VFS/` inside the project storage
+root** (formerly the hidden `data/vfs` location; a one-time automatic migration moves
+legacy contents into `VFS/` on first VFS use — never deletes/overwrites, logged
+`[vfs] v1.0.14 migration`). What did NOT change is the sandbox:
 
-- **Isolation** — one workspace per tool (scoped by the tool name), scaffold
-  `/input /output /tmp /data /workspace`. Tools cannot see each other's files.
+- **Isolation** — ONE shared sandboxed store for all restricted tools (v1.0.12),
+  scaffold `/input /output /tmp /data /workspace`; tool code sees only virtual absolute
+  paths rooted at `/` and can never reach the host filesystem.
 - **Path safety** — every path is decoded before validation (encoded traversal
   `%2e%2e` is caught), normalized, and rejected on: `..` beyond the virtual root,
-  `file:` URLs, backslash paths, NUL bytes, malformed percent-encoding. There are no
-  symlinks in the VFS. Escape attempts fail with
+  `file:` URLs, backslash paths, NUL bytes, malformed percent-encoding. Symbolic links
+  are refused and the root is pinned by `realpath` — a symlink planted inside `VFS/`
+  cannot redirect an operation outside it. Escape attempts fail with
   `VirtualFSAccessError: Access to the NexTool host filesystem is not permitted.`
   — never a silent redirect.
-- **Limits** — 512 KiB per file (read and write), 8 MiB per workspace, 500 entries,
-  path ≤ 512 chars, depth ≤ 24 (`VFS_LIMITS`, enforced on every operation).
-- **Lifecycle** — persistent per tool with write-through persistence; concurrent
-  executions of one tool are last-write-wins. Tool IDE tests run in an ephemeral
-  scratch workspace wiped after the run.
+- **Limits** — enforced LIVE from the central config (`vfs.*`: shipped 2 MiB per file,
+  700 MiB total, 4 000 entries, depth 56, path ≤ 512 chars) on every operation;
+  editable at runtime via the Limitations page (hot reload ≤ 2 s) — lowering a limit
+  never deletes existing data, new violating operations just fail clearly.
+- **Terminal isolation** — the virtual `child_process` executes its documented command
+  set against this tree through the sandbox's own restricted layer (a virtual session,
+  never a host shell); `fs.cmd` is the only host-terminal tool and it always requires
+  explicit user confirmation with its own handler-level gate.
+- **Cross-environment note** — because `VFS/` physically exists in the host fs,
+  `freedom-node` tools can access the same tree at the real path (they bypass the
+  virtual-path sandbox by design); `mcp` connectors and restricted environments stay
+  VFS-only and never gain host visibility. See
+  [Architecture → Access boundaries](architecture.md#access-boundaries-real-fs--vfs--mpcrestricted).
 
 ## Network restrictions
 
@@ -142,7 +156,10 @@ tool (`environment: "freedom-node"`), and everything in this section describes t
 single, explicit, opt-in path:
 
 - **What it grants** — real `require()`/`import()` (Node builtins + npm packages), the
-  REAL host filesystem (never the VFS), real network WITHOUT the Network Policy caps
+  REAL host filesystem (never REDIRECTED into the VFS — and since v1.0.14 a freedom
+  tool can also read/write the shared `VFS/` tree at its real path, because the
+  directory physically exists in the host fs; the VFS limits and path validation do
+  not apply to it), real network WITHOUT the Network Policy caps
   (no request-count/response-size/redirect/per-request-timeout/URL-import limits), real
   `child_process` and the real `process` object including `process.env`.
 - **Configuration-only gate, fail closed** — the escape is authorized ONLY by the
@@ -213,9 +230,11 @@ artifacts or broken references as errors instead of silently recreating anything
   and cannot resume (Stop still works).
 - **VFS write-through is last-write-wins.** Concurrent executions of the same tool each
   write their snapshot; there is no cross-execution transaction.
-- **Test-mode interactivity is simulated.** In Tool IDE test runs, `alert` resolves
-  immediately and `prompt` returns its default (or `null`) — real interactivity only
-  exists in production task executions.
+- **Test-mode interactivity was simulated — INTERACTIVE since v1.0.14.** In Tool IDE
+  test runs, `alert`/`confirm`/`askForUserAsChoice`/`prompt` now WAIT for the operator
+  exactly like production (the v1.0.6–v1.0.13 auto-resolving test behavior — alert
+  immediate, prompt default — was removed). A test that nobody answers simply stays on
+  its interaction card (deadline/120 s rules unchanged).
 - **freedom-node is unrestricted BY DESIGN (v1.0.11).** The environment deliberately
   drops the sandbox guarantees documented on this page for its tools (real fs, real
   network, real processes). Its only gate is the configuration file, and it fails
@@ -238,7 +257,8 @@ and nothing else. Raising a limit never grants host-level privileges:
 - `max timeout = 1 day` (self-hosted) does **not** mean an unrestricted host process —
   the tool still runs inside its sandbox with the same isolated surfaces.
 - `max VFS size = 700 MiB` does **not** mean host filesystem access — the Virtual FS
-  remains SQLite-backed and path-validated.
+  remains the sandboxed `VFS/` tree with decode-before-validate path safety (v1.0.14:
+  a real directory, sandbox unchanged).
 - URL imports (enabled by default in v1.0.8) pass the full network policy — protocol,
   host, timeout, response size, redirect and per-execution request caps — and imported
   modules execute under the SAME sandbox boundary as the importing tool.

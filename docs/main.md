@@ -30,6 +30,9 @@ interface TaskRunHandle {
   stopFlag: { stopped: boolean };
   abortController: AbortController;   // aborts in-flight tool executions
   wake: ((payload: WakePayload) => void) | null;  // set while a live task waits
+  inbox: NexToolEvent[];              // v1.0.6: events that arrived while busy/paused/waiting
+  queueingDisabled?: boolean;         // v1.0.14: set without "Read & Act All Events"
+  actionRunning?: boolean;            // v1.0.14: true while a live cycle executes
 }
 ```
 
@@ -44,11 +47,20 @@ interface TaskRunHandle {
 `stopTask(taskId)`: sets `stopFlag`, aborts the AbortController (cancelling any in-flight
 tool execution), and if the task is a waiting live task, delivers a synthetic priority-1
 `task.stop` wake so the wait exits immediately. It also emits `task.stop_requested`.
+**v1.0.14 §31:** every pending inbox event is cancelled observably (`event.cancelled`),
+the inbox is dropped and pending interactive alerts auto-dismiss — nothing runs after
+the stop.
 
-`injectEvent(taskId, type, payload, priority, source)`: emits the event and — when
-`priority <= 5` and the task hasn't been stopped — wakes a waiting live task with it.
-This is how user feedback (priority 2) and environment broadcasts interrupt scheduled
-waiting.
+`injectEvent(taskId, type, payload, priority, source)`: emits the event (plus the
+`event.received` lifecycle record) and — for a live task that is neither stopped nor
+busy-without-queue — admits it (`event.admitted`), pushes it to the handle inbox and
+wakes the waiting loop IMMEDIATELY. **Changed in v1.0.14: the old `priority <= 5` gate
+is gone — every injected event wakes a live task regardless of priority; priority is
+ordering/metadata only.** Without "Read & Act All Events", an event arriving while an
+action runs (or another event is pending) is REJECTED with the observable reason
+*"Live action already running and Read & Act All Events is disabled."* — no hidden
+backlog. Paused tasks retain events (§11.4). This is how user feedback (priority 2),
+user messages and environment broadcasts interrupt scheduled waiting.
 
 ## The main loop
 
@@ -87,10 +99,10 @@ Every iteration of the goal loop:
 | Aspect | Goal Mode (default) | Live Mode (explicit) |
 | --- | --- | --- |
 | Purpose | Finish the request, then terminate. | Keep observing/acting forever until stopped. |
-| First action | Enter the plan loop immediately. | One full observation cycle, then park as `waiting`. |
-| Scheduling | None — tight loop. | `waitWithEvents(liveIntervalMs)` — timer (`unref`'d) or event wake, whichever first. |
-| Wakes | N/A | Scheduled tick (priority 9 `observer.scheduled_tick`), any injected event with priority ≤ 5. |
-| Special handling | One retry per failed tool; dynamic subgoals when the plan runs out. | `user.feedback` → memory upsert + LLM-revised subgoal; `environment.*` → recovery repair passes; other events → one observe cycle bounded by `taskTimeoutMs`. |
+| First action | Enter the plan loop immediately. | **One full observation cycle on STARTUP (v1.0.14 — no first-interval wait)**, then park as `waiting`. |
+| Scheduling | None — tight loop. | `waitWithEvents(liveIntervalMs)` — timer (`unref`'d) or event wake, whichever first; **events wake IMMEDIATELY (v1.0.14)** and the queue is drained before every wait. |
+| Wakes | N/A | Scheduled tick (priority 9 `observer.scheduled_tick`, message-less interval trigger), **ANY injected event regardless of priority (v1.0.14 — the priority ≤ 5 gate was removed)**. |
+| Special handling | One retry per failed tool; dynamic subgoals when the plan runs out. | `user.message` → live conversation cycle; `user.feedback` → memory upsert + LLM-revised subgoal + immediate correction cycle; `environment.*` → recovery repair passes; other events → one observe cycle carrying the full event (`CONTEXT.trigger`), bounded by `taskTimeoutMs`. |
 | Termination | `completed` / `failed` (limits, timeout, no tool, tool failure, clarification) / `stopped`. | `stopped` by user (or stop event) — it never "completes" on its own. |
 | Status while idle | `running`. | `waiting` (counts as active; drives the Live counters). |
 

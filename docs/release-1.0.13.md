@@ -192,6 +192,10 @@ Every approval denial is counted per task with the user's optional reason
 - **`await alert("message")`** — real tool-runtime API (never the browser
   alert): the tool pauses, the console shows the message, the promise
   resolves when the operator acknowledges. 120 s window.
+  *(v1.0.14 note: this page describes the SPEC contract — the interactive
+  alert registry + `GET/POST /api/alerts` route and the `tool.user_alert.dismissed`
+  event shipped in v1.0.14, which also made the Tool Editor test runtime interactive;
+  in the v1.0.13 runtime the test-mode interactions auto-resolved.)*
 - **`await askForUserAsChoice([...])`** — multiple-choice operator prompt
   with custom-text option: `{ type: "custom" }` entries return the user's
   exact text plus the chosen-mode metadata — custom answers are never forced

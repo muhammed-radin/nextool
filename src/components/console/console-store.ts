@@ -21,6 +21,8 @@ export type ConsoleView =
   | 'benchmark'
   | 'docs'
   | 'settings'
+  | 'limitations'
+  | 'assistant'
   | 'task-preview';
 
 export interface ToolEditorRequest {

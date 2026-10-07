@@ -49,7 +49,6 @@ import { defaultToolTimeoutMs, maxToolTimeoutMs } from './timeout';
 import { transformDynamicImports, RUNTIME_IMPORT_SHIM } from './import-resolver';
 import {
   createRuntimeInteractions,
-  createTestInteractions,
   type SandboxInteractions,
 } from './sandbox-interactive';
 import { getFreedomFsConfig, getResolvedLimits } from '../config-limits';
@@ -235,8 +234,10 @@ export function runFreedomNodeTool(
         deadline = Date.now() + execTimeoutMs;
       },
     };
+    // v1.0.14 §20/§21 — interactions are INTERACTIVE in every mode (the Tool
+    // Editor test runtime waits for the operator like production; no mocks).
     const interactions: SandboxInteractions = exec.interactions
-      ?? (context.mode === 'test' ? createTestInteractions() : createRuntimeInteractions(context.taskId, context.executionId, exec.toolId, deadlineCtl));
+      ?? createRuntimeInteractions(context.taskId, context.executionId, exec.toolId, deadlineCtl);
 
     let settled = false;
     const finish = (result: FreedomNodeRunResult) => {

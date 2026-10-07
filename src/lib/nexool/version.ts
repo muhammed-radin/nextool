@@ -4,14 +4,14 @@
  * and runtime branding. Documentation, UI badges and /api/system all read this.
  *
  * Version concepts are intentionally kept SEPARATE:
- * - Application Version: bumped per release (currently 1.0.13).
+ * - Application Version: bumped per release (currently 1.0.14).
  * - Model Version:       version of the CoreModule decision unit itself
  *                        (llm-core). llm-core is served through the external
  *                        z-ai-web-dev-sdk provider and is NOT locally
  *                        retrained — so it stays 1.0.0. The LOCALLY TRAINABLE
  *                        tool-selection classifier checkpoints moved to model
  *                        version 1.0.3 in v1.0.12 (MCP/VFS/identity-aware
- *                        curriculum) and STAY 1.0.3 in v1.0.13 — the app
+ *                        curriculum) and STAY 1.0.3 in v1.0.14 — the app
  *                        release does NOT change the model version; historical
  *                        1.0.0/1.0.1/1.0.2 checkpoints keep their original
  *                        versions for traceability. The UI must always read
@@ -21,9 +21,9 @@
  */
 
 export const APP_NAME = 'NexTool Q1';
-export const APP_VERSION = '1.0.13';
+export const APP_VERSION = '1.0.14';
 export const RELEASE_NAME =
-  'THE OPERATOR CONSOLE — single-user self-hosted architecture, FS Inspector (VFS + real FS), super-powered MCP client with customizable auth, verification latch, subtool API, await alert()/askForUserAsChoice(), safety-limit continuation';
+  'THE LIVELY AI — event-driven Live Mode (events are first-class triggers, immediate wake, per-task Read & Act All Events queue, event admission/rejection lifecycle), AskSelf + AskForUser tools, Limitations control page with Standard/Unrestricted presets, fully interactive Tool Editor test runtime (await alert/confirm/askForUserAsChoice/prompt with advanced input types), production Assistant chat experience, real-directory VFS/';
 
 export const CORE_MODULE_NAME = 'llm-core';
 /** CoreModule decision-unit version — llm-core is a provider-served model and

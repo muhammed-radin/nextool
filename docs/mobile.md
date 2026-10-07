@@ -35,7 +35,8 @@ grid:
   shows active state for *any* non-primary view.
 - **More sheet**: 70 dvh `glass-strong` bottom Sheet ("All sections") with a 2-column
   grid of *every* remaining view — Memory, Live State, Events, History, Models,
-  Datasets, Documentation, Settings — plus Task Preview when a task is selected, so no
+  Datasets, Documentation, Settings, and the v1.0.14 **Limitations** + **Assistant**
+  views — plus Task Preview when a task is selected, so no
   screen is unreachable on mobile.
 - Desktop parity: the sidebar holds the same 12 items + conditional Task Preview entry.
 

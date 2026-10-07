@@ -7,7 +7,7 @@ order: 1
 # Frontend Architecture
 
 The console is a **single-page application**. The only server-rendered route is `/`
-(`src/app/page.tsx` → `<ConsoleApp/>`); all 16 screens are client-side views switched by
+(`src/app/page.tsx` → `<ConsoleApp/>`); all 20 screens are client-side views switched by
 a zustand store. No routing library, no other pages.
 
 ## SPA shell
@@ -15,7 +15,8 @@ a zustand store. No routing library, no other pages.
 `src/components/console/console-app.tsx` composes:
 
 - **Header** (glass shell): brand button (the real NexTool logo via `BrandLogo` +
-  `Q1 v{APP_VERSION}` tech badge — 1.0.11), `RuntimeConnectionStatus` pill, notification
+  `Q1 v{APP_VERSION}` tech badge — always rendered from the dynamic version constant,
+  never hardcoded), `RuntimeConnectionStatus` pill, notification
   bell with unread badge and dropdown.
 - **Navigation**: desktop glass sidebar (12 items + a conditional *Task Preview* entry
   showing the short id once a task is selected); mobile bottom nav (see
@@ -43,9 +44,11 @@ package — the same package that feeds the favicon:
   unchanged — only the brand tile is the logo. The browser-tab favicon continues to
   come from `layout.tsx` `generateMetadata` (unchanged mechanism).
 
-## The 16 views
+## The views
 
-`ConsoleView` union in `console-store.ts` — each a file in `views/`:
+`ConsoleView` union in `console-store.ts` — 20 views, each a file in `views/`
+(v1.0.14 adds `limitations.tsx` and `assistant.tsx`; see the
+[v1.0.14 section](#v1014-frontend-changes) below):
 
 | View | File | Purpose |
 | --- | --- | --- |
@@ -249,6 +252,45 @@ Typed helpers cover the whole endpoint surface (`getSystemStats`, `createTask`,
 - Views never `fetch` ad hoc; they use `client.ts` helpers, providers, or the stream.
 - Nothing is cached beyond provider state — reloads are always truthful.
 - Any panel can be in `loading | error | empty | data` — all four are rendered honestly.
+
+## v1.0.14 frontend changes
+
+- **Limitations view** (nav: **More → Limitations**): the operator control page for the
+  central configuration limits — structured editors for every property (rendered from
+  the real `type / min / max / default / unit / enum / nullable` metadata of
+  `GET /api/config/limits`), a **Raw JSON editor mode**, **Export/Import JSON**
+  (import validated server-side before anything is written), the **Standard/Default**
+  preset, and the **⚠ Complete Unrestricted** preset with a persistent warning banner +
+  confirmation dialog. Save runs `PUT /api/config/limits` (validate-before-write,
+  atomic replace, runtime hot reload ≤ 2 s); a failed import lists every validation
+  issue and overwrites nothing. See [Configuration](configuration.md#the-limitations-page-v1014).
+- **Assistant view** (nav: **Assistant**; console view `assistant`): the production
+  chat experience — glassmorphism conversation, the **NexTool robot centerpiece**
+  (`nexool-robot.tsx`: SVG robot with 10 runtime-driven moods — idle/thinking/working/
+  waiting/asking/success/warning/error/confused/happy — with per-mood antenna tone and
+  blink/bob animations), progress steps derived from REAL `tool.*` events,
+  **humanized observations** (no raw JSON or tool prefixes in replies — §23.5), and
+  inline interaction cards (alerts / prompts incl. typed + file inputs / confirmations /
+  choices) answered right in the chat. The first message creates a persisted LIVE task
+  (one-by-one planner, Read & Act All Events ON, safe builtin toolset incl.
+  `ask.self`/`ask.user`); every later message is a `user.message` EVENT — the v1.0.14
+  runtime wakes immediately. Stop + New + Task Preview handoff included; NO code/JSON
+  internals are rendered.
+- **Interactive Tool Editor test panel**: the Test section renders the same interaction
+  cards as production — prompt cards (typed inputs, file chooser), confirm, alert (OK)
+  and choice cards — and polls them until answered. `await alert()/confirm()/
+  askForUserAsChoice()/prompt()` no longer auto-resolve in tests (v1.0.6–v1.0.13
+  behavior: alert immediate, prompt/confirm defaults — superseded).
+- **Task Preview + Live Monitor**: interactive **alert cards** (OK dismiss via
+  `/api/alerts`; the alert pauses only its tool) join the approval/prompt/confirmation/
+  choice cards; the event stream renders the v1.0.14 `event.*` lifecycle records.
+- **FS Inspector overflow fix (§36)**: the file listing is wrapped in a true
+  `overflow-y-auto` container (`glass-card nextool-scroll max-h-[55vh] sm:max-h-[26rem]
+  md:max-h-96`) — rows now clip INSIDE the card (Radix ScrollArea's max-height did not
+  bound its viewport, which let rows leak onto the page); name truncation handles
+  horizontal overflow; the "Copy path" menu item no longer passes the click event into
+  `copyPath`. Verified with 40 files (internal scroll engages, page scroll intact) on
+  mobile 375×812 and desktop 1280×800.
 
 ## v1.0.13 frontend changes
 

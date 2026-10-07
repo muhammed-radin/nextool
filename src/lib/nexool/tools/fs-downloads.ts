@@ -10,7 +10,7 @@
  * Only VFS files are downloadable through this mechanism — the registry
  * stores the VIRTUAL path, and every download re-resolves it through the VFS
  * security model (normalize + realpath pinning), so:
- *   - host paths outside <repo>/data/vfs are unreachable by construction;
+ *   - host paths outside the real VFS/ root are unreachable by construction;
  *   - deleting/renaming the file after registration invalidates the link at
  *     the next request (re-verified per download);
  *   - tokens expire after 10 minutes and the registry is size-capped.

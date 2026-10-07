@@ -63,16 +63,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { JsonTree } from '../json-tree';
 import {
-  ApiClientError, deleteTool, getSettings, getToolEnvironmentInfo, registerJsTool, registerTool, testTool, updateTool,
+  ApiClientError, answerChoice, answerConfirmation, answerPrompt, deleteTool, dismissAlert, getSettings, getToolEnvironmentInfo, listAlerts, listChoices, listConfirmations, listPrompts, registerJsTool, registerTool, testTool, updateTool,
   type HandlerKindDescriptor, type ToolEnvironmentInfo,
 } from '@/lib/nexool/client';
+import type { PendingAlertDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingPromptDTO } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import type { ToolParamDef, ToolSchema } from '@/lib/nexool/types';
 import { buildNodeExtraLib, buildToolExtraLib, getNodeReferenceEntries, getReferenceEntries } from '@/lib/nexool/tool-runtime-declarations';
 import { coerceEditorChange, readMonacoValue } from '@/lib/nexool/editor-source';
 import { ErrorCard, SectionTitle, TechLabel, fmtMs, statusTone } from '../ui-bits';
 import {
-  AlertTriangle, Braces, Copy, FileCode2, Loader2, Play, Plus, Save, ShieldAlert, Trash2, Wrench, X,
+  AlertTriangle, Braces, Check, Copy, FileCode2, Loader2, MessageSquareQuote, Play, Plus, Save, ShieldAlert, Trash2, Wrench, X,
 } from 'lucide-react';
 
 // Monaco is client-only + heavy — load it lazily with a glass skeleton.
@@ -123,6 +124,15 @@ interface ToolTestState {
   error?: { code: string; message: string } | null;
   logs?: string[];
   paramsEcho?: Record<string, unknown>;
+}
+
+/** v1.0.14 §20/§21 — pending interactions surfaced in the test panel while
+ *  the test runtime is paused waiting for the operator. */
+interface ToolTestInteractions {
+  alerts: PendingAlertDTO[];
+  prompts: PendingPromptDTO[];
+  confirmations: PendingConfirmationDTO[];
+  choices: PendingChoiceDTO[];
 }
 
 interface ToolEditorProps {
@@ -200,6 +210,66 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   const [test, setTest] = useState<ToolTestState | null>(null);
   const [testParams, setTestParams] = useState('{}');
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  // ---- v1.0.14 §20/§21 — INTERACTIVE test runtime: pending interactions are
+  // polled while the test waits and rendered as operator cards. ----
+  const [testInteractions, setTestInteractions] = useState<ToolTestInteractions>({ alerts: [], prompts: [], confirmations: [], choices: [] });
+  const [testAnswer, setTestAnswer] = useState('');
+  const [testInteractionBusy, setTestInteractionBusy] = useState(false);
+
+  // Tool Editor tests run with taskId === undefined — scope to those only so
+  // production prompts from real tasks never leak into the editor.
+  const unscoped = <T extends { taskId?: string }>(items: T[]): T[] => items.filter((i) => !i.taskId);
+
+  const loadTestInteractions = useCallback(async () => {
+    const [al, p, c, ch] = await Promise.allSettled([listAlerts(), listPrompts(), listConfirmations(), listChoices()]);
+    setTestInteractions({
+      alerts: al.status === 'fulfilled' ? unscoped(al.value.alerts) : [],
+      prompts: p.status === 'fulfilled' ? unscoped(p.value.prompts) : [],
+      confirmations: c.status === 'fulfilled' ? unscoped(c.value.confirmations) : [],
+      choices: ch.status === 'fulfilled' ? unscoped(ch.value.choices) : [],
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!test?.running) return;
+    void loadTestInteractions();
+    const t = setInterval(() => void loadTestInteractions(), 1200);
+    return () => clearInterval(t);
+  }, [test?.running, loadTestInteractions]);
+
+  const doTestDismissAlert = async (alertId: string) => {
+    setTestInteractionBusy(true);
+    try { await dismissAlert(alertId); await loadTestInteractions(); } finally { setTestInteractionBusy(false); }
+  };
+  const doTestAnswerPrompt = async (promptId: string, value: string | null) => {
+    setTestInteractionBusy(true);
+    try { await answerPrompt(promptId, value); setTestAnswer(''); await loadTestInteractions(); } finally { setTestInteractionBusy(false); }
+  };
+  const doTestFilePrompt = async (promptId: string, file: File) => {
+    setTestInteractionBusy(true);
+    try {
+      const FILE_INLINE_LIMIT = 256 * 1024;
+      const small = file.size <= FILE_INLINE_LIMIT;
+      const content = small ? await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ''));
+        reader.onerror = () => reject(reader.error ?? new Error('File read failed'));
+        reader.readAsDataURL(file);
+      }) : undefined;
+      await answerPrompt(promptId, '', { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size, ...(content !== undefined ? { content } : {}) });
+      setTestAnswer('');
+      await loadTestInteractions();
+    } finally { setTestInteractionBusy(false); }
+  };
+  const doTestConfirm = async (confirmId: string, accepted: boolean) => {
+    setTestInteractionBusy(true);
+    try { await answerConfirmation(confirmId, accepted); await loadTestInteractions(); } finally { setTestInteractionBusy(false); }
+  };
+  const doTestChoice = async (choiceId: string, value: string | null) => {
+    setTestInteractionBusy(true);
+    try { await answerChoice(choiceId, value); await loadTestInteractions(); } finally { setTestInteractionBusy(false); }
+  };
 
   const monacoInstanceRef = useRef<Monaco | null>(null);
   // v1.0.4 §8 — live Monaco editor instance; cleared on unmount by the
@@ -1229,6 +1299,89 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
             : <>Runs the <span className="text-foreground/80">current editor source</span> in the {environment === 'freedom-node' ? 'freedom Node.js (unrestricted — fs-gated)' : environment === 'nodejs' ? 'Node.js' : 'js'} sandbox with <span className="font-mono text-foreground/80">mode:&quot;test&quot;</span>.</>}
         </p>
       </div>
+
+      {/* v1.0.14 §20/§21 — the test is PAUSED while alert/prompt/confirm/
+          askForUserAsChoice wait for the operator. Respond here to resume. */}
+      {test?.running ? (
+        <div className="space-y-2" data-testid="tool-test-interactions">
+          <p className="flex items-center gap-2 font-tech text-[10px] uppercase tracking-wider text-amber-300">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden /> test running — interactive calls pause here until you respond
+          </p>
+          {testInteractions.alerts.map((a) => (
+            <div key={a.alertId} className="rounded-md border border-sky-400/30 bg-sky-400/[0.05] p-3">
+              <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-sky-300"><MessageSquareQuote className="size-3.5" aria-hidden /> alert {a.toolName ? `· ${a.toolName}` : ''}</p>
+              <p className="mt-1 break-words text-xs text-foreground">{a.message}</p>
+              <Button size="sm" disabled={testInteractionBusy} onClick={() => void doTestDismissAlert(a.alertId)} className="mt-2 min-h-9 border-sky-400/30 bg-sky-400/10 text-sky-200 hover:bg-sky-400/20">OK</Button>
+            </div>
+          ))}
+          {testInteractions.prompts.map((p) => {
+            const inputType = p.inputType ?? 'text';
+            if (inputType === 'file') {
+              return (
+                <div key={p.promptId} className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.05] p-3">
+                  <p className="font-tech text-[10px] uppercase tracking-wider text-cyan-300">prompt · file {p.toolName ? `· ${p.toolName}` : ''}</p>
+                  <p className="mt-1 break-words text-xs text-foreground">{p.message}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      type="file"
+                      disabled={testInteractionBusy}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void doTestFilePrompt(p.promptId, f);
+                        e.target.value = '';
+                      }}
+                      className="block w-full max-w-xs cursor-pointer rounded-md border border-white/[0.09] bg-white/[0.04] text-xs text-slate-300 file:mr-3 file:cursor-pointer file:rounded-l-md file:border-0 file:bg-cyan-400/15 file:px-3 file:py-2 file:text-xs file:font-medium file:text-cyan-200"
+                      aria-label={`Choose a file for prompt: ${p.message.slice(0, 60)}`}
+                    />
+                    <Button size="sm" variant="outline" disabled={testInteractionBusy} onClick={() => void doTestAnswerPrompt(p.promptId, null)} className="min-h-9 border-white/[0.09] text-muted-foreground">Cancel</Button>
+                  </div>
+                </div>
+              );
+            }
+            const nativeType = inputType === 'textarea' ? 'text'
+              : ['number', 'email', 'password', 'url', 'search', 'date', 'time', 'datetime-local', 'month', 'week'].includes(inputType) ? inputType
+              : inputType === 'color' ? 'color'
+              : 'text';
+            return (
+              <div key={p.promptId} className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.05] p-3">
+                <p className="font-tech text-[10px] uppercase tracking-wider text-cyan-300">prompt · {inputType} {p.toolName ? `· ${p.toolName}` : ''}</p>
+                <p className="mt-1 break-words text-xs text-foreground">{p.message}</p>
+                <div className="mt-2 flex gap-2">
+                  {inputType === 'textarea' ? (
+                    <Textarea value={testAnswer} onChange={(e) => setTestAnswer(e.target.value)} placeholder={p.placeholder ?? 'Your answer…'} className="min-h-16 flex-1 border-white/[0.09] bg-white/[0.04] text-xs" aria-label={`Answer for prompt: ${p.message.slice(0, 60)}`} />
+                  ) : (
+                    <Input type={nativeType} value={testAnswer} onChange={(e) => setTestAnswer(e.target.value)} placeholder={p.placeholder ?? 'Your answer…'} className={cn('min-h-9 flex-1 border-white/[0.09] bg-white/[0.04] text-xs', inputType === 'color' && 'h-9 min-h-9 p-1')} aria-label={`Answer for prompt: ${p.message.slice(0, 60)}`} />
+                  )}
+                  <Button size="sm" disabled={testInteractionBusy} onClick={() => void doTestAnswerPrompt(p.promptId, testAnswer || null)} className="min-h-9 border-cyan-400/30 bg-cyan-400/10 text-cyan-200 hover:bg-cyan-400/20">Send</Button>
+                  <Button size="sm" variant="outline" disabled={testInteractionBusy} onClick={() => void doTestAnswerPrompt(p.promptId, null)} className="min-h-9 border-white/[0.09] text-muted-foreground">Cancel</Button>
+                </div>
+              </div>
+            );
+          })}
+          {testInteractions.confirmations.map((c) => (
+            <div key={c.confirmId} className="rounded-md border border-amber-400/30 bg-amber-400/[0.05] p-3">
+              <p className="font-tech text-[10px] uppercase tracking-wider text-amber-300">confirm {c.toolName ? `· ${c.toolName}` : ''}</p>
+              <p className="mt-1 break-words text-xs text-foreground">{c.message}</p>
+              <div className="mt-2 flex gap-2">
+                <Button size="sm" disabled={testInteractionBusy} onClick={() => void doTestConfirm(c.confirmId, true)} className="min-h-9 border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20"><Check className="size-3.5" aria-hidden /> Confirm</Button>
+                <Button size="sm" variant="outline" disabled={testInteractionBusy} onClick={() => void doTestConfirm(c.confirmId, false)} className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"><X className="size-3.5" aria-hidden /> Cancel</Button>
+              </div>
+            </div>
+          ))}
+          {testInteractions.choices.map((ch) => (
+            <div key={ch.choiceId} className="rounded-md border border-violet-400/30 bg-violet-400/[0.05] p-3">
+              <p className="font-tech text-[10px] uppercase tracking-wider text-violet-300">choice {ch.toolName ? `· ${ch.toolName}` : ''}</p>
+              <p className="mt-1 break-words text-xs text-foreground">{ch.message}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {ch.options.map((opt) => (
+                  <Button key={opt.value} size="sm" variant="outline" disabled={testInteractionBusy} onClick={() => void doTestChoice(ch.choiceId, opt.value)} className="min-h-9 border-violet-400/30 text-violet-200 hover:bg-violet-400/10">{opt.label ?? opt.value}</Button>
+                ))}
+                <Button size="sm" variant="outline" disabled={testInteractionBusy} onClick={() => void doTestChoice(ch.choiceId, null)} className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"><X className="size-3.5" aria-hidden /> Cancel</Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {test && !test.running ? (
         <div className="space-y-2" data-testid="tool-test-result">

@@ -76,8 +76,23 @@ interface NexToolResponse {
   text(): Promise<string>;
 }
 declare function fetch(url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<NexToolResponse>;
+/** v1.0.14 §20 — INTERACTIVE alert: the OK dialog pauses THIS tool until the
+ *  operator dismisses it (or the 120s window auto-dismisses). */
 declare function alert(message: string): Promise<void>;
-declare function prompt(message: string, defaultValue?: string): Promise<string | null>;
+/** v1.0.14 §22 — INTERACTIVE prompt with advanced input types. Accepts a
+ *  plain message OR a structured spec. Pauses THIS tool until the user
+ *  answers in the console/assistant UI, cancels (null), or the 120s window
+ *  expires (null). type "file" resolves to a JSON string
+ *  { name, mimeType, size, content? } (content only for small files). */
+declare function prompt(
+  message: string | {
+    message: string;
+    type?: 'text' | 'textarea' | 'number' | 'email' | 'password' | 'url' | 'search' | 'date' | 'time' | 'datetime-local' | 'month' | 'week' | 'color' | 'file';
+    placeholder?: string;
+    defaultValue?: string;
+  },
+  defaultValue?: string,
+): Promise<string | null>;
 /** v1.0.8 §1 — async NexTool confirmation: ALWAYS resolves to a boolean.
  *  Pauses the tool until the user answers the confirmation UI, cancels
  *  (false) or the 120s window expires (false). */
@@ -162,8 +177,8 @@ export function getReferenceEntries(schema: ToolSchema | undefined | null): {
     { name: 'context.log(...)', type: '(...parts: unknown[]) => void', description: 'Log lines (max 100) surfaced in the test panel.' },
     { name: 'await context.tools.call(name, params?)', type: '(toolName, params?) => Promise<unknown>', description: 'v1.0.13 §14 SUBTOOL API — executes another registered tool as a REAL ToolExecution. Max depth 3, max 20 calls per top-level execution, recursion/cycles rejected. Test mode: built-in tools only.' },
     { name: 'await fetch(url, init?)', type: '(url, init?) => Promise<Response>', description: 'v1.0.8 controlled fetch — http/https only, 60s timeout default (network.timeoutMs), 5 MiB response cap default, private hosts blocked, max 56 requests per execution default — all configurable via the central limits.' },
-    { name: 'await alert(message)', type: '(message) => Promise<void>', description: 'NexTool async alert — emits a tool.user_alert runtime event (tests resolve immediately).' },
-    { name: 'await prompt(message, default?)', type: '(message, defaultValue?) => Promise<string | null>', description: 'Pauses THIS tool until the user answers in the console, cancels, or 120s pass. Never blocks the runtime.' },
+    { name: 'await alert(message)', type: '(message) => Promise<void>', description: 'v1.0.14 — INTERACTIVE alert dialog: pauses THIS tool until the operator clicks OK (or the 120s window auto-dismisses).' },
+    { name: 'await prompt(message | spec, default?)', type: '(string | { message, type?, placeholder?, defaultValue? }) => Promise<string | null>', description: 'v1.0.14 §22 — INTERACTIVE prompt with advanced input types: text, textarea, number, email, password, url, search, date, time, datetime-local, month, week, color, file (file resolves to a JSON string { name, mimeType, size, content? }). Pauses THIS tool until the user answers, cancels, or 120s pass. Never blocks the runtime.' },
     { name: 'await confirm(message, options?)', type: '(message, options?: { default?: boolean }) => Promise<boolean>', description: 'v1.0.8 — NexTool confirmation UI. ALWAYS resolves to a boolean; cancellation/timeout resolve false.' },
     { name: 'await askForUserAsChoice(message, choices, options?)', type: '(message, choices: Array<string | { value, label? }>, options?: { default?: string }) => Promise<string | null>', description: 'v1.0.13 — multiple-choice operator question. Renders one button per option in the console; resolves the chosen VALUE (or null on cancel/timeout — never a fabricated option). Max 12 options.' },
     { name: 'setTimeout / setInterval', type: 'Timers', description: 'Standard timers — the overall execution deadline still applies.' },

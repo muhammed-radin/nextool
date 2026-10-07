@@ -50,10 +50,25 @@ interface ToolParamDef {
 }
 ```
 
-The 15 built-in tools (seeded into `ToolRecord` on first registry access) follow this
-contract — `server.*` are `virtual-env`, the rest `builtin`. Browse them with
-`GET /api/tools` or the Tools view, which renders each param's type, required flag,
-generation and enum chips.
+The built-in tools seeded into `ToolRecord` on first registry access follow this
+contract — `server.*` are `virtual-env`, the rest `builtin`. `BUILTIN_TOOLS` holds the
+17 classic definitions — including the **v1.0.14 additions `ask.self` and `ask.user`
+(below)** — plus the 16 v1.0.12/13 `fs.*` tools, i.e. **33 built-ins total**. Browse
+them with `GET /api/tools` or the Tools view, which renders each param's type, required
+flag, generation and enum chips.
+
+### AskSelf (`ask.self`) and AskForUser (`ask.user`) — v1.0.14
+
+Two new built-in tools give the runtime first-class ways to generate content and to ask
+the operator:
+
+| Tool | Purpose | Params | Result |
+| --- | --- | --- | --- |
+| `ask.self` (AskSelf, §15) | Ask **NexTool itself** to generate/derive content — reasoning, explanations, self-description, generating choice lists, planning fragments — instead of executing an external action. An LLM call (30 s budget) with an AskSelf system contract. | `prompt` (required, ≤ 8 000 chars), `context?` (≤ 4 000), `memory?` (≤ 10 strings), `pattern?` (≤ 300 — an exact output pattern the answer must follow), `history?` (≤ 12 strings) | `{ success: true, opinion }` — or `{ success: false, opinion: '', error }` (empty response / LLM failure; never throws across the tool boundary). |
+| `ask.user` (AskForUser, §16) | Ask the **human operator** for information NexTool does not have or should not guess. Pauses THIS tool until the user answers through the console/assistant interaction UI (same prompt registry as `prompt()`). | `message` (required, ≤ 2 000), `placeholder?` (≤ 200), `defaultValue?` (≤ 4 000) | `{ success: true, question, answer, answeredAt }` — or `{ success: false, question, answer: null, error }` on cancel/120 s timeout. **Never fabricates an answer.** |
+
+`ask.self` is also usable as a **subtool** (`await context.tools.call('ask.self', { … })`
+— built-ins are allowed in the subtool API in both production and test runtimes).
 
 ## The Tool IDE and the function-tool environments (v1.0.2 / v1.0.5 / v1.0.6)
 
@@ -413,19 +428,24 @@ Preview: `core.decision` → `tool.started` → `tool.completed` → `observer.o
 - `environment` labels are honest: `virtual-env` tools operate on the in-memory fleet,
   `builtin` on the real host, `dynamic` on their bound handler.
 
-## Shared global VFS (v1.0.12)
+## Shared global VFS (v1.0.12, real directory since v1.0.14)
 
-All tools running in restricted environments (`js-function`, `nodejs`) now share **ONE persistent, runtime-owned virtual filesystem** (§3.1–§3.13). Files written by one tool are visible to every other tool and to later tasks:
+All tools running in restricted environments (`js-function`, `nodejs`) share **ONE persistent, runtime-owned virtual filesystem** (§3.1–§3.13). Files written by one tool are visible to every other tool and to later tasks:
 
 ```
 Tool A: fs.writeFile("/notes/test.txt", "hello")
 Tool B: fs.readFile("/notes/test.txt")   →   "hello"
 ```
 
+- **Since v1.0.14 the VFS is a REAL host directory** — `VFS/` inside the project storage
+  root (§24). The legacy `data/vfs` location is migrated automatically on first VFS use
+  (never deletes/overwrites, logs `[vfs] v1.0.14 migration`). The sandbox is unchanged:
+  lexical validation + per-component lstat walk + symlink refusal + a realpath-pinned
+  root. See [Tool Development → The Virtual File System](tool-development.md#the-virtual-file-system-v106).
 - The VFS root is the security boundary — tool code sees virtual absolute paths rooted at `/` and can never reach the host filesystem (traversal, encoded escapes, NUL bytes, drive letters and symlink escapes are all rejected).
-- Storage is a real on-disk tree under the runtime data directory, so files persist across executions, tasks and application restarts.
-- Limits (max file size, total size, entries, depth) remain authoritative in `config/configuration-limits.json` and are enforced live — now against the WHOLE shared store.
-- `freedom-node` is exempt (§3.10): it keeps complete host freedom and never touches the shared VFS.
+- Storage is the real on-disk tree, so files persist across executions, tasks and application restarts.
+- Limits (max file size, total size, entries, depth) remain authoritative in `config/configuration-limits.json` and are enforced live — now against the WHOLE shared store (and editable at runtime via the **Limitations** console page — see [Configuration](configuration.md#the-limitations-page-v1014)).
+- `freedom-node` is exempt (§3.10): it keeps complete host freedom and never touches the shared VFS — though, since v1.0.14, it CAN see the same files at the physical `VFS/` path because the directory genuinely exists in the host fs.
 
 Native filesystem tools (built-in, operate only on the shared VFS):
 

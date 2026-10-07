@@ -45,9 +45,10 @@ import {
   fsWriteFile,
 } from './fs-tools';
 import { createNetworkAccounting } from './sandbox-net';
-import { createTestInteractions } from './sandbox-interactive';
 import { createSandboxToolsApi } from './subtool';
 import { makeMcpHandler } from './mcp-runner';
+// v1.0.14 §15/§16 — AskSelf + AskForUser builtin tools.
+import { askSelf, askUser } from './ask';
 
 // module-scoped syntax cache (compile once per source)
 const syntaxCache = new Map<string, { ok: true } | { ok: false; error: string }>();
@@ -233,6 +234,40 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   // host fs). environment 'builtin' → toolExportClass 'builtin' → never
   // exportable (§2.2).
   ...FS_TOOL_DEFINITIONS,
+  // v1.0.14 §15 — AskSelf: NexTool generates/derives content itself.
+  {
+    name: 'ask.self',
+    description: 'AskSelf — ask NexTool itself to generate/derive content (reasoning, explanations, self-description, generating choice lists, planning fragments) instead of executing an external action. Returns { success, opinion }. Also usable as a subtool.',
+    purpose: 'Generate content by reasoning — not an external action.',
+    category: 'reasoning',
+    environment: 'builtin',
+    schema: {
+      type: 'object',
+      properties: [
+        p('prompt', 'string', true, 'What NexTool should answer or generate', { generation: 'constructive' }),
+        p('context', 'string', false, 'Additional context to consider', { generation: 'extractive' }),
+        p('memory', 'array', false, 'Relevant memory snippets (strings)', { generation: 'extractive' }),
+        p('pattern', 'string', false, 'Output pattern hint, e.g. "Return one choice per line"', { generation: 'extractive' }),
+        p('history', 'array', false, 'Recent exchanges (strings, oldest first)', { generation: 'extractive' }),
+      ],
+    },
+  },
+  // v1.0.14 §16 — AskForUser: ask the human operator; pauses until answered.
+  {
+    name: 'ask.user',
+    description: 'AskForUser — ask the human operator for information NexTool does not have or should not guess (missing info, confirmation, unclear decision). Pauses the tool until the user responds through the console UI. Returns { success, question, answer } — never a fabricated answer.',
+    purpose: 'Get missing information or confirmation from the operator.',
+    category: 'interaction',
+    environment: 'builtin',
+    schema: {
+      type: 'object',
+      properties: [
+        p('message', 'string', true, 'The question for the user', { generation: 'constructive' }),
+        p('placeholder', 'string', false, 'Input placeholder hint shown in the UI', { generation: 'constructive' }),
+        p('defaultValue', 'string', false, 'Pre-filled default answer', { generation: 'extractive' }),
+      ],
+    },
+  },
 ];
 
 // ---------- Handler registry ----------
@@ -309,6 +344,9 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
     'fs.cmd': fsCmd,
     'fs.download': fsDownload,
     'fs.upload': fsUpload,
+    // v1.0.14 §15/§16 — AskSelf + AskForUser
+    'ask.self': askSelf,
+    'ask.user': askUser,
   };
 
   const builtin = builtinMap[def.name];
@@ -1087,9 +1125,11 @@ export async function testToolSource(
     if (!isFreedomNodeAuthorized()) {
       return { ok: false, error: freedomDisabledError(), logs: [], durationMs: Date.now() - started };
     }
+    // v1.0.14 §20/§21 — no injected interactions: the runner builds REAL
+    // (interactive) ones with the deadline controller, so alert/prompt/
+    // confirm/askForUserAsChoice WAIT for the operator in tests too.
     const run = await runFreedomNodeTool(source, params, ctx, {
       toolId: executionLabel,
-      interactions: createTestInteractions(),
       timeoutMs: opts.timeoutMs,
     });
     return { ...run, durationMs: Date.now() - started };
@@ -1098,7 +1138,6 @@ export async function testToolSource(
     ? await runNodeTool(source, params, ctx, {
       toolId: executionLabel,
       vfs,
-      interactions: createTestInteractions(),
       // v1.0.13 §14 — test mode: the API exists but is LIMITED (built-in
       // tools only, same depth/call caps; SUBTOOL_TEST_MODE otherwise).
       tools: createSandboxToolsApi({ chain: [executionLabel], depth: 0, budget: { calls: 0 } }, { mode: 'test', taskId: opts.taskId, executionId }),
@@ -1110,7 +1149,6 @@ export async function testToolSource(
     : await runJsTool(source, params, ctx, {
       toolId: executionLabel,
       vfs,
-      interactions: createTestInteractions(),
       // v1.0.13 §14 — test mode: the API exists but is LIMITED (built-in
       // tools only, same depth/call caps; SUBTOOL_TEST_MODE otherwise).
       tools: createSandboxToolsApi({ chain: [executionLabel], depth: 0, budget: { calls: 0 } }, { mode: 'test', taskId: opts.taskId, executionId }),

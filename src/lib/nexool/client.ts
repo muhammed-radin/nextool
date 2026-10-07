@@ -401,14 +401,44 @@ export interface PendingPromptDTO {
   taskId?: string;
   toolName?: string;
   message: string;
+  /** v1.0.14 §22 — requested input type (drives the operator UI control). */
+  inputType?: string;
+  placeholder?: string;
   requestedAt: string;
+}
+
+export interface PromptFilePayload {
+  name: string;
+  mimeType?: string;
+  size?: number;
+  /** Base64/data-url content — only for small files (client-capped). */
+  content?: string;
 }
 
 export const listPrompts = (taskId?: string) =>
   apiFetch<{ prompts: PendingPromptDTO[] }>(`/api/prompts${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''}`);
 
-export const answerPrompt = (promptId: string, value: string | null) =>
-  apiFetch<{ resolved: boolean; reason?: string }>('/api/prompts', body(value === null ? { promptId, cancel: true } : { promptId, value }));
+export const answerPrompt = (promptId: string, value: string | null, file?: PromptFilePayload) =>
+  apiFetch<{ resolved: boolean; reason?: string }>(
+    '/api/prompts',
+    body(value === null && !file ? { promptId, cancel: true } : { promptId, ...(value !== null ? { value } : {}), ...(file ? { file } : {}) }),
+  );
+
+// ---------- Alerts (v1.0.14 §20 — interactive alert dialogs) ----------
+
+export interface PendingAlertDTO {
+  alertId: string;
+  taskId?: string;
+  toolName?: string;
+  message: string;
+  requestedAt: string;
+}
+
+export const listAlerts = (taskId?: string) =>
+  apiFetch<{ alerts: PendingAlertDTO[] }>(`/api/alerts${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''}`);
+
+export const dismissAlert = (alertId: string) =>
+  apiFetch<{ resolved: boolean; reason?: string }>('/api/alerts', body({ alertId }));
 
 // ---------- Confirmations (v1.0.8 §1) ----------
 
@@ -529,6 +559,15 @@ export interface ConfigurationLimitsDTO {
 /** The resolved limits metadata — the Settings UI derives its input
  *  constraints from THIS (never hard-coded in components, spec §8.3). */
 export const getConfigurationLimits = () => apiFetch<ConfigurationLimitsDTO>('/api/config/limits');
+
+/** v1.0.14 §18 — fetch a full preset limits JSON ('standard' | 'unrestricted'). */
+export const getLimitsPreset = (preset: 'standard' | 'unrestricted') =>
+  apiFetch<{ preset: string; limits: { version: number; [section: string]: unknown } }>(`/api/config/limits?preset=${preset}`);
+
+/** v1.0.14 §17.2/§18.1 — SAVE the full limits JSON (server validates before
+ *  writing; the runtime hot-reloads within ~2 s). */
+export const saveConfigurationLimits = (limits: { version: number; [section: string]: unknown }) =>
+  apiFetch<{ saved: boolean; source: string }>('/api/config/limits', { method: 'PUT', body: JSON.stringify(limits) });
 
 // ---------- Training (v1.0.2) ----------
 

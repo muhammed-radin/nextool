@@ -31,21 +31,24 @@ immediately after every wake.
 
 ## Wake sources and their priorities
 
-A waiting live task is woken by `nexool.injectEvent` only when
-`event.priority <= 5`. Who injects what:
+**Changed in v1.0.14:** a waiting live task is woken by `nexool.injectEvent` for EVERY
+injected event — the old `event.priority <= 5` gate was REMOVED. Priority is now
+ordering/metadata only (it still orders the Read & Act All Events queue: priority
+ascending, then arrival sequence) and never filters an event away. Who injects what:
 
 | Wake source | Event type | Priority | Trigger |
 | --- | --- | --- | --- |
 | Environment broadcast | `environment.server.crash` | 2 | `POST /api/env/event` `{ type: 'server.crash' }` — sent to every active live task. |
 | Environment broadcast | `environment.server.degrade` / `.recover` | 4 | Same endpoint, other types. |
-| User feedback | `user.feedback` | 2 | `POST /api/tasks/{id}/feedback`. |
+| User feedback | `user.feedback` | 2 | `POST /api/tasks/{id}/feedback` — plus an immediate correction cycle (v1.0.14). |
+| User conversation | `user.message` | 5 | Task Preview preset / Assistant — the live conversation channel; immediate observe/act cycle. |
 | User stop | `task.stop` | 1 | `stopTask()` synthetic wake. |
-| Manual injection | any type | default 5 | `POST /api/tasks/{id}/event` (priority ≤ 5 required to wake). |
+| Manual injection | any type | default 5 | `POST /api/tasks/{id}/event` (any priority wakes since v1.0.14). |
 | Console presets | `user.message`, `environment.custom`, `scheduled.force` | default 5 | Task Preview "Send event" dialog. |
-| Scheduled timer | — | — | `liveIntervalMs` elapsed → `{ reason: 'timeout' }`. |
+| Scheduled timer | — | — | `liveIntervalMs` elapsed → `{ reason: 'timeout' }` (message-less interval trigger). |
 
-Events with priority > 5 are still persisted and streamed to the frontend — they just
-don't interrupt the wait.
+Events with priority > 5 used to be persisted/streamed without interrupting the wait
+(pre-v1.0.14); since v1.0.14 they wake the task like any other event.
 
 ## What each wake does
 
@@ -55,17 +58,22 @@ After every wake the loop re-checks `stopFlag`, then computes a cycle deadline
 - **Scheduled tick** (`reason: 'timeout'`): emits `observer.scheduled_tick`
   (priority 9, data `{ at }`), then runs one `liveObserveCycle` with the objective
   `Scheduled observation: keep making progress on: <goal>` plus the serialized fleet
-  state. Environment-driven recovery runs afterwards if the goal mentions monitoring
+  state — a message-less interval trigger (v1.0.14: no fabricated event message).
+  Environment-driven recovery runs afterwards if the goal mentions monitoring
   keywords (`monitor|recover|production|prod|api|server|health|web|db`) and any server is
   unhealthy/degraded.
 - **`task.stop`** event: breaks the loop → task finalizes `stopped`.
+- **`user.message`** (v1.0.14 §8): one observe/act cycle with the message verbatim in
+  the trigger context — the live conversation turn.
 - **`user.feedback`**: emits `observer.feedback_applied`, upserts a memory entry keyed
   `feedback_<taskId>` (tags `['feedback','live']`) when `learnFrom.feedback` is on, asks
   the LLM (10 s timeout) to revise the active subgoal — falling back to `correctAction`
-  or a generic title — then emits `subgoal.created` (priority 3).
+  or a generic title — then emits `subgoal.created` (priority 3) and runs an
+  **immediate correction cycle** (v1.0.14 — no interval wait).
 - **`environment.*`**: resolves the affected serverId from the event payload (or the
   first non-healthy server) and runs `runRepairPasses`.
-- **Anything else**: one `liveObserveCycle` bounded by the cycle deadline — it is skipped
+- **Anything else**: one `liveObserveCycle` carrying the FULL event body
+  (`CONTEXT.trigger`) and bounded by the cycle deadline — it is skipped
   entirely if the deadline already passed.
 
 ## Repair passes
@@ -84,10 +92,12 @@ After every wake the loop re-checks `stopFlag`, then computes a cycle deadline
 ## Interval tuning
 
 `liveIntervalMs` comes from the task config (default from settings: 60 000 ms, clamp
-1 000–3 600 000). Because wakes interrupt the timer, the effective observation rate is
-`max(interval, event rate)` — a crash injected one second after a tick still wakes the
-task instantly (verified in the v1.0.0 E2E run: crash → recovery subgoal → healthy again
-in ~3 s).
+1 000–3 600 000). Because event wakes interrupt the timer IMMEDIATELY (v1.0.14 — every
+event is a trigger), the effective observation rate is `max(interval, event rate)` — a
+crash injected one second after a tick still wakes the task instantly (verified in the
+v1.0.0 E2E run: crash → recovery subgoal → healthy again in ~3 s; re-verified in the
+v1.0.14 E2E: an injected event produced `event.received/admitted` →
+`observer.event_wake` immediately).
 
 ## Limitations (honest)
 
@@ -100,4 +110,4 @@ in ~3 s).
 
 - [Live Mode](../modes/live-mode.md) — full lifecycle with diagrams.
 - [Runtime](runtime.md) — timeouts and cancellation.
-- [Events](events.md) — wake priority semantics.
+- [Events](events.md) — the event catalog incl. the `event.*` lifecycle family.

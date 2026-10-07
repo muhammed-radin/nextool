@@ -26,8 +26,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useNexoolStream } from '@/hooks/use-nexool-stream';
 import { useConsoleStore } from '../console-store';
-import { ApiClientError, answerChoice, answerConfirmation, answerFileRequest, answerPrompt, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, listApprovals, listChoices, listConfirmations, listFileRequests, listLimitContinuations, listPrompts, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
-import type { PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingFileRequestDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
+import { ApiClientError, answerChoice, answerConfirmation, answerFileRequest, answerPrompt, dismissAlert, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, listAlerts, listApprovals, listChoices, listConfirmations, listFileRequests, listLimitContinuations, listPrompts, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
+import type { PendingAlertDTO, PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingFileRequestDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
 import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { RuntimeTerminal } from '../terminal';
@@ -35,7 +35,7 @@ import { ChecklistItems, TaskChecklist } from '../task-checklist';
 import { EmptyState, ErrorCard, ExecutionStatusBadge, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
 import { reconcileExecutions, isTerminalExecutionStatus } from '@/lib/nexool/execution-merge';
 import {
-  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Gauge, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Upload, Wrench, X, Zap,
+  Ban, BellRing, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Gauge, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Upload, Wrench, X, Zap,
 } from 'lucide-react';
 
 const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
@@ -53,7 +53,7 @@ const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting', 'awaiting_appro
 /** v1.0.3 §1: terminal states — Live Checklist/Terminal are removed once reached. */
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'stopped']);
 /** Events that should refresh task detail/plan/executions immediately (v1.0.3 §2 + v1.0.6 §16 + v1.0.10 §21 + v1.0.11 §13). */
-const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm|auto_execution)|task\.(completed|failed|cancelled|started|paused|resumed)|planner\.(plan|parallel_batch|partial_failure|mode_selected|one_by_one_step_planned|one_by_one_step_completed|one_by_one_replanned|one_by_one_goal_reached|recovery_started|recovery_plan_built|recovery_attempt|recovery_succeeded|recovery_failed|recovery_exhausted|main_plan_resumed|main_plan_aborted)|subgoal\.created|live\.event\.)/;
+const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm|auto_execution)|task\.(completed|failed|cancelled|started|paused|resumed|waiting)|planner\.(plan|parallel_batch|partial_failure|mode_selected|one_by_one_step_planned|one_by_one_step_completed|one_by_one_replanned|one_by_one_goal_reached|recovery_started|recovery_plan_built|recovery_attempt|recovery_succeeded|recovery_failed|recovery_exhausted|main_plan_resumed|main_plan_aborted)|subgoal\.created|live\.event\.|event\.(received|admitted|queued|processing|completed|rejected|ignored|failed|cancelled)|observer\.(event_wake|scheduled_tick|observed|feedback_applied)|core\.decision|user\.(message|feedback))/;
 
 function ExecutionCard({ ex }: { ex: ToolExecution }) {
   // v1.0.9 §15.1/§15.3-§15.6 — the status comes from the execution record via
@@ -170,6 +170,8 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   // v1.0.6 §16 — approval / prompt / pause-aware preview state
   const [approvals, setApprovals] = useState<PendingApprovalDTO[]>([]);
   const [prompts, setPrompts] = useState<PendingPromptDTO[]>([]);
+  // v1.0.14 §20 — pending interactive alerts for THIS task
+  const [alerts, setAlerts] = useState<PendingAlertDTO[]>([]);
   // v1.0.8 §1.5 — pending tool confirmations for THIS task
   const [confirmations, setConfirmations] = useState<PendingConfirmationDTO[]>([]);
   // v1.0.13 — operator choices / verification latches / safety-limit continuations for THIS task
@@ -254,8 +256,9 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   // v1.0.8 §1.5 — plus pending confirmations.
   // v1.0.13 — plus operator choices, verification latches and safety-limit continuations.
   const loadInteractive = useCallback(async () => {
-    const [a, p, c, ch, v, lc, fr] = await Promise.allSettled([listApprovals(taskId), listPrompts(taskId), listConfirmations(taskId), listChoices(taskId), listVerifications(taskId), listLimitContinuations(taskId), listFileRequests(taskId)]);
+    const [a, al, p, c, ch, v, lc, fr] = await Promise.allSettled([listApprovals(taskId), listAlerts(taskId), listPrompts(taskId), listConfirmations(taskId), listChoices(taskId), listVerifications(taskId), listLimitContinuations(taskId), listFileRequests(taskId)]);
     if (a.status === 'fulfilled') setApprovals(a.value.approvals);
+    if (al.status === 'fulfilled') setAlerts(al.value.alerts);
     if (p.status === 'fulfilled') setPrompts(p.value.prompts);
     if (c.status === 'fulfilled') setConfirmations(c.value.confirmations);
     if (ch.status === 'fulfilled') setChoices(ch.value.choices);
@@ -366,6 +369,42 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
       void loadInteractive();
     } catch (e) {
       toast.error('Prompt failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setPromptBusy(false);
+    }
+  };
+
+  // v1.0.14 §22.1 — file prompt: read the picked file and send structured
+  // metadata (content ONLY for small files — never blind-huge blobs).
+  const FILE_PROMPT_INLINE_LIMIT = 256 * 1024;
+  const doAnswerFilePrompt = async (promptId: string, file: File) => {
+    setPromptBusy(true);
+    try {
+      const small = file.size <= FILE_PROMPT_INLINE_LIMIT;
+      const content = small ? await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result ?? ''));
+        reader.onerror = () => reject(reader.error ?? new Error('File read failed'));
+        reader.readAsDataURL(file);
+      }) : undefined;
+      await answerPrompt(promptId, '', { name: file.name, mimeType: file.type || 'application/octet-stream', size: file.size, ...(content !== undefined ? { content } : {}) });
+      setPromptAnswer('');
+      void loadInteractive();
+    } catch (e) {
+      toast.error('File answer failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setPromptBusy(false);
+    }
+  };
+
+  // v1.0.14 §20 — dismiss an interactive alert (the tool resumes).
+  const doDismissAlert = async (alertId: string) => {
+    setPromptBusy(true);
+    try {
+      await dismissAlert(alertId);
+      void loadInteractive();
+    } catch (e) {
+      toast.error('Dismiss failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
     } finally {
       setPromptBusy(false);
     }
@@ -1067,28 +1106,88 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
           </div>
         ) : null}
 
-        {/* v1.0.6 §1.6 — pending tool prompts */}
-        {prompts.length > 0 ? (
+        {/* v1.0.14 §20 — pending interactive alerts (OK dismisses; tool resumes) */}
+        {alerts.length > 0 ? (
           <div className="mt-3 space-y-2">
-            {prompts.map((p) => (
-              <div key={p.promptId} className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.05] p-3">
-                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-cyan-300">
-                  <MessageSquareQuote className="size-3.5" aria-hidden /> tool prompt {p.toolName ? `· ${p.toolName}` : ''}
+            {alerts.map((a) => (
+              <div key={a.alertId} className="rounded-md border border-sky-400/30 bg-sky-400/[0.05] p-3">
+                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-sky-300">
+                  <BellRing className="size-3.5" aria-hidden /> tool alert {a.toolName ? `· ${a.toolName}` : ''}
                 </p>
-                <p className="mt-1 break-words text-xs text-foreground">{p.message}</p>
-                <div className="mt-2 flex gap-2">
-                  <Input
-                    value={promptAnswer}
-                    onChange={(e) => setPromptAnswer(e.target.value)}
-                    placeholder="Your answer…"
-                    className="min-h-9 flex-1 border-white/[0.09] bg-white/[0.04] text-xs"
-                    aria-label={`Answer for prompt: ${p.message.slice(0, 60)}`}
-                  />
-                  <Button size="sm" disabled={promptBusy} onClick={() => void doAnswerPrompt(p.promptId, promptAnswer.trim() || null)} className="min-h-9 border-cyan-400/30 bg-cyan-400/10 text-cyan-200 hover:bg-cyan-400/20">Send</Button>
-                  <Button size="sm" variant="outline" disabled={promptBusy} onClick={() => void doAnswerPrompt(p.promptId, null)} className="min-h-9 border-white/[0.09] text-muted-foreground">Cancel</Button>
+                <p className="mt-1 break-words text-xs text-foreground">{a.message}</p>
+                <div className="mt-2 flex">
+                  <Button size="sm" disabled={promptBusy} onClick={() => void doDismissAlert(a.alertId)} className="min-h-9 border-sky-400/30 bg-sky-400/10 text-sky-200 hover:bg-sky-400/20">OK</Button>
                 </div>
               </div>
             ))}
+          </div>
+        ) : null}
+
+        {/* v1.0.6 §1.6 — pending tool prompts (v1.0.14 §22: typed inputs) */}
+        {prompts.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {prompts.map((p) => {
+              const inputType = (p.inputType ?? 'text') as string;
+              if (inputType === 'file') {
+                return (
+                  <div key={p.promptId} className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.05] p-3">
+                    <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-cyan-300">
+                      <MessageSquareQuote className="size-3.5" aria-hidden /> tool prompt · file {p.toolName ? `· ${p.toolName}` : ''}
+                    </p>
+                    <p className="mt-1 break-words text-xs text-foreground">{p.message}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <input
+                        type="file"
+                        disabled={promptBusy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void doAnswerFilePrompt(p.promptId, f);
+                          e.target.value = '';
+                        }}
+                        className="block w-full max-w-xs cursor-pointer rounded-md border border-white/[0.09] bg-white/[0.04] text-xs text-slate-300 file:mr-3 file:cursor-pointer file:rounded-l-md file:border-0 file:bg-cyan-400/15 file:px-3 file:py-2 file:text-xs file:font-medium file:text-cyan-200"
+                        aria-label={`Choose a file for prompt: ${p.message.slice(0, 60)}`}
+                      />
+                      <Button size="sm" variant="outline" disabled={promptBusy} onClick={() => void doAnswerPrompt(p.promptId, null)} className="min-h-9 border-white/[0.09] text-muted-foreground">Cancel</Button>
+                    </div>
+                    <p className="mt-1 text-[10px] text-muted-foreground">Files up to 256 KB include inline content — larger files send metadata only.</p>
+                  </div>
+                );
+              }
+              const nativeType = ['textarea'].includes(inputType) ? 'text'
+                : ['number', 'email', 'password', 'url', 'search', 'date', 'time', 'datetime-local', 'month', 'week'].includes(inputType) ? inputType
+                : inputType === 'color' ? 'color'
+                : 'text';
+              return (
+                <div key={p.promptId} className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.05] p-3">
+                  <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-cyan-300">
+                    <MessageSquareQuote className="size-3.5" aria-hidden /> tool prompt · {inputType} {p.toolName ? `· ${p.toolName}` : ''}
+                  </p>
+                  <p className="mt-1 break-words text-xs text-foreground">{p.message}</p>
+                  <div className="mt-2 flex gap-2">
+                    {inputType === 'textarea' ? (
+                      <Textarea
+                        value={promptAnswer}
+                        onChange={(e) => setPromptAnswer(e.target.value)}
+                        placeholder={p.placeholder ?? 'Your answer…'}
+                        className="min-h-16 flex-1 border-white/[0.09] bg-white/[0.04] text-xs"
+                        aria-label={`Answer for prompt: ${p.message.slice(0, 60)}`}
+                      />
+                    ) : (
+                      <Input
+                        type={nativeType}
+                        value={promptAnswer}
+                        onChange={(e) => setPromptAnswer(e.target.value)}
+                        placeholder={p.placeholder ?? (inputType === 'color' ? '#7c3aed' : 'Your answer…')}
+                        className={cn('min-h-9 flex-1 border-white/[0.09] bg-white/[0.04] text-xs', inputType === 'color' && 'h-9 min-h-9 p-1')}
+                        aria-label={`Answer for prompt: ${p.message.slice(0, 60)}`}
+                      />
+                    )}
+                    <Button size="sm" disabled={promptBusy} onClick={() => void doAnswerPrompt(p.promptId, promptAnswer || null)} className="min-h-9 border-cyan-400/30 bg-cyan-400/10 text-cyan-200 hover:bg-cyan-400/20">Send</Button>
+                    <Button size="sm" variant="outline" disabled={promptBusy} onClick={() => void doAnswerPrompt(p.promptId, null)} className="min-h-9 border-white/[0.09] text-muted-foreground">Cancel</Button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : null}
 

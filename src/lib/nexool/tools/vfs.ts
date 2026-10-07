@@ -8,7 +8,7 @@
  * to later executions/tasks (§3.3/§3.4).
  *
  * Storage is the REAL filesystem under one authoritative host root
- * (`<repo>/data/vfs/`, §3.6) — never process memory — so the tree survives
+ * (the real `VFS/` directory, §3.6/v1.0.14 §24) — never process memory — so the tree survives
  * application restarts and deployments that persist the working directory
  * (§3.5). The host path is an implementation detail: restricted tool code
  * only ever sees VIRTUAL absolute paths whose root is `/`.
@@ -70,12 +70,68 @@ export const VFS_LIMITS = {
 export const VFS_WORKSPACE_DIRECTORIES = ['/input', '/output', '/tmp', '/data', '/workspace'] as const;
 
 /**
- * §3.6 — the ONE authoritative host root of the shared VFS. Lives next to the
- * other persistent runtime data (db/); deployment storage that persists the
- * working directory persists the VFS. Never exposed to restricted tool code.
+ * v1.0.14 §24 — the LEGACY VFS root (pre-v1.0.14 releases stored the real
+ * directory under data/vfs). Migrated once, automatically, on first VFS use:
+ * detect existing data → move it into the real VFS/ root → verify → switch.
+ * Existing files are preserved (never deleted) and the migration is logged
+ * as a runtime event trail via console (see docs/vfs.md).
+ */
+const LEGACY_VFS_ROOT = nodePath.resolve(process.cwd(), 'data', 'vfs');
+
+function migrateLegacyVfsRoot(): void {
+  const root = getVfsRoot();
+  let legacyEntries: string[] = [];
+  try {
+    legacyEntries = fsSync.readdirSync(LEGACY_VFS_ROOT);
+  } catch {
+    return; // no legacy root — nothing to migrate (fresh install)
+  }
+  // root already migrated / in use → never touch anything
+  if (fsSync.existsSync(root)) {
+    const existing = fsSync.readdirSync(root);
+    if (existing.length > 0) {
+      if (legacyEntries.length > 0) {
+        console.warn(`[vfs] legacy data/vfs still exists alongside the active VFS/ root — left untouched (no data deleted).`);
+      }
+      return;
+    }
+  }
+  if (legacyEntries.length === 0) {
+    // legacy scaffold only (no user data) — just remove the empty legacy dir
+    try { fsSync.rmdirSync(LEGACY_VFS_ROOT); } catch { /* non-fatal */ }
+    return;
+  }
+  try {
+    fsSync.mkdirSync(root, { recursive: true });
+    let moved = 0;
+    for (const entry of legacyEntries) {
+      const from = nodePath.join(LEGACY_VFS_ROOT, entry);
+      const to = nodePath.join(root, entry);
+      if (fsSync.existsSync(to)) continue; // never overwrite existing files
+      fsSync.renameSync(from, to);
+      moved += 1;
+    }
+    console.log(`[vfs] v1.0.14 migration: moved ${moved} entr${moved === 1 ? 'y' : 'ies'} from data/vfs to the real VFS/ root.`);
+    // remove the now-empty legacy directory (best-effort)
+    try {
+      const rest = fsSync.readdirSync(LEGACY_VFS_ROOT);
+      if (rest.length === 0) fsSync.rmdirSync(LEGACY_VFS_ROOT);
+    } catch { /* non-fatal */ }
+  } catch (err) {
+    console.error('[vfs] legacy VFS migration failed (existing data/vfs preserved):', err);
+  }
+}
+
+/**
+ * §3.6 / v1.0.14 §24 — the ONE authoritative host root of the shared VFS:
+ * the REAL directory `VFS/` inside the project storage root. It is a genuine
+ * host filesystem directory with a sandbox boundary imposed around it —
+ * NOT a simulated store. Lives next to the other persistent runtime data
+ * (db/); deployment storage that persists the working directory persists
+ * the VFS. Never exposed to restricted tool code.
  */
 export function getVfsRoot(): string {
-  return nodePath.resolve(process.cwd(), 'data', 'vfs');
+  return nodePath.resolve(process.cwd(), 'VFS');
 }
 
 export interface VfsEntryMeta {
@@ -644,6 +700,9 @@ const g = globalThis as unknown as { __nextoolGlobalVfs?: VirtualFsSession };
  */
 export function openGlobalVfs(): VirtualFsSession {
   if (!g.__nextoolGlobalVfs) {
+    // v1.0.14 §24.5 — one-time legacy migration BEFORE the session binds to
+    // the root: existing data/vfs contents move into the real VFS/ directory.
+    migrateLegacyVfsRoot();
     g.__nextoolGlobalVfs = VirtualFsSession.createFresh();
   }
   return g.__nextoolGlobalVfs;

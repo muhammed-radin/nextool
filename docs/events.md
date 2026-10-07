@@ -29,16 +29,58 @@ interface NexToolEvent {
 
 ## Priority semantics
 
-Priorities encode urgency, and they have a runtime effect: **any injected event with
-priority ≤ 5 wakes a waiting Live task**. The scale:
+Priorities encode urgency for ORDERING and display — **changed in v1.0.14: priority no
+longer has a runtime wake effect.** The old rule ("any injected event with priority ≤ 5
+wakes a waiting Live task") was REMOVED in v1.0.14 — every injected event now wakes a
+waiting Live task immediately regardless of priority (see
+[Live Mode](live-mode.md#immediate-event-reaction-v1014)). Priority remains the
+queue order (priority ascending, then arrival sequence) and the severity metadata of
+the stream. The scale:
 
 | Range | Meaning | Examples |
 | --- | --- | --- |
 | 1–2 | Emergency / immediate wake | `task.stop_requested`, `env.server.crash`, `user.feedback`, `task.paused` (v1.0.6), `tool.approval.required/.denied/.timeout` (v1.0.6) |
 | 3–4 | Important progress / recovery | `task.completed`, `subgoal.created` (recovery), `tool.timeout`, `core.decision`, `task.resumed` (v1.0.6), `tool.user_prompt.*` (v1.0.6) |
-| 5–6 | Normal operational flow | `task.started`, `tool.started`, `observer.observed`, `live.event.queued/.processing/.dropped` (v1.0.6) |
-| 7–8 | Informational / degraded diagnostics | `task.waiting`, `observer.verify_fallback`, `live.event.processed` (v1.0.6) |
+| 5–6 | Normal operational flow | `task.started`, `tool.started`, `observer.observed`, `event.queued/.processing/.rejected` (v1.0.14; the retired v1.0.6 `live.event.*` types used these priorities) |
+| 7–8 | Informational / degraded diagnostics | `task.waiting`, `observer.verify_fallback`, `event.completed/.received/.admitted` (v1.0.14 lifecycle records) |
 | 9 | Scheduled ticks | `observer.scheduled_tick` |
+
+## The event lifecycle family (v1.0.14)
+
+Every event injected into a live task (`POST /api/tasks/{id}/event`, feedback,
+environment broadcasts, console presets) moves through an **observable lifecycle**,
+emitted as first-class `event.*` runtime events (`source: 'runtime'`, via
+`emitEventLifecycle` in `eventbus.ts`). Admission decisions are never silent —
+Events, Task Preview and Live Monitor render them. Each record's data carries
+`{ eventId, eventType, lifecycle, reason? , …extra }`.
+
+| Type | Pri | Purpose | data (beyond the common shape) |
+| --- | --- | --- | --- |
+| `event.received` | 8 | The event arrived at `injectEvent` — the first lifecycle record, emitted for EVERY injected event. | — |
+| `event.admitted` | 8 | Accepted for the live loop: pushed to the run handle's inbox and the wait is interrupted immediately (v1.0.14 — regardless of priority). | — |
+| `event.rejected` | 6 | NOT accepted — always with an observable `reason`: queue-off while an action runs ("Live action already running and Read & Act All Events is disabled."), task stopped, queue full (incoming lost to a higher-priority queue), or displaced from a full queue by a higher-priority event (carries `droppedSeq`). | `{ reason, incoming?, droppedSeq?, priority? }` |
+| `event.ignored` | 8 | Reserved admission outcome (e.g. non-live or inapplicable targets) — part of the canonical state set. | — |
+| `event.queued` | 8 | "Read & Act All Events" mode: the event entered the persisted task queue (`state.eventQueue`). | `{ seq, queueLength }` |
+| `event.processing` | 8 | The queue head (or the single-event path) is being processed — one observe/understand/act/finish cycle. | `{ seq? }` |
+| `event.completed` | 7 | The event's cycle finished (status `processed` in the queue). | `{ seq? }` |
+| `event.failed` | 5 | The event's cycle threw — recorded with the error and the NEXT queued event proceeds (no deadlock, §32). | `{ reason, seq? }` |
+| `event.cancelled` | 6 | Task stop flushed the event (inbox event or persisted queue entry): "Task stopped by user — … cancelled." | `{ reason, seq? }` |
+
+Lifecycle paths:
+
+```text
+injectEvent → event.received
+    ├─ queue-off + action running / stopped → event.rejected (reason)
+    ├─ Read & Act All Events → event.admitted → event.queued → event.processing
+    │                            → event.completed | event.failed
+    └─ single-event mode → event.admitted → event.processing → event.completed | event.failed
+stop during processing → remaining events: event.cancelled
+```
+
+**Retired types:** the v1.0.6 `live.event.queued` / `live.event.processing` /
+`live.event.processed` / `live.event.dropped` event types were **REPLACED by this
+`event.*` family in v1.0.14** — they are documented below only for history. The queue
+data shape (`seq`, 16 KiB payload guard, processed-history trim to 10) is unchanged.
 
 ## Complete catalog of emitted event types
 
@@ -60,10 +102,10 @@ actual call sites.
 | `task.stop_requested` | 1 | Stop endpoint called. | — |
 | `goal.completed` | 3 | Goal verified achieved. | `{ reason, engine }` |
 | `observer.scheduled_tick` | 9 | Live scheduled timer fired. | `{ at }` |
-| `live.event.queued` | 6 | v1.0.6 multi-event mode: an event landed in the task's queue. | `{ seq, eventId, type, queueLength }` |
-| `live.event.processing` | 6 | v1.0.6: the queue head is being processed (one-by-one, priority → arrival order). | `{ seq, type }` |
-| `live.event.processed` | 7 | v1.0.6: a queued event finished its observe cycle. | `{ seq, type }` |
-| `live.event.dropped` | 6 | v1.0.6: an event was dropped (queue full — lowest priority dropped first, or the incoming event lost to a higher-priority queue). Recorded, never silent. | `{ dropped?, droppedSeq?, incoming, priority? }` |
+| `live.event.queued` | 6 | **RETIRED in v1.0.14** (replaced by `event.queued`): v1.0.6 multi-event mode — an event landed in the task's queue. | `{ seq, eventId, type, queueLength }` |
+| `live.event.processing` | 6 | **RETIRED in v1.0.14** (replaced by `event.processing`): v1.0.6 — the queue head is being processed (one-by-one, priority → arrival order). | `{ seq, type }` |
+| `live.event.processed` | 7 | **RETIRED in v1.0.14** (replaced by `event.completed`): v1.0.6 — a queued event finished its observe cycle. | `{ seq, type }` |
+| `live.event.dropped` | 6 | **RETIRED in v1.0.14** (replaced by `event.rejected`): v1.0.6 — an event was dropped (queue full — lowest priority dropped first, or the incoming event lost to a higher-priority queue). Recorded, never silent. | `{ dropped?, droppedSeq?, incoming, priority? }` |
 
 ### Planner (`source: 'planner'`)
 
@@ -120,7 +162,8 @@ actual call sites.
 | `tool.approval.denied` | 2 | v1.0.6: user denied; the tool is skipped, the task continues per plan. | `{ approvalId, tool }` |
 | `tool.approval.timeout` | 2 | v1.0.6: no decision within 5 minutes — the task stops. | `{ approvalId, tool }` |
 | `tool.execution.blocked` | 2 | v1.0.6: the tool was NOT executed (cause `user_denied` or `approval_timeout`). | `{ approvalId, tool, cause }` |
-| `tool.user_alert` | 4 | v1.0.6: a tool called `await alert(message)` (runtime event, resolves immediately). | `{ executionId, toolName?, message }` |
+| `tool.user_alert` | 4 | v1.0.6 emitted; **interactive since v1.0.14** — a tool called `await alert(message)` and the runtime now shows an OK dialog that PAUSES that tool until the operator dismisses it (120 s auto-dismiss). | `{ alertId, executionId, toolName?, message }` |
+| `tool.user_alert.dismissed` | 4 | **v1.0.14**: the alert was dismissed (operator OK, task stop, or the 120 s auto-dismiss) — the tool resumes. Served by `GET/POST /api/alerts`. | `{ alertId, executionId?, reason? }` |
 | `tool.user_prompt.requested` | 3 | v1.0.6: a tool called `await prompt(...)` — pauses that tool only until answered/cancelled/120 s. | `{ promptId, executionId, toolName?, message, hasDefault }` |
 | `tool.user_prompt.responded` | 4 | v1.0.6: the prompt was answered or cancelled. | `{ promptId, executionId, value?, cancelled }` |
 | `tool.confirm.requested` | 2 | **v1.0.8**: a tool called `await confirm(...)` — shows the confirmation UI and pauses that tool until answered/cancelled/120 s (expiry → `false`). | `{ confirmId, executionId, toolName?, message, hasDefault }` |
@@ -151,11 +194,11 @@ actual call sites.
 | --- | --- | --- | --- |
 | `user.feedback` | 2 | `POST /api/tasks/{id}/feedback` | Live Mode: stores memory (`feedback_<taskId>`), LLM-revises the active subgoal, emits `subgoal.created` + `observer.feedback_applied`. |
 | `environment.server.crash` / `.degrade` / `.recover` | 2 / 4 / 4 | `POST /api/env/event` broadcast to all active live tasks | Live Mode: immediate `runRepairPasses` recovery on the affected server. |
-| `user.message` | default 5 | Task Preview "Send event" preset | Generic wake → one observe cycle. |
+| `user.message` | default 5 | Task Preview "Send event" preset — and the **live conversation channel** (v1.0.14 §8): the message reaches the observe/decide pipeline verbatim; the cycle is immediate. | Immediate observe/act cycle (live conversation turn). |
 | `environment.custom` | default 5 | Task Preview preset | Generic wake → one observe cycle. |
 | `scheduled.force` | default 5 | Task Preview preset | Wakes the live wait immediately (acts like an early tick). |
 | `task.stop` | 1 | Synthetic wake built by `stopTask` | Live wait loop breaks; task finalizes `stopped`. |
-| *(any custom type)* | 1–9 | `POST /api/tasks/{id}/event` | Persisted + broadcast; wakes live tasks when priority ≤ 5. |
+| *(any custom type)* | 1–9 | `POST /api/tasks/{id}/event` | Persisted + broadcast; **wakes live tasks IMMEDIATELY regardless of priority (v1.0.14 — the priority ≤ 5 gate was removed)**; the full event body travels into the decision context (`CONTEXT.trigger`). |
 
 ## Frontend representation
 
@@ -173,7 +216,9 @@ actual call sites.
   `planner.recovery_failed`, `planner.recovery_exhausted`, `planner.main_plan_resumed`,
   `planner.main_plan_aborted`) **and `tool.auto_execution`** — the Task Preview Recovery
   panel and plan checklist refresh the moment a recovery transition happens (its
-  per-step `planner.plan` events feed the same checklist).
+  per-step `planner.plan` events feed the same checklist). **v1.0.14: the `event.*`
+  lifecycle family and `tool.user_alert.dismissed` render in the same timeline —
+  admission/rejection/completion of every live event is directly visible.**
 - **runtime:// terminal** — source-colored lines in the terminal component.
 - **Notification bell** — driven by `NotificationRecord`s (not raw events), but the
   `notification.sent` event mirrors each send into the stream.

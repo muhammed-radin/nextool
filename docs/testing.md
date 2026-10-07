@@ -263,8 +263,19 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
 - Common runtime APIs (v1.0.6): a `js-function` tool can `await fetch()` a public
   https URL and gets `HOST_BLOCKED` for `http://localhost`; `await alert(...)` emits
   `tool.user_alert`; in a real task `await prompt(...)` pauses only the tool (the task
-  loop keeps moving) and is answered from the console card; in a test run prompt
-  returns its default immediately.
+  loop keeps moving) and is answered from the console card. **Changed in v1.0.14:** the
+  Tool Editor test is interactive too — the prompt card appears in the test panel and
+  the run waits for the answer (no default auto-resolution).
+- Interactive test runtime (v1.0.14): a test of a tool that awaits
+  `alert()/confirm()/askForUserAsChoice()/prompt()` pauses the test panel, renders the
+  interaction card (typed prompt inputs incl. the file chooser render their proper
+  input; a `type: 'file'` prompt resolves a JSON `{ name, mimeType, size, content? }`
+  answer), and completes only after the operator answers — verified E2E with
+  `date` ("2026-10-20"), `color` ("#7c3aed") and `file` prompts.
+- AskSelf / AskForUser (v1.0.14): `ask.self` returns `{ success: true, opinion }` and
+  works as a subtool via `context.tools.call('ask.self', …)`; `ask.user` parks the tool
+  (`paused`), shows the question card, and returns `{ success, question, answer }` after
+  the operator answers (api-01 E2E: answered → resumed).
 - Virtual FS (v1.0.6): a `nodejs` tool writes `/output/x.txt`, reads it back in a
   later execution (persistence), gets `VirtualFSAccessError` for `../` escapes, and
   `fs.usage()` reports real byte counts; a Test run's workspace is wiped.
@@ -276,10 +287,14 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
   Deny skips (with `observer.feedback_applied` when feedback is typed); a 5-minute
   timeout stops the task. `autoExecuteTools: true` (global or per-task) bypasses the
   wait. Parallel batches: approving one tool does not approve its siblings.
-- Multi-event mode (v1.0.6): with `allowMultipleEvents` on, events injected while a
-  live task is busy queue (`live.event.queued`) and process one-by-one in priority →
-  arrival order; the queue survives a page refresh (persisted in task state); queue
-  full drops the lowest priority with a recorded `live.event.dropped`.
+- Multi-event mode (v1.0.6, event-driven since v1.0.14): with `allowMultipleEvents` on,
+  events injected while a live task is busy queue (`event.queued`) and process one-by-one
+  in priority → arrival order WITHOUT interval waits between them (3 queued events
+  completed in ~7 s with a 300 s interval in the v1.0.14 E2E); the queue survives a page
+  refresh (persisted in task state); queue full displaces the lowest priority with a
+  recorded `event.rejected`. Without the switch, an event arriving while an action runs
+  is REJECTED observably ("Live action already running and Read & Act All Events is
+  disabled.") — no hidden backlog.
 - Pause/Resume (v1.0.6): Pause on a live task flips status to `paused` (sky-blue)
   after the current execution finishes, `task.paused` fires; events injected during
   pause are retained; Resume continues (never restarts) and `task.resumed` fires; no

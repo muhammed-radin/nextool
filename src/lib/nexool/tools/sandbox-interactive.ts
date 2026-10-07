@@ -1,44 +1,48 @@
 /**
- * NexTool v1.0.6 → v1.0.8 — async alert()/prompt()/confirm() runtime functions
- * (spec v1.0.6 §1.5–§1.7, v1.0.8 §1).
- * NexTool v1.0.13 — await askForUserAsChoice(): the operator picks ONE option
- * from a tool-provided list (multiple-choice question). Resolves to the
- * CHOSEN VALUE string, or null on cancel/timeout — the tool decides how to
- * handle "no answer" (an unresolved choice is never fabricated into one of
- * the options).
+ * NexTool v1.0.6 → v1.0.14 — async alert()/prompt()/confirm() runtime functions
+ * (spec v1.0.6 §1.5–§1.7, v1.0.8 §1, v1.0.13 choices, v1.0.14 §20–§22).
+ *
+ * v1.0.14 — FULLY INTERACTIVE RUNTIME (§20/§21): await alert(), confirm(),
+ * askForUserAsChoice() and prompt() are REAL user interactions in EVERY
+ * runtime mode — including the Tool Editor test runtime. None of them
+ * auto-resolve anymore: the execution stays "waiting_for_user" until the
+ * operator responds (or the 120s window expires). The editor renders the
+ * interaction UI from the same pending registries the console uses.
+ *
+ * v1.0.14 §22 — ADVANCED prompt(): the message argument may be a structured
+ * spec `{ message, type, placeholder?, defaultValue? }` with input types:
+ * text, textarea, number, email, password, url, search, date, time,
+ * datetime-local, month, week, color, file. `type: "file"` resolves to a
+ * JSON string `{ name, mimeType, size, content? }` (content only when the
+ * operator picks a small file — huge contents are never blindly injected).
  *
  * These are NEXTOOL runtime functions, not the browser's blocking dialogs:
  *
- *   await alert("Server recovery completed.");        → runtime event, resolves
+ *   await alert("Server recovery completed.");        → OK dialog, resolves
  *   const name = await prompt("Enter the server:");   → PAUSES the tool until
  *     the user answers via the console UI, cancels, or the 120s timeout hits.
- *   const ok = await confirm("Delete the files?");     → v1.0.8 §1 — PAUSES the
- *     tool, shows the NexTool confirmation UI, ALWAYS resolves to a boolean
+ *   const ok = await confirm("Delete the files?");     → PAUSES the tool,
+ *     shows the NexTool confirmation UI, ALWAYS resolves to a boolean
  *     (never "yes"/"no" strings). Cancellation/timeout resolve FALSE — an
  *     unresolved confirmation is never treated as true (§1.4).
  *   const region = await askForUserAsChoice("Deploy target?", [
- *     "staging", "production"]);                       → v1.0.13 — PAUSES the
- *     tool, renders one button per option; resolves to the chosen VALUE or
+ *     "staging", "production"]);                       → PAUSES the tool,
+ *     renders one button per option; resolves to the chosen VALUE or
  *     null (cancel/timeout).
+ *   const picked = await prompt({ message: "Upload config", type: "file" });
+ *                                                      → file chooser; JSON
+ *     metadata string (see above).
  *
  * The runtime is NEVER frozen while a tool waits: only that tool's Promise
  * pends — the task loop, scheduler and other tools keep running. The tool's
  * own execution deadline is extended for the duration of the wait (§1.6) and
  * reset once the user responds.
  *
- * Runtime events (§1.3): tool.user_alert, tool.user_prompt.requested/
- * responded and tool.confirm.requested/responded — each carries taskId,
- * executionId, toolName and the request/response payload so the console can
- * associate the response with task/execution/tool/confirmation request.
- *
- * Two modes:
- *  - test (Tool IDE): alerts resolve immediately (logged as an event line),
- *    prompts resolve with their default value (or null) and confirms resolve
- *    with their declared default (or false) immediately — tests never hang on
- *    interactive input. Honest: documented in tool-development.md.
- *  - production (task execution): alert/prompt/confirm emit real events;
- *    prompts and confirms register in pending registries the console UI
- *    resolves via POST /api/prompts and POST /api/confirmations.
+ * Runtime events (§1.3): tool.user_alert (requested/dismissed),
+ * tool.user_prompt.requested/responded, tool.confirm.requested/responded,
+ * tool.user_choice.requested/responded — each carries taskId, executionId,
+ * toolName and the request/response payload so the console (and the Tool
+ * Editor test panel) can associate the response with the right interaction.
  */
 
 import { emitEvent } from '../eventbus';
@@ -53,6 +57,9 @@ export const CONFIRM_TIMEOUT_MS = 120_000;
 /** v1.0.13 — choice wait window; on expiry the choice resolves null. */
 export const CHOICE_TIMEOUT_MS = 120_000;
 
+/** v1.0.14 — alert wait window; on expiry the alert auto-dismisses. */
+export const ALERT_TIMEOUT_MS = 120_000;
+
 /** One selectable option of askForUserAsChoice(). */
 export interface ChoiceOption {
   /** The value RESOLVED to the tool (stable id — never rewritten). */
@@ -61,9 +68,55 @@ export interface ChoiceOption {
   label?: string;
 }
 
+/** v1.0.14 §22 — supported prompt() input types. */
+export const PROMPT_INPUT_TYPES = [
+  'text', 'textarea', 'number', 'email', 'password', 'url', 'search',
+  'date', 'time', 'datetime-local', 'month', 'week', 'color', 'file',
+] as const;
+
+export type PromptInputType = (typeof PROMPT_INPUT_TYPES)[number];
+
+/** v1.0.14 §22 — structured prompt() configuration. */
+export interface PromptSpec {
+  message: string;
+  type?: PromptInputType;
+  placeholder?: string;
+  defaultValue?: string;
+}
+
+/** Normalize a prompt() argument: string or structured spec (fail loud). */
+export function normalizePromptSpec(input: string | PromptSpec): {
+  message: string;
+  inputType: PromptInputType;
+  placeholder?: string;
+  defaultValue?: string;
+} {
+  if (typeof input === 'string') {
+    const msg = input === undefined || input === null ? '' : String(input);
+    if (msg.length > 2000) throw new Error('prompt() message must be at most 2000 characters.');
+    return { message: msg, inputType: 'text' };
+  }
+  if (!input || typeof input !== 'object') {
+    throw new Error('prompt() expects a message string or a { message, type? } object.');
+  }
+  const message = String(input.message ?? '');
+  if (!message.trim()) throw new Error('prompt() spec requires a non-empty message.');
+  if (message.length > 2000) throw new Error('prompt() message must be at most 2000 characters.');
+  const inputType = (input.type ?? 'text') as PromptInputType;
+  if (!PROMPT_INPUT_TYPES.includes(inputType)) {
+    throw new Error(
+      `prompt() type "${String(input.type)}" is not supported. Supported types: ${PROMPT_INPUT_TYPES.join(', ')}.`,
+    );
+  }
+  const placeholder = input.placeholder === undefined ? undefined : String(input.placeholder).slice(0, 200);
+  const defaultValue = input.defaultValue === undefined ? undefined : String(input.defaultValue).slice(0, 4000);
+  return { message, inputType, ...(placeholder !== undefined ? { placeholder } : {}), ...(defaultValue !== undefined ? { defaultValue } : {}) };
+}
+
 export interface SandboxInteractions {
   alert(message: string): Promise<void>;
-  prompt(message: string, defaultValue?: string): Promise<string | null>;
+  /** v1.0.14 §22 — accepts a plain message OR a structured spec. */
+  prompt(message: string | PromptSpec, defaultValue?: string): Promise<string | null>;
   /** v1.0.8 §1 — async confirmation; ALWAYS resolves to a boolean. */
   confirm(message: string, options?: { default?: boolean }): Promise<boolean>;
   /** v1.0.13 — multiple-choice operator question; resolves the chosen VALUE
@@ -73,7 +126,7 @@ export interface SandboxInteractions {
     choices: Array<string | ChoiceOption>,
     options?: { default?: string },
   ): Promise<string | null>;
-  /** Awaiting a prompt/confirm/choice — the sandbox watchdog extends its deadline. */
+  /** Awaiting a prompt/confirm/choice/alert — the sandbox watchdog extends its deadline. */
   pendingCount(): number;
 }
 
@@ -113,8 +166,23 @@ interface PendingPrompt {
   executionId: string;
   toolName?: string;
   message: string;
+  /** v1.0.14 §22 — the requested input type (drives the operator UI). */
+  inputType: PromptInputType;
+  placeholder?: string;
   requestedAt: string;
   resolve: (value: string | null) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** v1.0.14 — a pending alert: the OK/dismiss button resolves it. */
+interface PendingAlert {
+  alertId: string;
+  taskId?: string;
+  executionId: string;
+  toolName?: string;
+  message: string;
+  requestedAt: string;
+  resolve: () => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -145,6 +213,7 @@ interface PendingChoice {
 
 const g = globalThis as unknown as {
   __nextoolPrompts?: Map<string, PendingPrompt>;
+  __nextoolAlerts?: Map<string, PendingAlert>;
   __nextoolConfirms?: Map<string, PendingConfirm>;
   __nextoolChoices?: Map<string, PendingChoice>;
   __nextoolInteractionWatch?: Set<string>;
@@ -153,6 +222,11 @@ const g = globalThis as unknown as {
 function choiceRegistry(): Map<string, PendingChoice> {
   if (!g.__nextoolChoices) g.__nextoolChoices = new Map();
   return g.__nextoolChoices;
+}
+
+function alertRegistry(): Map<string, PendingAlert> {
+  if (!g.__nextoolAlerts) g.__nextoolAlerts = new Map();
+  return g.__nextoolAlerts;
 }
 
 /** v1.0.8 — execution-scoped interaction watch: lets the EXECUTOR timeout
@@ -184,6 +258,9 @@ export interface PendingPromptInfo {
   taskId?: string;
   toolName?: string;
   message: string;
+  /** v1.0.14 §22 — input type requested by the tool (text/date/color/...). */
+  inputType: PromptInputType;
+  placeholder?: string;
   requestedAt: string;
 }
 
@@ -198,24 +275,60 @@ export function listPendingPrompts(taskId?: string): PendingPromptInfo[] {
       continue;
     }
     if (taskId && p.taskId !== taskId) continue;
-    out.push({ promptId: id, taskId: p.taskId, toolName: p.toolName, message: p.message, requestedAt: p.requestedAt });
+    out.push({
+      promptId: id, taskId: p.taskId, toolName: p.toolName, message: p.message,
+      inputType: p.inputType, ...(p.placeholder !== undefined ? { placeholder: p.placeholder } : {}),
+      requestedAt: p.requestedAt,
+    });
   }
   return out;
 }
 
-/** Resolve a pending prompt from the console UI. Returns false when unknown/expired. */
-export function resolvePendingPrompt(promptId: string, value: string | null): boolean {
+/** File metadata attached by the operator UI for `type: "file"` prompts. */
+export interface PromptFileValue {
+  name: string;
+  mimeType?: string;
+  size?: number;
+  /** Base64/data-url content — ONLY for small files (client-capped). */
+  content?: string;
+}
+
+/** Compose the string the TOOL receives for a file prompt (§22.1): a JSON
+ *  object with name/mime/size and (only when provided) the content. */
+function composeFileValue(file: PromptFileValue): string {
+  return JSON.stringify({
+    name: String(file.name ?? 'file').slice(0, 300),
+    mimeType: file.mimeType === undefined ? undefined : String(file.mimeType).slice(0, 200),
+    size: typeof file.size === 'number' && Number.isFinite(file.size) ? Math.round(file.size) : undefined,
+    ...(typeof file.content === 'string' && file.content ? { content: file.content.slice(0, 700_000) } : {}),
+  });
+}
+
+/**
+ * Resolve a pending prompt from the console UI. Returns false when
+ * unknown/expired. `file` carries structured file-prompt metadata — the tool
+ * receives it as a JSON string (never a fabricated plain-text answer).
+ */
+export function resolvePendingPrompt(promptId: string, value: string | null, file?: PromptFileValue): boolean {
   const p = promptRegistry().get(promptId);
   if (!p) return false;
   clearTimeout(p.timer);
   promptRegistry().delete(promptId);
-  p.resolve(value === null ? null : String(value).slice(0, 4000));
+  let resolved: string | null = value === null ? null : String(value).slice(0, 4000);
+  if (p.inputType === 'file') {
+    resolved = file ? composeFileValue(file) : null;
+  }
+  p.resolve(resolved);
   void emitEvent({
     taskId: p.taskId,
     type: 'tool.user_prompt.responded',
     source: 'user',
-    message: value === null ? `Prompt cancelled: ${p.message.slice(0, 120)}` : `Prompt answered: ${p.message.slice(0, 120)}`,
-    data: { promptId, executionId: p.executionId, value: value === null ? null : String(value).slice(0, 500), cancelled: value === null },
+    message: resolved === null ? `Prompt cancelled: ${p.message.slice(0, 120)}` : `Prompt answered: ${p.message.slice(0, 120)}`,
+    data: {
+      promptId, executionId: p.executionId,
+      value: resolved === null ? null : resolved.slice(0, 500),
+      cancelled: resolved === null, inputType: p.inputType,
+    },
     priority: 4,
   });
   return true;
@@ -228,6 +341,60 @@ export function cancelPendingPromptsForTask(taskId: string): void {
     clearTimeout(p.timer);
     promptRegistry().delete(id);
     p.resolve(null);
+  }
+}
+
+// ---------- alerts (v1.0.14 §20 — interactive, never silent) ----------
+
+export interface PendingAlertInfo {
+  alertId: string;
+  taskId?: string;
+  toolName?: string;
+  message: string;
+  requestedAt: string;
+}
+
+/** List pending alerts (optionally scoped to a task) — powers the console UI. */
+export function listPendingAlerts(taskId?: string): PendingAlertInfo[] {
+  const now = Date.now();
+  const out: PendingAlertInfo[] = [];
+  for (const [id, a] of alertRegistry()) {
+    if (now - Date.parse(a.requestedAt) > ALERT_TIMEOUT_MS + 1000) {
+      clearTimeout(a.timer);
+      alertRegistry().delete(id);
+      continue;
+    }
+    if (taskId && a.taskId !== taskId) continue;
+    out.push({ alertId: id, taskId: a.taskId, toolName: a.toolName, message: a.message, requestedAt: a.requestedAt });
+  }
+  return out;
+}
+
+/** Dismiss a pending alert (the OK button). Returns false when unknown/expired. */
+export function resolvePendingAlert(alertId: string): boolean {
+  const a = alertRegistry().get(alertId);
+  if (!a) return false;
+  clearTimeout(a.timer);
+  alertRegistry().delete(alertId);
+  a.resolve();
+  void emitEvent({
+    taskId: a.taskId,
+    type: 'tool.user_alert.dismissed',
+    source: 'user',
+    message: `Alert dismissed: ${a.message.slice(0, 120)}`,
+    data: { alertId, executionId: a.executionId, toolName: a.toolName ?? null },
+    priority: 5,
+  });
+  return true;
+}
+
+/** Dismiss every pending alert for a task (task stop). */
+export function cancelPendingAlertsForTask(taskId: string): void {
+  for (const [id, a] of alertRegistry()) {
+    if (a.taskId !== taskId) continue;
+    clearTimeout(a.timer);
+    alertRegistry().delete(id);
+    a.resolve();
   }
 }
 
@@ -377,20 +544,23 @@ interface DeadlineController {
   resetDeadline(): void;
 }
 
+/**
+ * v1.0.14 §20/§21 — INTERACTIVE in every mode. The tool test stays paused
+ * ("waiting_for_user") until the operator responds — no auto-resolve, no
+ * mock defaults. `mode` is kept in the signature for runtime-event context.
+ */
 function makePrompter(
-  mode: 'test' | 'production',
   taskId: string | undefined,
   executionId: string,
   toolName: string | undefined,
   deadline?: DeadlineController,
 ) {
-  return async function prompt(message: string, defaultValue?: string): Promise<string | null> {
-    const msg = message === undefined || message === null ? '' : String(message);
-    if (msg.length > 2000) throw new Error('prompt() message must be at most 2000 characters.');
-    if (mode === 'test') {
-      // Test mode resolves immediately with the default (or null) so the Tool
-      // IDE test panel never hangs — the behavior is logged honestly.
-      return defaultValue === undefined ? null : String(defaultValue);
+  return async function prompt(message: string | PromptSpec, defaultValue?: string): Promise<string | null> {
+    // v1.0.14 §22 — string OR structured spec.
+    const spec = normalizePromptSpec(message);
+    // Legacy positional default applies to plain string messages (text input).
+    if (typeof message === 'string' && defaultValue !== undefined) {
+      spec.defaultValue = String(defaultValue).slice(0, 4000);
     }
     const promptId = `pmt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     deadline?.extendDeadline();
@@ -402,7 +572,9 @@ function makePrompter(
           taskId,
           executionId,
           toolName,
-          message: msg,
+          message: spec.message,
+          inputType: spec.inputType,
+          ...(spec.placeholder !== undefined ? { placeholder: spec.placeholder } : {}),
           requestedAt: new Date().toISOString(),
           resolve,
           timer: setTimeout(() => {
@@ -416,8 +588,11 @@ function makePrompter(
           taskId,
           type: 'tool.user_prompt.requested',
           source: 'tool',
-          message: `Tool requests input: ${msg.slice(0, 300)}`,
-          data: { promptId, executionId, toolName: toolName ?? null, message: msg, hasDefault: defaultValue !== undefined },
+          message: `Tool requests input (${spec.inputType}): ${spec.message.slice(0, 300)}`,
+          data: {
+            promptId, executionId, toolName: toolName ?? null, message: spec.message,
+            inputType: spec.inputType, hasDefault: spec.defaultValue !== undefined,
+          },
           priority: 3,
         });
       });
@@ -429,25 +604,53 @@ function makePrompter(
   };
 }
 
+/**
+ * v1.0.14 §20 — alert() is INTERACTIVE: the OK button (or the 120s window)
+ * resolves it. The emitted tool.user_alert event + pending registry entry
+ * let the console/editor render the dialog.
+ */
 function makeAlerter(
-  mode: 'test' | 'production',
   taskId: string | undefined,
   executionId: string,
   toolName: string | undefined,
+  deadline?: DeadlineController,
 ) {
   return async function alert(message: string): Promise<void> {
     const msg = message === undefined || message === null ? '' : String(message);
     if (msg.length > 2000) throw new Error('alert() message must be at most 2000 characters.');
-    if (mode === 'test') return; // resolved immediately; surfaced through tool logs by the caller
-    void emitEvent({
-      taskId,
-      type: 'tool.user_alert',
-      source: 'tool',
-      message: `Tool alert: ${msg.slice(0, 300)}`,
-      data: { executionId, toolName: toolName ?? null, message: msg },
-      priority: 4,
-    });
-    return;
+    const alertId = `alr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    deadline?.extendDeadline();
+    interactionWatch().add(executionId);
+    try {
+      await new Promise<void>((resolve) => {
+        const entry: PendingAlert = {
+          alertId,
+          taskId,
+          executionId,
+          toolName,
+          message: msg,
+          requestedAt: new Date().toISOString(),
+          resolve,
+          timer: setTimeout(() => {
+            alertRegistry().delete(alertId);
+            resolve();
+          }, ALERT_TIMEOUT_MS),
+        };
+        if (typeof entry.timer.unref === 'function') entry.timer.unref();
+        alertRegistry().set(alertId, entry);
+        void emitEvent({
+          taskId,
+          type: 'tool.user_alert',
+          source: 'tool',
+          message: `Tool alert: ${msg.slice(0, 300)}`,
+          data: { alertId, executionId, toolName: toolName ?? null, message: msg },
+          priority: 4,
+        });
+      });
+    } finally {
+      interactionWatch().delete(executionId);
+      deadline?.resetDeadline();
+    }
   };
 }
 
@@ -457,7 +660,6 @@ function makeAlerter(
  * expires. ALWAYS resolves to a boolean; cancellation/timeout → false.
  */
 function makeConfirmer(
-  mode: 'test' | 'production',
   taskId: string | undefined,
   executionId: string,
   toolName: string | undefined,
@@ -466,11 +668,6 @@ function makeConfirmer(
   return async function confirm(message: string, options?: { default?: boolean }): Promise<boolean> {
     const msg = message === undefined || message === null ? '' : String(message);
     if (msg.length > 2000) throw new Error('confirm() message must be at most 2000 characters.');
-    if (mode === 'test') {
-      // Test mode resolves immediately (never hangs): the declared default or
-      // the conservative FALSE — an unresolved confirmation is never true.
-      return options?.default === true;
-    }
     const confirmId = `cfm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     deadline?.extendDeadline();
     interactionWatch().add(executionId);
@@ -516,7 +713,6 @@ function makeConfirmer(
  * a fabricated one — or null on cancel/timeout.
  */
 function makeChoiceAsker(
-  mode: 'test' | 'production',
   taskId: string | undefined,
   executionId: string,
   toolName: string | undefined,
@@ -530,12 +726,6 @@ function makeChoiceAsker(
     const msg = message === undefined || message === null ? '' : String(message);
     if (msg.length > 2000) throw new Error('askForUserAsChoice() message must be at most 2000 characters.');
     const normalized = normalizeChoiceOptions(choices); // throws honestly on invalid input
-    if (mode === 'test') {
-      // Test mode resolves immediately (never hangs): the declared default when
-      // it matches an offered option, otherwise the FIRST option's value.
-      const fallback = normalized.find((o) => o.value === options?.default) ?? normalized[0];
-      return fallback ? fallback.value : null;
-    }
     const choiceId = `chc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     deadline?.extendDeadline();
     interactionWatch().add(executionId);
@@ -582,18 +772,17 @@ function makeChoiceAsker(
   };
 }
 
-/** Test-mode interactions (Tool IDE "Test Tool") — never hang. */
+/**
+ * v1.0.14 — LEGACY ALIAS kept for import compatibility. Test-mode
+ * interactions are now REAL interactions (the Tool Editor test runtime waits
+ * for the operator like production does — §20/§21: never auto-resolve).
+ */
 export function createTestInteractions(): SandboxInteractions {
-  return {
-    alert: makeAlerter('test', undefined, 'test', undefined),
-    prompt: makePrompter('test', undefined, 'test', undefined),
-    confirm: makeConfirmer('test', undefined, 'test', undefined),
-    askForUserAsChoice: makeChoiceAsker('test', undefined, 'test', undefined),
-    pendingCount: () => 0,
-  };
+  return createRuntimeInteractions(undefined, `test_${Date.now().toString(36)}`, undefined);
 }
 
-/** Production interactions — real events + pending prompt/confirm registries. */
+/** Runtime interactions — real events + pending registries; used by BOTH the
+ *  production tool executor and the Tool Editor test runtime (v1.0.14). */
 export function createRuntimeInteractions(
   taskId: string | undefined,
   executionId: string,
@@ -601,14 +790,17 @@ export function createRuntimeInteractions(
   deadline?: DeadlineController,
 ): SandboxInteractions {
   return {
-    alert: makeAlerter('production', taskId, executionId, toolName),
-    prompt: makePrompter('production', taskId, executionId, toolName, deadline),
-    confirm: makeConfirmer('production', taskId, executionId, toolName, deadline),
-    askForUserAsChoice: makeChoiceAsker('production', taskId, executionId, toolName, deadline),
+    alert: makeAlerter(taskId, executionId, toolName, deadline),
+    prompt: makePrompter(taskId, executionId, toolName, deadline),
+    confirm: makeConfirmer(taskId, executionId, toolName, deadline),
+    askForUserAsChoice: makeChoiceAsker(taskId, executionId, toolName, deadline),
     pendingCount: () => {
       let n = 0;
       for (const p of promptRegistry().values()) {
         if (p.executionId === executionId) n += 1;
+      }
+      for (const a of alertRegistry().values()) {
+        if (a.executionId === executionId) n += 1;
       }
       for (const c of confirmRegistry().values()) {
         if (c.executionId === executionId) n += 1;
