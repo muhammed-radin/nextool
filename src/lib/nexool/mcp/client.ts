@@ -1,12 +1,15 @@
 /**
- * NexTool v1.0.12 — MCP CLIENT runtime (spec §1.4/§1.5).
+ * NexTool v1.0.13 — MCP CLIENT runtime (spec §1.4/§1.5, §4 super-client).
  *
  * NexTool acts as an MCP CLIENT. This module wraps the OFFICIAL
  * `@modelcontextprotocol/sdk` (never a hand-rolled protocol implementation):
  *
  *   - initialize/session handling  → `Client.connect(transport)`
- *   - capability discovery         → `client.getServerVersion()` + listTools
+ *   - capability discovery         → `client.getServerVersion()` + getServerCapabilities
  *   - tool listing/inspection      → `client.listTools()`
+ *   - FULL capability discovery    → listResources / listResourceTemplates /
+ *                                    listPrompts (§4 — servers without a
+ *                                    capability answer [] , never throw)
  *   - tool execution               → `client.callTool()`
  *   - transports                   → stdio (child process) + Streamable HTTP
  *
@@ -68,6 +71,33 @@ export interface McpRemoteTool {
   inputSchema: unknown;
 }
 
+/** §4 — a resource exposed by the server (growable content, read via uri). */
+export interface McpRemoteResource {
+  uri: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+/** §4 — a URI template describing HOW to build resource URIs. */
+export interface McpRemoteResourceTemplate {
+  uriTemplate: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+/** §4 — a reusable prompt template offered by the server. */
+export interface McpRemotePrompt {
+  name: string;
+  title?: string;
+  description?: string;
+  /** Declared prompt arguments (name + required flag only, UI display). */
+  arguments?: { name: string; description?: string; required?: boolean }[];
+}
+
 export interface McpToolCallResult {
   /** True when the REMOTE tool reported failure (MCP isError result). */
   isError: boolean;
@@ -87,7 +117,13 @@ export interface McpToolCallResult {
 export interface McpClientLike {
   /** Server-reported name/version after the initialize handshake. */
   getServerInfo(): { name: string; version: string } | null;
+  /** §4 — server-declared capability object from the initialize handshake. */
+  getServerCapabilities?(): Record<string, unknown> | null;
   listTools(): Promise<McpRemoteTool[]>;
+  /** §4 — capability-aware listing: servers without the capability answer []. */
+  listResources?(): Promise<McpRemoteResource[]>;
+  listResourceTemplates?(): Promise<McpRemoteResourceTemplate[]>;
+  listPrompts?(): Promise<McpRemotePrompt[]>;
   callTool(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<McpToolCallResult>;
   /** Terminate the session (kills the stdio process / closes HTTP session). */
   close(): Promise<void>;
@@ -227,6 +263,25 @@ async function defaultMcpClientFactory(opts: McpClientFactoryOptions): Promise<M
     throw classifyConnectError(err);
   }
 
+  // §4 — capability-aware discovery helpers. A server that never declared a
+  // capability is NOT asked (the request would round-trip into a -32601
+  // "method not found" error); one that declared it but still fails degrades
+  // to [] — partial capability must never break full discovery.
+  const hasCapability = (key: string): boolean => {
+    const caps = client.getServerCapabilities() as Record<string, unknown> | undefined;
+    return !!caps && caps[key] !== undefined;
+  };
+  const safeList = async <T>(capability: 'resources' | 'prompts', itemKey: 'resources' | 'resourceTemplates' | 'prompts', list: () => Promise<Record<string, unknown>>): Promise<T[]> => {
+    if (!hasCapability(capability)) return [];
+    try {
+      const res = await list();
+      const items = res[itemKey];
+      return Array.isArray(items) ? (items as T[]) : [];
+    } catch {
+      return [];
+    }
+  };
+
   const textFromContent = (content: unknown[]): string =>
     content
       .map((block) => {
@@ -241,6 +296,17 @@ async function defaultMcpClientFactory(opts: McpClientFactoryOptions): Promise<M
       const v = client.getServerVersion();
       return v ? { name: v.name, version: v.version } : null;
     },
+    getServerCapabilities() {
+      // JSON-safe projection of the server's own capability declaration
+      // (tools / resources / prompts / logging / experimental / …) or null.
+      const caps = client.getServerCapabilities();
+      if (!caps) return null;
+      try {
+        return JSON.parse(JSON.stringify(caps)) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    },
     async listTools() {
       const res = await client.listTools();
       return res.tools.map((t) => ({
@@ -249,6 +315,16 @@ async function defaultMcpClientFactory(opts: McpClientFactoryOptions): Promise<M
         ...(t.description ? { description: t.description } : {}),
         inputSchema: t.inputSchema,
       }));
+    },
+    listResources() {
+      return safeList<McpRemoteResource>('resources', 'resources', () => client.listResources());
+    },
+    listResourceTemplates() {
+      // resource templates are announced under the `resources` capability
+      return safeList<McpRemoteResourceTemplate>('resources', 'resourceTemplates', () => client.listResourceTemplates());
+    },
+    listPrompts() {
+      return safeList<McpRemotePrompt>('prompts', 'prompts', () => client.listPrompts());
     },
     async callTool(name, args, timeoutMs) {
       const res = await client.callTool(

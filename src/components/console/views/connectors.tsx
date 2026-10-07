@@ -2,17 +2,22 @@
 
 /**
  * Connectors (v1.0.12) — central MCP connection management.
+ * v1.0.13 §5 — customizable authentication: per-provider auth-method selector
+ * (none | bearer/token | oauth2 redirect), the OAuth scope editor (§5.3) with
+ * the confirm-before-redirect login (§5.1), the refresh-token action (§5.4)
+ * and the §4 server-capability display in discovery. NOTHING provider-specific
+ * is hard-coded here — every label/field/endpoint comes from the provider
+ * registry metadata returned by GET /api/connectors.
  *
  * Supported MCP servers come from the JSON provider registry
- * (config/mcp-servers.json → GET /api/connectors); NOTHING provider-specific
- * is hard-coded here. Per connector: connect / authenticate / disconnect /
- * reconnect, the REAL connection status (never faked), live tool discovery
- * with multi-select import, and imported-tool management (enable/disable,
- * schema refresh, remove). NexTool-native/custom tools stay on the Tools
- * page — this page ONLY manages the connector layer.
+ * (config/mcp-servers.json → GET /api/connectors); per connector: connect /
+ * authenticate / disconnect / reconnect, the REAL connection status (never
+ * faked), live tool discovery with multi-select import, and imported-tool
+ * management (enable/disable, schema refresh, remove). NexTool-native/custom
+ * tools stay on the Tools page — this page ONLY manages the connector layer.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,26 +25,53 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
-  ApiClientError, clearConnectorCredentials, connectorConnectionAction, createConnector,
+  ApiClientError, clearConnectorCredentials, connectorConnectionAction, connectorRefreshAuth, createConnector,
   deleteConnector, discoverConnectorTools, importConnectorTools, listConnectors,
-  refreshConnectorTools, removeImportedTool, setConnectorCredentials, toggleImportedTool,
+  refreshConnectorTools, removeImportedTool, setConnectorCredentials, startConnectorOAuth, toggleImportedTool,
   updateConnector,
 } from '@/lib/nexool/client';
 import type {
-  ConnectorDTO, DiscoveredToolDTO, ImportedToolDTO, McpProviderDTO,
+  ConnectorDTO, DiscoveredToolDTO, ImportedToolDTO, McpAuthMethodDTO, McpProviderDTO,
 } from '@/lib/nexool/client';
 import { EmptyState, ErrorCard, SectionTitle, fmtMs } from '../ui-bits';
 import {
-  Cable, CircleAlert, Download, Eye, EyeOff, KeyRound, Loader2, Plug, PlugZap, Plus,
-  RefreshCw, RotateCw, ShieldCheck, Trash2, Unplug, Wrench,
+  Cable, CircleAlert, Download, Eye, EyeOff, KeyRound, Loader2, LogIn, Plug, PlugZap, Plus,
+  RefreshCw, RotateCw, ShieldCheck, Trash2, Unplug, Wrench, X,
 } from 'lucide-react';
+
+// ---------- v1.0.13 §5 — auth-method presentation (registry-driven labels) ----------
+
+const AUTH_METHOD_LABELS: Record<McpAuthMethodDTO, string> = {
+  none: 'No authentication',
+  bearer: 'Access token',
+  token_pair: 'I got token already (access + refresh)',
+  oauth2: 'Login via NexTool: Redirect',
+};
+
+/** Registry-declared auth methods for a provider (falls back to the legacy type). */
+function authMethodsOf(p: McpProviderDTO): McpAuthMethodDTO[] {
+  if (p.authentication.authMethods && p.authentication.authMethods.length > 0) return p.authentication.authMethods;
+  return ['none', 'bearer', 'token_pair', 'oauth2'];
+}
+
+/** Credential-field keys the given method needs (§5 requiredFieldsByMethod). */
+function fieldsForMethod(p: McpProviderDTO, m: McpAuthMethodDTO): string[] {
+  const byMethod = p.authentication.requiredFieldsByMethod?.[m];
+  if (byMethod && byMethod.length > 0) return byMethod;
+  if (m === 'none') return [];
+  return p.authentication.requiredFields;
+}
 
 // ---------- status badge (honest states, §1.8) ----------
 
@@ -146,17 +178,36 @@ interface CredState {
   values: Record<string, string>;
   show: Record<string, boolean>;
   busy: boolean;
+  /** v1.0.13 §5 — the auth method THIS save declares (drives the visible fields). */
+  method?: McpAuthMethodDTO;
 }
 
 function CredentialsDialog({ state, onPatch, onClose, onSaved }: { state: CredState | null; onPatch: (patch: Partial<CredState>) => void; onClose: () => void; onSaved: () => void }) {
   if (!state) return null;
   const auth = state.provider?.authentication;
+  // v1.0.13 §5 — field set for the DECLARED method: required-by-method fields
+  // first; when the method list does not declare any (legacy presets) fall
+  // back to the provider's full field list. OAuth client fields appear for
+  // the oauth2 method when the preset exists.
+  const method = state.method;
+  const methodKeys = state.provider && method ? fieldsForMethod(state.provider, method) : [];
+  const oauthClientKeys = method === 'oauth2' && auth?.oauth ? ['clientId', 'clientSecret'] : [];
+  const visibleFields = auth
+    ? (methodKeys.length > 0 || oauthClientKeys.length > 0
+      ? auth.fields.filter((f) => methodKeys.includes(f.key) || oauthClientKeys.includes(f.key))
+        .concat(
+          oauthClientKeys
+            .filter((k) => !auth.fields.some((f) => f.key === k))
+            .map((k) => ({ key: k, label: k === 'clientId' ? 'OAuth Client ID' : 'OAuth Client Secret', type: 'string' as const, required: false, secret: k === 'clientSecret', description: 'Stored server-side only; used for the OAuth token exchange.' })),
+        )
+      : auth.fields)
+    : [];
   const submit = async () => {
     try {
       onPatch({ busy: true });
       const filled = Object.fromEntries(Object.entries(state.values).filter(([, v]) => v.trim() !== ''));
-      await setConnectorCredentials(state.connector.id, filled);
-      toast.success('Credentials stored', { description: 'Saved server-side only — values never leave the NexTool process.' });
+      await setConnectorCredentials(state.connector.id, filled, method);
+      toast.success('Credentials stored', { description: `Method: ${method ? AUTH_METHOD_LABELS[method] : auth?.title ?? 'default'} — saved server-side only.` });
       onSaved();
       onClose();
     } catch (e) {
@@ -169,37 +220,43 @@ function CredentialsDialog({ state, onPatch, onClose, onSaved }: { state: CredSt
     <Dialog open onOpenChange={(v) => (!v ? onClose() : undefined)}>
       <DialogContent className="glass-strong sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{auth?.title ?? 'Credentials'} — {state.connector.name}</DialogTitle>
+          <DialogTitle>{method ? AUTH_METHOD_LABELS[method] : auth?.title ?? 'Credentials'} — {state.connector.name}</DialogTitle>
           <DialogDescription>{auth?.description}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          {(auth?.fields ?? []).map((f) => (
-            <div key={f.key} className="space-y-1.5">
-              <Label htmlFor={`cred-${f.key}`}>{f.label}{f.required ? ' *' : ''}</Label>
-              <div className="relative">
-                <Input
-                  id={`cred-${f.key}`}
-                  type={f.secret === false || state.show[f.key] ? 'text' : 'password'}
-                  value={state.values[f.key] ?? ''}
-                  onChange={(e) => onPatch({ values: { ...state.values, [f.key]: e.target.value } })}
-                  placeholder={f.placeholder}
-                  autoComplete="off"
-                  className="border-white/[0.09] bg-white/[0.04] pr-9 font-mono text-xs"
-                />
-                {f.secret !== false ? (
-                  <button
-                    type="button"
-                    onClick={() => onPatch({ show: { ...state.show, [f.key]: !state.show[f.key] } })}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    aria-label={state.show[f.key] ? 'Hide value' : 'Show value'}
-                  >
-                    {state.show[f.key] ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
-                  </button>
-                ) : null}
+          {visibleFields.length === 0 ? (
+            <p className="rounded-md border border-white/[0.07] bg-white/[0.03] p-2 text-[11px] text-muted-foreground">
+              This method requires no credential fields.
+            </p>
+          ) : (
+            visibleFields.map((f) => (
+              <div key={f.key} className="space-y-1.5">
+                <Label htmlFor={`cred-${f.key}`}>{f.label}{f.required ? ' *' : ''}</Label>
+                <div className="relative">
+                  <Input
+                    id={`cred-${f.key}`}
+                    type={f.secret === false || state.show[f.key] ? 'text' : 'password'}
+                    value={state.values[f.key] ?? ''}
+                    onChange={(e) => onPatch({ values: { ...state.values, [f.key]: e.target.value } })}
+                    placeholder={f.placeholder}
+                    autoComplete="off"
+                    className="border-white/[0.09] bg-white/[0.04] pr-9 font-mono text-xs"
+                  />
+                  {f.secret !== false ? (
+                    <button
+                      type="button"
+                      onClick={() => onPatch({ show: { ...state.show, [f.key]: !state.show[f.key] } })}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      aria-label={state.show[f.key] ? 'Hide value' : 'Show value'}
+                    >
+                      {state.show[f.key] ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
+                    </button>
+                  ) : null}
+                </div>
+                <p className="text-[10px] text-muted-foreground">{f.description}</p>
               </div>
-              <p className="text-[10px] text-muted-foreground">{f.description}</p>
-            </div>
-          ))}
+            ))
+          )}
           <p className="flex items-start gap-1.5 rounded-md border border-emerald-400/20 bg-emerald-400/5 p-2 text-[11px] text-emerald-200/90">
             <ShieldCheck className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             Stored in the server database only. The browser never receives credential values, and they are excluded from tool definitions and exports.
@@ -225,6 +282,10 @@ interface DiscoverState {
   tools: DiscoveredToolDTO[];
   selected: Set<string>;
   importing: boolean;
+  /** v1.0.13 §4 — server capabilities beyond tools. */
+  resources: { uri: string; name?: string; title?: string; description?: string }[];
+  prompts: { name: string; title?: string; description?: string }[];
+  serverInfo: { name: string; version: string; capabilities: Record<string, unknown> | null } | null;
 }
 
 function DiscoveryDialog({ state, onPatch, onClose, onImported }: { state: DiscoverState | null; onPatch: (patch: Partial<DiscoverState>) => void; onClose: () => void; onImported: () => void }) {
@@ -326,6 +387,46 @@ function DiscoveryDialog({ state, onPatch, onClose, onImported }: { state: Disco
             Import selected tools{selectedCount > 0 ? ` (${selectedCount})` : ''}
           </Button>
         </DialogFooter>
+
+        {/* v1.0.13 §4 — server capabilities beyond tools (resources / prompts / declared capability object) */}
+        {!state.loading && !state.error && (state.resources.length > 0 || state.prompts.length > 0 || state.serverInfo) ? (
+          <div className="space-y-1.5 rounded-md border border-white/[0.07] bg-white/[0.02] p-2.5">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              server capabilities {state.serverInfo ? `· ${state.serverInfo.name} ${state.serverInfo.version}` : ''}
+            </p>
+            {state.serverInfo?.capabilities ? (
+              <div className="flex flex-wrap gap-1">
+                {Object.keys(state.serverInfo.capabilities).map((cap) => (
+                  <Badge key={cap} variant="outline" className="border-emerald-400/30 bg-emerald-400/10 font-mono text-[10px] text-emerald-300">{cap}</Badge>
+                ))}
+              </div>
+            ) : null}
+            {state.resources.length > 0 ? (
+              <details className="group">
+                <summary className="cursor-pointer text-[11px] text-sky-300">Resources ({state.resources.length})</summary>
+                <div className="nextool-scroll mt-1 max-h-28 space-y-0.5 overflow-y-auto">
+                  {state.resources.map((r) => (
+                    <p key={r.uri} className="truncate font-mono text-[10px] text-muted-foreground" title={r.description ?? r.uri}>
+                      {r.name ?? r.title ?? r.uri} — <span className="text-sky-300/70">{r.uri}</span>
+                    </p>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+            {state.prompts.length > 0 ? (
+              <details className="group">
+                <summary className="cursor-pointer text-[11px] text-violet-300">Prompts ({state.prompts.length})</summary>
+                <div className="nextool-scroll mt-1 max-h-28 space-y-0.5 overflow-y-auto">
+                  {state.prompts.map((pr) => (
+                    <p key={pr.name} className="truncate font-mono text-[10px] text-muted-foreground" title={pr.description ?? pr.name}>
+                      {pr.title ?? pr.name}
+                    </p>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );
@@ -344,7 +445,7 @@ function describeSchema(inputSchema: unknown): string {
 // ---------- connector card ----------
 
 function ConnectorCard({
-  connector, providers, busy, onConnect, onDisconnect, onReconnect, onDiscover, onCredentials, onRemove, onRefreshAll, onToolToggle, onToolRefresh, onToolRemove, onToggleEnabled,
+  connector, providers, busy, onConnect, onDisconnect, onReconnect, onDiscover, onCredentials, onRemove, onRefreshAll, onToolToggle, onToolRefresh, onToolRemove, onToggleEnabled, onSetAuthMethod, onStartOAuth, onRefreshAuth,
 }: {
   connector: ConnectorDTO;
   providers: McpProviderDTO[];
@@ -360,10 +461,31 @@ function ConnectorCard({
   onToolRefresh: (c: ConnectorDTO, t: ImportedToolDTO) => void;
   onToolRemove: (c: ConnectorDTO, t: ImportedToolDTO) => void;
   onToggleEnabled: (c: ConnectorDTO, enabled: boolean) => void;
+  /** v1.0.13 §5 — declare the auth method (opens the matching flow); the
+   *  opts carry scope edits from the OAuth panel (§5.3). */
+  onSetAuthMethod: (c: ConnectorDTO, m: McpAuthMethodDTO, opts?: { addScope?: string; removeScope?: string }) => void;
+  /** §5.1 — ask for confirmation, then POST oauth/start + redirect. */
+  onStartOAuth: (c: ConnectorDTO) => void;
+  /** §5.4 — rotate the stored access token via the refresh grant. */
+  onRefreshAuth: (c: ConnectorDTO) => void;
 }) {
   const provider = providers.find((p) => p.id === connector.providerId);
   const isActive = connector.status === 'connected';
   const isTransitioning = connector.status === 'connecting' || connector.status === 'reconnecting';
+  // v1.0.13 §5 — the effective method: stored/inferred from the DTO, else the
+  // first declared method of the provider.
+  const methods = provider ? authMethodsOf(provider) : [];
+  const effectiveMethod: McpAuthMethodDTO | undefined = connector.authMethod ?? methods[0];
+  const oauthPreset = provider?.authentication.oauth;
+  const loginWording = provider?.authentication.loginWording ?? 'Login via NexTool: Redirect';
+  // §5.3 — editable scopes: connector config override, else preset defaults.
+  const [scopeDraft, setScopeDraft] = useState('');
+  const configuredScopes = (() => {
+    const raw = connector.config?.scopes;
+    if (typeof raw === 'string' && raw.trim()) return raw.split(/[\s,]+/).filter(Boolean);
+    if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string');
+    return oauthPreset?.defaultScopes ?? [];
+  })();
 
   return (
     <div className="glass-card flex flex-col rounded-lg p-4" aria-label={`Connector ${connector.name}`}>
@@ -454,6 +576,103 @@ function ConnectorCard({
         </Button>
       </div>
 
+      {/* v1.0.13 §5 — customizable authentication (method selector + OAuth panel) */}
+      {provider && methods.length > 0 ? (
+        <div className="mt-3 space-y-2 border-t border-white/[0.07] pt-3">
+          <p className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">Authentication</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Select
+              value={effectiveMethod}
+              onValueChange={(v) => onSetAuthMethod(connector, v as McpAuthMethodDTO)}
+              disabled={busy}
+            >
+              <SelectTrigger className="h-9 min-w-0 flex-1 border-white/[0.09] bg-white/[0.04] text-xs" aria-label="Authentication method">
+                <SelectValue placeholder="Auth method" />
+              </SelectTrigger>
+              <SelectContent>
+                {methods.map((m) => (
+                  <SelectItem key={m} value={m} className="text-xs">{AUTH_METHOD_LABELS[m]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {connector.hasRefreshToken ? (
+              <Button variant="outline" size="sm" className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs" onClick={() => onRefreshAuth(connector)} disabled={busy}>
+                <RotateCw className="size-3.5" aria-hidden /> Refresh token
+              </Button>
+            ) : null}
+          </div>
+
+          {/* §5.1/§5.2/§5.3 — OAuth redirect panel: editable scopes + confirmed login */}
+          {effectiveMethod === 'oauth2' && oauthPreset ? (
+            <div className="space-y-2 rounded-md border border-sky-400/25 bg-sky-400/[0.04] p-2.5">
+              <p className="text-[11px] text-foreground/90">
+                Scopes <span className="text-muted-foreground">(sent to the provider&apos;s authorization endpoint — editable)</span>
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {configuredScopes.length === 0 ? (
+                  <span className="text-[10px] text-muted-foreground">no scopes configured — the provider default applies</span>
+                ) : (
+                  configuredScopes.map((s) => (
+                    <Badge key={s} variant="outline" className="max-w-full gap-1 border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-200">
+                      <span className="truncate">{s}</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove scope ${s}`}
+                        className="text-sky-300/80 hover:text-rose-300"
+                        onClick={() => onSetAuthMethod(connector, 'oauth2', { removeScope: s })}
+                      >
+                        <X className="size-3" aria-hidden />
+                      </button>
+                    </Badge>
+                  ))
+                )}
+              </div>
+              <div className="flex gap-1.5">
+                <Input
+                  value={scopeDraft}
+                  onChange={(e) => setScopeDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && scopeDraft.trim()) {
+                      onSetAuthMethod(connector, 'oauth2', { addScope: scopeDraft.trim() });
+                      setScopeDraft('');
+                    }
+                  }}
+                  placeholder="Add scope (e.g. https://www.googleapis.com/auth/drive)"
+                  className="h-9 min-w-0 flex-1 border-white/[0.09] bg-white/[0.04] font-mono text-[11px]"
+                  aria-label="Add scope"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-9 border-white/[0.09] bg-white/[0.04] text-xs"
+                  disabled={busy || !scopeDraft.trim()}
+                  onClick={() => {
+                    onSetAuthMethod(connector, 'oauth2', { addScope: scopeDraft.trim() });
+                    setScopeDraft('');
+                  }}
+                >
+                  <Plus className="size-3.5" aria-hidden /> Add scope
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <Button size="sm" className="min-h-9 bg-primary-gradient text-primary-foreground hover:opacity-90" onClick={() => onStartOAuth(connector)} disabled={busy}>
+                  <LogIn className="size-3.5" aria-hidden /> {loginWording}
+                </Button>
+                <span className="text-[10px] text-muted-foreground">
+                  opens the provider login in a new redirect — you confirm first · {oauthPreset.pkce ? 'PKCE' : 'authorization code'}
+                </span>
+              </div>
+            </div>
+          ) : null}
+          {effectiveMethod === 'none' ? (
+            <p className="text-[11px] text-muted-foreground">No authentication — the connector connects without credentials.</p>
+          ) : null}
+          {effectiveMethod === 'oauth2' && !oauthPreset ? (
+            <p className="text-[11px] text-amber-300/90">This provider preset declares no OAuth endpoints — use a token method instead.</p>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* imported tools (§1.15) — connector-scoped management */}
       {connector.importedTools.length > 0 ? (
         <div className="mt-3 border-t border-white/[0.07] pt-3">
@@ -539,6 +758,10 @@ export default function ConnectorsView() {
   const [discover, setDiscover] = useState<DiscoverState | null>(null);
   const [removeCandidate, setRemoveCandidate] = useState<ConnectorDTO | null>(null);
   const [removing, setRemoving] = useState(false);
+  // v1.0.13 §5 — the connector awaiting the EXPLICIT confirm before the
+  // external OAuth redirect (§5.1 — never redirect without confirmation).
+  const [oauthConfirm, setOauthConfirm] = useState<ConnectorDTO | null>(null);
+  const [oauthBusy, setOauthBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -551,6 +774,23 @@ export default function ConnectorsView() {
   }, []);
 
   useEffect(() => {
+    void load();
+  }, [load]);
+
+  // v1.0.13 §5.2 — OAuth callback return: /api/connectors/[id]/oauth/callback
+  // redirects back with ?oauth=<id>&status=ok|error&detail=…; surface the
+  // outcome once and strip the params from the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get('oauth')) return;
+    const status = params.get('status');
+    const detail = params.get('detail');
+    if (status === 'ok') {
+      toast.success('Connected via OAuth', { description: 'Access + refresh tokens were exchanged and stored server-side.' });
+    } else {
+      toast.error('OAuth login failed', { description: detail ?? 'The provider did not return an authorization code.' });
+    }
+    window.history.replaceState({}, '', window.location.pathname + '#connectors');
     void load();
   }, [load]);
 
@@ -594,11 +834,18 @@ export default function ConnectorsView() {
   });
 
   const openDiscover = (c: ConnectorDTO) => {
-    setDiscover({ connector: c, loading: true, error: null, tools: [], selected: new Set(), importing: false });
+    setDiscover({ connector: c, loading: true, error: null, tools: [], selected: new Set(), importing: false, resources: [], prompts: [], serverInfo: null });
     void discoverConnectorTools(c.id)
       .then((res) => {
         // imported tools start UNCHECKED (re-import = explicit update); their badge shows the import state
-        setDiscover((s) => (s && s.connector.id === c.id ? { ...s, loading: false, tools: res.tools } : s));
+        setDiscover((s) => (s && s.connector.id === c.id ? {
+          ...s,
+          loading: false,
+          tools: res.tools,
+          resources: res.resources ?? [],
+          prompts: res.prompts ?? [],
+          serverInfo: res.serverInfo ?? null,
+        } : s));
       })
       .catch((e) => {
         setDiscover((s) => (s && s.connector.id === c.id ? { ...s, loading: false, error: e instanceof ApiClientError ? e.message : 'Unknown error' } : s));
@@ -688,6 +935,68 @@ export default function ConnectorsView() {
     }
   });
 
+  // ---------- v1.0.13 §5 — customizable authentication handlers ----------
+
+  /** Scope edits (§5.3) persist into connector config.scopes (arbitrary scope
+   *  strings are valid — the provider decides). Also declares the method. */
+  const setAuthMethod = (c: ConnectorDTO, m: McpAuthMethodDTO, opts?: { addScope?: string; removeScope?: string }) => {
+    if (opts?.addScope || opts?.removeScope) {
+      const provider = providers.find((p) => p.id === c.providerId);
+      const defaults = provider?.authentication.oauth?.defaultScopes ?? [];
+      const raw = c.config?.scopes;
+      const current = typeof raw === 'string' && raw.trim()
+        ? raw.split(/[\s,]+/).filter(Boolean)
+        : Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string') : defaults;
+      const next = opts.addScope
+        ? [...new Set([...current, opts.addScope])]
+        : current.filter((s) => s !== opts.removeScope);
+      void withBusy(c.id, async () => {
+        try {
+          await updateConnector(c.id, { config: { scopes: next.join(' ') } });
+          toast.success('Scopes updated', { description: `${next.length} scope(s) — used by the next OAuth login.` });
+        } catch (e) {
+          toast.error('Could not update scopes', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+        }
+      });
+      return;
+    }
+    if (m === 'none' || m === 'oauth2') {
+      // Declared without typed fields — 'none' needs nothing; 'oauth2' gets its
+      // tokens from the redirect (client id/secret are OPTIONAL credential fields).
+      void withBusy(c.id, async () => {
+        try {
+          await setConnectorCredentials(c.id, {}, m);
+          toast.info('Authentication method set', { description: `${c.name} — ${AUTH_METHOD_LABELS[m]}.` });
+        } catch (e) {
+          toast.error('Could not set method', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+        }
+      });
+      return;
+    }
+    // Token methods open the credentials dialog scoped to the method fields.
+    const provider = providers.find((p) => p.id === c.providerId);
+    setCred({ connector: c, provider, values: {}, show: {}, busy: false, method: m });
+  };
+
+  /** §5.1 — the user confirmed; begin the redirect flow. */
+  const startOAuth = (c: ConnectorDTO) => void withBusy(c.id, async () => {
+    try {
+      const res = await startConnectorOAuth(c.id);
+      window.location.assign(res.authorizeUrl);
+    } catch (e) {
+      toast.error('Could not start the OAuth login', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    }
+  });
+
+  const refreshAuth = (c: ConnectorDTO) => void withBusy(c.id, async () => {
+    try {
+      const res = await connectorRefreshAuth(c.id);
+      toast.success('Access token refreshed', { description: res.tokenExpiresAt ? `New expiry: ${res.tokenExpiresAt}` : c.name });
+    } catch (e) {
+      toast.error('Token refresh failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    }
+  });
+
   const providers = data?.providers ?? [];
   const connectors = data?.connectors ?? [];
   const supportedProviders = useMemo(() => providers.filter((p) => p.enabled), [providers]);
@@ -771,6 +1080,9 @@ export default function ConnectorsView() {
               onToolRefresh={toolRefresh}
               onToolRemove={toolRemove}
               onToggleEnabled={toggleEnabled}
+              onSetAuthMethod={setAuthMethod}
+              onStartOAuth={(c) => setOauthConfirm(c)}
+              onRefreshAuth={refreshAuth}
             />
           ))}
         </div>
@@ -782,6 +1094,40 @@ export default function ConnectorsView() {
           Imported MCP tools appear in the Tools registry with environment <span className="font-mono">mcp</span> and execute through their connector inside the normal tool lifecycle.
         </p>
       ) : null}
+
+      {/* v1.0.13 §5.1 — EXPLICIT confirmation before ANY external OAuth redirect */}
+      <AlertDialog open={oauthConfirm !== null} onOpenChange={(v) => (!v ? setOauthConfirm(null) : undefined)}>
+        <AlertDialogContent className="glass-strong">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              This connector will open an external authentication page.
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Continue to {oauthConfirm ? (providers.find((p) => p.id === oauthConfirm.providerId)?.name ?? oauthConfirm.providerName) : 'the provider'}?
+              {' '}NexTool will redirect you to the provider&apos;s login, receive the callback and exchange the code for tokens server-side.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/[0.09] bg-white/[0.04]">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-primary-gradient text-primary-foreground hover:opacity-90"
+              onClick={(e) => {
+                e.preventDefault();
+                if (oauthConfirm) {
+                  setOauthBusy(true);
+                  startOAuth(oauthConfirm).finally(() => {
+                    setOauthBusy(false);
+                    setOauthConfirm(null);
+                  });
+                }
+              }}
+              disabled={oauthBusy}
+            >
+              {oauthBusy ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null} Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AddConnectorDialog state={add} onPatch={(patch) => setAdd((s) => (s ? { ...s, ...patch } : s))} onClose={() => setAdd(null)} onCreated={() => void load()} />
       <CredentialsDialog state={cred} onPatch={(patch) => setCred((s) => (s ? { ...s, ...patch } : s))} onClose={() => setCred(null)} onSaved={() => void load()} />

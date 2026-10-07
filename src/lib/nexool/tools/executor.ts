@@ -33,6 +33,11 @@ export interface ExecuteOptions {
    *  SubtoolLink by appending the executed tool to the chain. Absent = a
    *  fresh root link is created so `context.tools` always exists. */
   subtool?: SubtoolParentInfo;
+  /** v1.0.13 §10 — set by the task-level approval gate when it collected an
+   *  explicit user ALLOW for THIS execution (FORCE_APPROVAL_TOOLS tools). The
+   *  flag threads into the HandlerContext so the handler skips its own
+   *  duplicate confirmation; every other context stays gated. */
+  approved?: boolean;
 }
 
 function newExecutionId(): string {
@@ -234,6 +239,8 @@ export async function executeTool(
           signal: opts.signal,
         }
         : { chain: [toolName], depth: 0, budget: { calls: 0 }, signal: opts.signal },
+      // v1.0.13 §10 — forward the task-level explicit ALLOW (fs.cmd gate).
+      approved: opts.approved === true,
     };
     const startedEpoch = Date.now();
     const result = await Promise.race([

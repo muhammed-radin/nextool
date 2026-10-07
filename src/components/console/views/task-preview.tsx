@@ -9,7 +9,7 @@
  * lg+ keeps the rich multi-column layout.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
@@ -26,8 +26,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useNexoolStream } from '@/hooks/use-nexool-stream';
 import { useConsoleStore } from '../console-store';
-import { ApiClientError, answerChoice, answerConfirmation, answerPrompt, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, listApprovals, listChoices, listConfirmations, listLimitContinuations, listPrompts, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
-import type { PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
+import { ApiClientError, answerChoice, answerConfirmation, answerFileRequest, answerPrompt, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, listApprovals, listChoices, listConfirmations, listFileRequests, listLimitContinuations, listPrompts, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
+import type { PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingFileRequestDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
 import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { RuntimeTerminal } from '../terminal';
@@ -35,7 +35,7 @@ import { ChecklistItems, TaskChecklist } from '../task-checklist';
 import { EmptyState, ErrorCard, ExecutionStatusBadge, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
 import { reconcileExecutions, isTerminalExecutionStatus } from '@/lib/nexool/execution-merge';
 import {
-  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Gauge, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Wrench, X, Zap,
+  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Gauge, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Upload, Wrench, X, Zap,
 } from 'lucide-react';
 
 const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
@@ -176,6 +176,8 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const [choices, setChoices] = useState<PendingChoiceDTO[]>([]);
   const [verifications, setVerifications] = useState<PendingVerificationDTO[]>([]);
   const [continuations, setContinuations] = useState<PendingLimitContinuationDTO[]>([]);
+  // v1.0.13 §10 — pending fs.upload "Upload a file" requests for THIS task
+  const [fileRequests, setFileRequests] = useState<PendingFileRequestDTO[]>([]);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [promptBusy, setPromptBusy] = useState(false);
@@ -183,6 +185,7 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const [choiceBusy, setChoiceBusy] = useState(false);
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [continuationBusy, setContinuationBusy] = useState(false);
+  const [fileRequestBusy, setFileRequestBusy] = useState(false);
   const [denyFeedback, setDenyFeedback] = useState('');
   const [promptAnswer, setPromptAnswer] = useState('');
 
@@ -251,13 +254,14 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   // v1.0.8 §1.5 — plus pending confirmations.
   // v1.0.13 — plus operator choices, verification latches and safety-limit continuations.
   const loadInteractive = useCallback(async () => {
-    const [a, p, c, ch, v, lc] = await Promise.allSettled([listApprovals(taskId), listPrompts(taskId), listConfirmations(taskId), listChoices(taskId), listVerifications(taskId), listLimitContinuations(taskId)]);
+    const [a, p, c, ch, v, lc, fr] = await Promise.allSettled([listApprovals(taskId), listPrompts(taskId), listConfirmations(taskId), listChoices(taskId), listVerifications(taskId), listLimitContinuations(taskId), listFileRequests(taskId)]);
     if (a.status === 'fulfilled') setApprovals(a.value.approvals);
     if (p.status === 'fulfilled') setPrompts(p.value.prompts);
     if (c.status === 'fulfilled') setConfirmations(c.value.confirmations);
     if (ch.status === 'fulfilled') setChoices(ch.value.choices);
     if (v.status === 'fulfilled') setVerifications(v.value.verifications);
     if (lc.status === 'fulfilled') setContinuations(lc.value.continuations);
+    if (fr.status === 'fulfilled') setFileRequests(fr.value.requests);
   }, [taskId]);
 
   useEffect(() => {
@@ -412,6 +416,46 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
     } finally {
       setVerificationBusy(false);
     }
+  };
+
+  // v1.0.13 §10 — deliver the operator's chosen file to the waiting fs.upload tool.
+  const doAnswerFileRequest = async (requestId: string, payload: { fileName: string; contentBase64: string } | { cancel: true }) => {
+    setFileRequestBusy(true);
+    try {
+      await answerFileRequest(requestId, payload);
+      void loadInteractive();
+      void loadSide(); // the fs.upload execution completes — refresh the Tools panel
+      toast.success('cancel' in payload ? 'File request cancelled' : 'File delivered', {
+        description: 'cancel' in payload
+          ? 'The fs.upload tool reports a FILE_REQUEST_TIMEOUT failure.'
+          : `The file was handed to fs.upload: ${payload.fileName}`,
+      });
+    } catch (e) {
+      toast.error('File request failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setFileRequestBusy(false);
+    }
+  };
+
+  // v1.0.13 §10 — read the chosen file as base64 and resolve the request.
+  const fileRequestInputRef = useRef<HTMLInputElement>(null);
+  const [activeFileRequestId, setActiveFileRequestId] = useState<string | null>(null);
+  const onFileRequestPicked = (file: File | null) => {
+    const requestId = activeFileRequestId;
+    setActiveFileRequestId(null);
+    if (!file || !requestId) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      const base64 = dataUrl.includes(',') ? dataUrl.slice(dataUrl.indexOf(',') + 1) : '';
+      if (!base64) {
+        toast.error('Could not read the chosen file');
+        return;
+      }
+      void doAnswerFileRequest(requestId, { fileName: file.name, contentBase64: base64 });
+    };
+    reader.onerror = () => toast.error('Could not read the chosen file');
+    reader.readAsDataURL(file);
   };
 
   // v1.0.13 — 'continue' grows the limits and resumes the task; 'deny' ends it as limit_reached.
@@ -1106,6 +1150,54 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
             ))}
           </div>
         ) : null}
+
+        {/* v1.0.13 §10 — fs.upload file requests: choose a file from the device or cancel */}
+        {fileRequests.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {fileRequests.map((fr) => (
+              <div key={fr.requestId} className="rounded-md border border-teal-400/30 bg-teal-400/[0.05] p-3">
+                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-teal-300">
+                  <Upload className="size-3.5" aria-hidden /> upload requested {fr.toolName ? `· ${fr.toolName}` : ''}
+                </p>
+                <p className="mt-1 break-words text-xs text-foreground">{fr.message}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    disabled={fileRequestBusy}
+                    onClick={() => {
+                      setActiveFileRequestId(fr.requestId);
+                      fileRequestInputRef.current?.click();
+                    }}
+                    className="min-h-9 border-teal-400/40 bg-teal-400/10 text-teal-200 hover:bg-teal-400/20"
+                  >
+                    <Upload className="size-3.5" aria-hidden /> Choose file
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={fileRequestBusy}
+                    onClick={() => void doAnswerFileRequest(fr.requestId, { cancel: true })}
+                    className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"
+                  >
+                    <X className="size-3.5" aria-hidden /> Cancel
+                  </Button>
+                </div>
+                <p className="mt-2 text-[10px] text-muted-foreground">the tool waits up to 120 s for the file · it is stored in the shared VFS</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <input
+          ref={fileRequestInputRef}
+          type="file"
+          className="hidden"
+          onChange={(e) => {
+            onFileRequestPicked(e.target.files?.[0] ?? null);
+            e.target.value = '';
+          }}
+          aria-hidden
+          tabIndex={-1}
+        />
 
         {/* v1.0.13 — verification latch: the operator must verify the held-open tool result */}
         {verifications.length > 0 ? (

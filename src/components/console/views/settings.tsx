@@ -445,7 +445,9 @@ function AboutSection() {
         <VersionRow
           label="Model"
           version={`v${CORE_MODULE_VERSION}`}
-          note={`${CORE_MODULE_NAME} decision unit — unchanged since v1.0.0.`}
+          // v1.0.13 §7 — no hardcoded model-version claims: the note is derived
+          // from the same dynamic source of truth the value above comes from.
+          note={`${CORE_MODULE_NAME} decision unit — served by the external provider, current version ${CORE_MODULE_VERSION}.`}
         />
         <VersionRow
           label="Dataset"

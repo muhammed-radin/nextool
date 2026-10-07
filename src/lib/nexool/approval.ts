@@ -29,6 +29,16 @@ import type { NexToolSettings, TaskConfig, ToolDefinition, PendingApproval } fro
 /** §9.7 — maximum approval waiting time. */
 export const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
+/**
+ * v1.0.13 §10 — tools that must ALWAYS collect an explicit user confirmation
+ * before execution, regardless of the auto-execution hierarchy (global ON,
+ * tool ON or task ON never bypass this). fs.cmd executes host shell commands
+ * — §10/§19 make explicit user confirmation a product requirement, so the
+ * task gate refuses the auto-execution shortcut for these tools and the
+ * handler keeps a second gate for subtool/test contexts.
+ */
+export const FORCE_APPROVAL_TOOLS: ReadonlySet<string> = new Set(['fs.cmd']);
+
 export type ApprovalOutcome = 'allowed' | 'denied' | 'timeout' | 'cancelled';
 
 /** v1.0.11 §38 — where an auto-execution decision came from. */
@@ -83,9 +93,11 @@ export function resolveAutoExecute(
 }
 
 interface PendingApprovalEntry extends PendingApproval {
-  taskId: string;
+  taskId?: string;
   resolve: (outcome: ApprovalOutcome) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** v1.0.13 §13 — user-supplied denial feedback (reason), when provided. */
+  feedback?: string;
 }
 
 const g = globalThis as unknown as { __nextoolApprovals?: Map<string, PendingApprovalEntry> };
@@ -113,15 +125,19 @@ export function listPendingApprovals(taskId?: string): PendingApproval[] {
   return out;
 }
 
-/** §9.5 — raise an approval request and WAIT. Never auto-continues. */
+/** §9.5 — raise an approval request and WAIT. Never auto-continues.
+ *  v1.0.13 §13 — the resolution also carries the user's OPTIONAL denial
+ *  feedback (reason) so the escalation flow can understand the rejection.
+ *  taskId is optional: handler-level gates (subtool/test contexts) may have
+ *  no task — a fabricated id would violate the taskEvent FK on persist. */
 export function requestApproval(input: {
-  taskId: string;
+  taskId?: string;
   tool: string;
   params: Record<string, unknown>;
   purpose?: string;
   reason?: string;
   subgoal?: string;
-}): Promise<ApprovalOutcome> {
+}): Promise<{ outcome: ApprovalOutcome; feedback?: string }> {
   const approvalId = `apr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const requestedAt = new Date().toISOString();
   const payload: PendingApproval = {
@@ -143,11 +159,11 @@ export function requestApproval(input: {
     priority: 2,
   });
 
-  return new Promise<ApprovalOutcome>((resolve) => {
+  return new Promise<{ outcome: ApprovalOutcome; feedback?: string }>((resolve) => {
     const entry: PendingApprovalEntry = {
       ...payload,
       taskId: input.taskId,
-      resolve,
+      resolve: (outcome) => resolve({ outcome, feedback: entry.feedback }),
       timer: setTimeout(() => {
         approvalRegistry().delete(approvalId);
         // §9.7/§9.11 — approval timeout: the caller STOPS the task; the tool
@@ -168,7 +184,7 @@ export function requestApproval(input: {
           data: { approvalId, tool: input.tool, cause: 'approval_timeout' },
           priority: 2,
         });
-        resolve('timeout');
+        resolve({ outcome: 'timeout' });
       }, APPROVAL_TIMEOUT_MS),
     };
     if (typeof entry.timer.unref === 'function') entry.timer.unref();
@@ -222,12 +238,13 @@ export async function resolveApproval(
   // §9.9 — optional user feedback after denial → feedback event → runtime context
   const trimmed = feedback?.trim();
   if (trimmed) {
+    entry.feedback = trimmed.slice(0, 2000);
     void emitEvent({
       taskId: entry.taskId,
       type: 'observer.feedback_applied',
       source: 'user',
       message: `Denial feedback: ${trimmed.slice(0, 300)}`,
-      data: { approvalId, tool: entry.tool, denialFeedback: trimmed.slice(0, 2000) },
+      data: { approvalId, tool: entry.tool, denialFeedback: entry.feedback },
       priority: 3,
     });
   }

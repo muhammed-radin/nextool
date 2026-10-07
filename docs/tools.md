@@ -438,5 +438,11 @@ Native filesystem tools (built-in, operate only on the shared VFS):
 | `fs.hasfile` / `fs.hasfolder` | Existence checks |
 | `fs.infofile` | File metadata (name, path, size, type, timestamps) |
 | `fs.createfolder` / `fs.deletefile` / `fs.deletefolder` | Structure management |
+| `fs.find` | **v1.0.13** Name search with configurable depth (0 = start dir only), files-only/folders-only, case sensitivity; result-capped |
+| `fs.copy` | **v1.0.13** Copy a file or a whole folder (recursive) inside the VFS |
+| `fs.move` | **v1.0.13** Move/rename a file or folder inside the VFS |
+| `fs.cmd` | **v1.0.13** Execute a terminal command on the host (bash, confined to the runtime working directory). ALWAYS requires explicit user confirmation — it is on the `FORCE_APPROVAL_TOOLS` list and carries a second handler-level gate for subtool/test contexts. 30 s default / 120 s max timeout, 256 KiB output caps |
+| `fs.download` | **v1.0.13** Register a VFS file for download → short-lived console URL `/api/fsdownloads/<token>` (10 min TTL, re-verifies the VFS boundary per request) |
+| `fs.upload` | **v1.0.13** Ask the operator for a file ("Upload a file — [Choose file] [Cancel]") and store it in the shared VFS; bounded 120 s wait window, honest `FILE_REQUEST_TIMEOUT` on expiry |
 
 Built-in tools are visible but **not exportable** — only custom tools can be exported (§2.2).

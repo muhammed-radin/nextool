@@ -1,7 +1,7 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.12",
-  "description": "NexTool Q1 v1.0.11 — THE EMPOWERMENT: pre-plan failure recovery, the freedom-node unrestricted environment, the global-tool-task auto-execution hierarchy, and the upgraded 1.0.2 trained tool-selection model.",
+  "version": "1.0.13",
+  "description": "NexTool Q1 v1.0.13 — THE OPERATOR CONSOLE: single-user self-hosted architecture, FS Inspector (VFS + real FS), super-powered MCP client with customizable auth, verification latch, subtool API, sandbox interactivity and safety-limit continuation.",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",

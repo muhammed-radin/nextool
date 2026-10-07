@@ -45,7 +45,23 @@ export async function generateMetadata(): Promise<Metadata> {
       apple: branding.appleTouch ? dir(branding.appleTouch) : undefined,
     };
   } else {
-    icons = { icon: "/logo.svg" };
+    // v1.0.13 §3 — hardcoded CORRECT generated logo paths. The generated
+    // branding package lives at /icons/icons-mupc8ncv/ (public/icons/); when
+    // no active manifest exists (fresh DB before adoption) the metadata still
+    // points at the REAL generated assets instead of a wrong/stale path.
+    const gen = (file: string) => `/icons/icons-mupc8ncv/${file}`;
+    icons = {
+      icon: [
+        { url: gen('favicon.ico') },
+        { url: gen('icon-16.png'), sizes: '16x16', type: 'image/png' },
+        { url: gen('icon-32.png'), sizes: '32x32', type: 'image/png' },
+        { url: gen('icon-48.png'), sizes: '48x48', type: 'image/png' },
+        { url: gen('icon-192.png'), sizes: '192x192', type: 'image/png' },
+        { url: gen('icon-512.png'), sizes: '512x512', type: 'image/png' },
+        { url: '/logo.svg', type: 'image/svg+xml' },
+      ],
+      apple: gen('apple-touch-icon.png'),
+    };
   }
 
   return {

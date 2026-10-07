@@ -537,7 +537,10 @@ export const connectorConnectionSchema = z
 export const connectorCredentialsSchema = z
   .object({
     type: z.string().trim().max(40).optional(),
-    values: z.record(z.string().trim().min(1).max(120), z.string().max(8000)),
+    // v1.0.13 §5 — values may be empty/omitted when only declaring the auth
+    // method ('none', or 'oauth2' where tokens arrive from the redirect flow).
+    values: z.record(z.string().trim().min(1).max(120), z.string().max(8000)).optional(),
+    authMethod: z.enum(['none', 'bearer', 'token_pair', 'oauth2']).optional(),
   })
   .strict();
 

@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.12** — release name: *"MCP CONNECTORS, SHARED GLOBAL VFS & AI TRAINING — Connectors page + mcp environment, one persistent shared filesystem with fs.* tools, task instructions (model 1.0.3)"* |
-| **Model version** | **llm-core 1.0.0** (unchanged since v1.0.0 — provider-served, NOT retrained; releases add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.3** since v1.0.12 — MCP/VFS/identity-aware 447-example curriculum; 1.0.2 in v1.0.11, 1.0.1 in v1.0.10) |
+| **Application version** | **1.0.13** — release name: *"THE OPERATOR CONSOLE — single-user self-hosted architecture, FS Inspector (VFS + real FS), super-powered MCP client with customizable auth, verification latch, subtool API, await alert()/askForUserAsChoice(), safety-limit continuation"* — see the [v1.0.13 release page](release-1.0.13.md) |
+| **Model version** | **llm-core 1.0.0** (provider-served, NOT retrained — releases add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.3** since v1.0.12 — MCP/VFS/identity-aware 447-example curriculum; 1.0.2 in v1.0.11, 1.0.1 in v1.0.10). The UI always reads the version dynamically — never hard-coded. |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
@@ -60,6 +60,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Operations | [Testing](testing.md) | `bun test` unit suite (371 tests across 11 files) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
+| Reference | [Release 1.0.13](release-1.0.13.md) | THE OPERATOR CONSOLE: single-user product model, environment rules, FS Inspector file manager, MCP customizable auth/OAuth, denial escalation, continuation, tool runtime interactivity. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.

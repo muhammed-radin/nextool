@@ -271,6 +271,12 @@ export interface MainState {
    *  Present while a recovery subgoal is active, after a resume (status
    *  'resumed', kept for observability) and after exhaustion. */
   recovery?: TaskRecoveryState;
+  /** v1.0.13 §13 — user denial escalation: how many times the user denied a
+   *  tool execution in THIS task (1-3 retry with escalation directives,
+   *  4 = task stops with statusDetail 'user_denied'), plus the latest
+   *  optional reason the user supplied. */
+  userDenialCount?: number;
+  lastDenialReason?: string;
 }
 
 /** v1.0.11 — recovery of a FAILED pre-plan step. The main plan is frozen

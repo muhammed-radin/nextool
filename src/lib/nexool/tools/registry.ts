@@ -27,15 +27,21 @@ import { openGlobalVfs } from './vfs';
 // v1.0.12 §4 — native fs.* built-in tools (operate on the shared VFS only).
 import {
   FS_TOOL_DEFINITIONS,
+  fsCmd,
+  fsCopy,
   fsCreateFolder,
   fsDeleteFile,
   fsDeleteFolder,
+  fsDownload,
+  fsFind,
   fsGetPath,
   fsHasFile,
   fsHasFolder,
   fsInfoFile,
   fsList,
+  fsMove,
   fsReadFile,
+  fsUpload,
   fsWriteFile,
 } from './fs-tools';
 import { createNetworkAccounting } from './sandbox-net';
@@ -296,6 +302,13 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
     'fs.createfolder': fsCreateFolder,
     'fs.deletefile': fsDeleteFile,
     'fs.deletefolder': fsDeleteFolder,
+    // v1.0.13 §10 — filesystem workflow tools
+    'fs.find': fsFind,
+    'fs.copy': fsCopy,
+    'fs.move': fsMove,
+    'fs.cmd': fsCmd,
+    'fs.download': fsDownload,
+    'fs.upload': fsUpload,
   };
 
   const builtin = builtinMap[def.name];

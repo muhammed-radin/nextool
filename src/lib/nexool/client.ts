@@ -488,6 +488,24 @@ export const listLimitContinuations = (taskId?: string) =>
 export const resolveLimitContinuationRequest = (continuationId: string, decision: 'continue' | 'deny', feedback?: string) =>
   apiFetch<{ resolved: boolean; reason?: string }>('/api/limits/continuations', body({ continuationId, decision, ...(feedback ? { feedback } : {}) }));
 
+// ---------- File requests (v1.0.13 §10 — fs.upload prompt) ----------
+
+export interface PendingFileRequestDTO {
+  requestId: string;
+  taskId?: string;
+  toolName?: string;
+  message: string;
+  suggestedName?: string;
+  requestedAt: string;
+}
+
+export const listFileRequests = (taskId?: string) =>
+  apiFetch<{ requests: PendingFileRequestDTO[] }>(`/api/file-requests${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''}`);
+
+/** Deliver the chosen file (base64) to the awaiting fs.upload tool, or cancel. */
+export const answerFileRequest = (requestId: string, payload: { fileName: string; contentBase64: string } | { cancel: true }) =>
+  apiFetch<{ resolved: boolean; cancelled?: boolean }>('/api/file-requests', body({ requestId, ...payload }));
+
 // ---------- Configuration limits registry (v1.0.8 §7/§8/§10) ----------
 
 export interface LimitPropertyDTO {
@@ -787,6 +805,10 @@ export interface ConnectorDTO {
   credentialFieldsProvided: string[];
   missingRequiredFields: string[];
   authRequired: boolean;
+  /** v1.0.13 §5 — effective selectable auth method (stored or inferred). */
+  authMethod?: 'none' | 'bearer' | 'token_pair' | 'oauth2';
+  /** v1.0.13 §5.4 — presence of a refresh token (NEVER the value). */
+  hasRefreshToken?: boolean;
   serverInfo?: { name: string; version: string } | null;
   importedTools: ImportedToolDTO[];
   createdAt: string;
@@ -803,6 +825,19 @@ export interface McpProviderFieldDTO {
   description: string;
   envName?: string;
 }
+
+export interface McpProviderOAuthPresetDTO {
+  authorizeUrl: string;
+  tokenUrl: string;
+  /** Editable preset scopes (§5.3) — the UI shows them as chips + an arbitrary adder. */
+  defaultScopes: string[];
+  pkce?: boolean;
+  expiresInSecs?: number;
+  /** Extra fixed authorize params declared by the preset. */
+  extraAuthorizeParams?: Record<string, string>;
+}
+
+export type McpAuthMethodDTO = 'none' | 'bearer' | 'token_pair' | 'oauth2';
 
 export interface McpProviderDTO {
   id: string;
@@ -826,6 +861,12 @@ export interface McpProviderDTO {
     requiredFields: string[];
     optionalFields: string[];
     fields: McpProviderFieldDTO[];
+    // ---- v1.0.13 §5 — customizable authentication metadata (registry-driven) ----
+    authMethods?: McpAuthMethodDTO[];
+    requiredFieldsByMethod?: Partial<Record<McpAuthMethodDTO, string[]>>;
+    oauth?: McpProviderOAuthPresetDTO;
+    loginWording?: string;
+    validation?: 'none' | 'google_tokeninfo' | 'github_user';
   };
 }
 
@@ -843,6 +884,37 @@ export interface DiscoveredToolDTO {
   remoteHash: string;
   imported: boolean;
   importedToolName?: string;
+}
+
+// v1.0.13 §4 — capability discovery beyond tools (all optional, empty when
+// the server does not expose the capability).
+export interface DiscoveredResourceDTO {
+  uri: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface DiscoveredResourceTemplateDTO {
+  uriTemplate: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface DiscoveredPromptDTO {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: { name: string; description?: string; required?: boolean }[];
+}
+
+export interface DiscoveredServerInfoDTO {
+  name: string;
+  version: string;
+  capabilities: Record<string, unknown> | null;
 }
 
 export interface ImportResultDTO {
@@ -873,18 +945,35 @@ export const deleteConnector = (id: string) =>
 export const connectorConnectionAction = (id: string, action: 'connect' | 'disconnect' | 'reconnect') =>
   apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}/connection`, body({ action }));
 
+/** v1.0.13 §5.4 — rotate the stored access token via the refresh-token grant. */
+export const connectorRefreshAuth = (id: string) =>
+  apiFetch<{ refreshed: boolean; tokenExpiresAt?: string }>(`/api/connectors/${encodeURIComponent(id)}/connection`, body({ action: 'refresh-auth' }));
+
+/** v1.0.13 §5.2 — begin the OAuth redirect login; returns the authorize URL. */
+export const startConnectorOAuth = (id: string) =>
+  apiFetch<{ authorizeUrl: string; stateExpiresInSeconds: number }>(`/api/connectors/${encodeURIComponent(id)}/oauth/start`, body({ method: 'oauth2' }));
+
 /**
  * Store credentials SERVER-SIDE. The response is the connector WITHOUT any
  * secret values (only presence info) — the client never round-trips tokens.
+ * v1.0.13 §5 — the UI can also declare the EFFECTIVE auth method
+ * (none | bearer | token_pair | oauth2) with the same request.
  */
-export const setConnectorCredentials = (id: string, values: Record<string, string>) =>
-  apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}/credentials`, { method: 'PUT', body: JSON.stringify({ values }) });
+export const setConnectorCredentials = (id: string, values: Record<string, string>, authMethod?: 'none' | 'bearer' | 'token_pair' | 'oauth2') =>
+  apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}/credentials`, { method: 'PUT', body: JSON.stringify({ values, ...(authMethod ? { authMethod } : {}) }) });
 
 export const clearConnectorCredentials = (id: string) =>
   apiFetch<ConnectorDTO>(`/api/connectors/${encodeURIComponent(id)}/credentials`, { method: 'DELETE' });
 
 export const discoverConnectorTools = (id: string) =>
-  apiFetch<{ connected: boolean; tools: DiscoveredToolDTO[] }>(`/api/connectors/${encodeURIComponent(id)}/tools`);
+  apiFetch<{
+    connected: boolean;
+    tools: DiscoveredToolDTO[];
+    resources?: DiscoveredResourceDTO[];
+    resourceTemplates?: DiscoveredResourceTemplateDTO[];
+    prompts?: DiscoveredPromptDTO[];
+    serverInfo?: DiscoveredServerInfoDTO | null;
+  }>(`/api/connectors/${encodeURIComponent(id)}/tools`);
 
 export const importConnectorTools = (id: string, names: string[]) =>
   apiFetch<ImportResultDTO>(`/api/connectors/${encodeURIComponent(id)}/tools`, body({ action: 'import', names }));

@@ -14,7 +14,7 @@
  * "branding.icons" with status staged|active. Only "active" packages are read
  * by generateMetadata (layout.tsx) — files live in public/icons/<packageId>/.
  */
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '@/lib/db';
 import { unzipSync } from 'fflate';
@@ -236,11 +236,98 @@ export async function activateIconPackage(packageId: string): Promise<BrandingMa
   return activated;
 }
 
+/**
+ * v1.0.13 §3 — self-healing branding adoption.
+ *
+ * The manifest lives in the Setting table while the icon files live on disk
+ * under public/icons/<packageId>/. A database reset (prisma db push
+ * --accept-data-loss / db:reset) wipes the Setting row but SURVIVES on disk,
+ * which used to leave an orphaned package behind: the navbar fell back to the
+ * monogram tile and metadata fell back to /logo.svg even though the generated
+ * logo files were still served. This adoption path re-activates such an
+ * orphaned package by rebuilding the manifest FROM THE ACTUAL FILES on disk
+ * (favicon.ico + at least one valid icon-<size>.png, PNG IHDR dimensions
+ * re-validated) — the same validation contract as stageIconPackage.
+ *
+ * Attempted at most once per process and only when the Setting row is truly
+ * absent, so the happy path never pays for a directory scan.
+ */
+let adoptionAttempted = false;
+export async function adoptOrphanedIconPackage(): Promise<boolean> {
+  if (adoptionAttempted) return false;
+  adoptionAttempted = true;
+  try {
+    const entries = await readdir(ICONS_ROOT, { withFileTypes: true });
+    for (const dirEntry of entries) {
+      if (!dirEntry.isDirectory() || !/^icons-[\w-]+$/.test(dirEntry.name)) continue;
+      const pkgDir = path.join(ICONS_ROOT, dirEntry.name);
+      const files = new Set((await readdir(pkgDir)).map((f) => f.toLowerCase()));
+      if (!files.has('favicon.ico')) continue;
+
+      const assets: IconAsset[] = [];
+      const sized = [...files]
+        .map((f) => /^icon-(\d{2,3})\.png$/.exec(f))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .sort((a, b) => Number(a[1]) - Number(b[1]));
+      for (const match of sized) {
+        const file = match[0];
+        const bytes = await readFile(path.join(pkgDir, file));
+        const dims = pngDimensions(bytes);
+        // Content must agree with the declared size — same rule as staging.
+        if (!dims || dims.width !== Number(match[1]) || dims.height !== Number(match[1])) continue;
+        assets.push({ file, width: dims.width, height: dims.height, bytes: bytes.byteLength });
+      }
+      if (assets.length === 0) continue;
+
+      let appleTouch: string | null = null;
+      if (files.has('apple-touch-icon.png')) {
+        const at = await readFile(path.join(pkgDir, 'apple-touch-icon.png'));
+        const dims = pngDimensions(at);
+        if (dims) {
+          assets.push({ file: 'apple-touch-icon.png', width: dims.width, height: dims.height, bytes: at.byteLength });
+          appleTouch = 'apple-touch-icon.png';
+        }
+      }
+
+      const manifest: BrandingManifest & { packageId: string } = {
+        status: 'active',
+        uploadedAt: new Date().toISOString(),
+        activatedAt: new Date().toISOString(),
+        assets,
+        favicon: 'favicon.ico',
+        appleTouch,
+        p512: assets.find((a) => a.file === 'icon-512.png')?.file ?? null,
+        p192: assets.find((a) => a.file === 'icon-192.png')?.file ?? null,
+        packageId: dirEntry.name,
+      };
+      await db.setting.upsert({
+        where: { key: BRAND_KEY },
+        update: { value: JSON.stringify(manifest) },
+        create: { key: BRAND_KEY, value: JSON.stringify(manifest) },
+      });
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /** Read the ACTIVE branding manifest (null when none). Used by layout metadata. */
 export async function getActiveBranding(): Promise<(BrandingManifest & { packageId: string }) | null> {
   try {
     const row = await db.setting.findUnique({ where: { key: BRAND_KEY } });
-    if (!row) return null;
+    if (!row) {
+      // v1.0.13 §3 — the Setting row is gone (db reset) while the generated
+      // package survives on disk: adopt it so the real logo/favicon keep
+      // loading instead of degrading to the fallback mark.
+      const adopted = await adoptOrphanedIconPackage();
+      if (!adopted) return null;
+      const healed = await db.setting.findUnique({ where: { key: BRAND_KEY } });
+      if (!healed) return null;
+      const parsed = JSON.parse(healed.value) as BrandingManifest & { packageId: string };
+      return parsed.status === 'active' ? parsed : null;
+    }
     const parsed = JSON.parse(row.value) as BrandingManifest & { packageId: string };
     return parsed.status === 'active' ? parsed : null;
   } catch {

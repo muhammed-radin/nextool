@@ -21,6 +21,12 @@ export interface HandlerContext {
    *  (call chain, depth, shared budget). Present for every real execution;
    *  function handlers wrap it into the sandbox-facing `context.tools` API. */
   subtool?: SubtoolLink;
+  /** v1.0.13 §10 — TRUE only when the task-level approval gate ALREADY
+   *  collected an explicit user ALLOW for this execution. Tools on the
+   *  FORCE_APPROVAL_TOOLS list (fs.cmd) skip their own confirmation gate
+   *  when this is set; every other context (subtool calls, tool test) still
+   *  collects its own confirmation inside the handler. */
+  approved?: boolean;
 }
 
 export type ToolHandler = (

@@ -17,7 +17,7 @@ import type { PlannerType } from '../types';
 import { interpret, checkGoalComplete } from './observer';
 import { runPrePlanRecovery } from './recovery';
 import { listServers } from '../environment';
-import { resolveAutoExecution, requestApproval } from '../approval';
+import { resolveAutoExecution, requestApproval, FORCE_APPROVAL_TOOLS } from '../approval';
 import { requestLimitContinuation } from '../limit-continuation';
 import { clampToLimit, getResolvedLimits } from '../config-limits';
 // v1.0.12 Phase 7 — custom task instructions (sanitize when loading from DB).
@@ -293,7 +293,10 @@ async function requestApprovalIfNeeded(
     def?.autoExecute,
     ctx.config.autoExecuteToolsRaw,
   );
-  if (resolved.enabled) {
+  // v1.0.13 §10 — FORCE_APPROVAL_TOOLS (fs.cmd) never take the auto-execution
+  // shortcut: the explicit user confirmation is a product requirement, so the
+  // gate below ALWAYS collects it for these tools.
+  if (resolved.enabled && !FORCE_APPROVAL_TOOLS.has(tool)) {
     if (resolved.source !== 'global') {
       // §39/§41 — make the effective source observable when a lower layer
       // decided (the global-forced case is the documented default behavior).
@@ -328,7 +331,7 @@ async function requestApprovalIfNeeded(
   });
   await persistState(ctx);
 
-  const outcome = await requestApproval({
+  const { outcome, feedback } = await requestApproval({
     taskId: ctx.taskId,
     tool,
     params,
@@ -348,6 +351,36 @@ async function requestApprovalIfNeeded(
     return 'allowed';
   }
   if (outcome === 'denied') {
+    // v1.0.13 §13 — USER DENIAL / TOOL REJECTION ESCALATION. Every denial is
+    // counted with its reason; the ladder decides what the runtime does next:
+    //   #1 understand the reason → retry the same logical state
+    //   #2 change the plan → retry with a modified approach
+    //   #3 understand + final plan revision → retry once more
+    //   #4 STOP the task (status 'stopped', detail 'user_denied: …').
+    // The retry/plan-change directives travel to the planner through the
+    // denied execution error message (knownFailures context) — no silent
+    // abandonment on #1-#3, no infinite loop: #4 terminates.
+    const count = (ctx.state.userDenialCount ?? 0) + 1;
+    ctx.state.userDenialCount = count;
+    ctx.state.lastDenialReason = feedback ?? undefined;
+    const reasonText = feedback ? ` Reason: ${feedback.slice(0, 400)}` : '';
+    void emitEvent({
+      taskId: ctx.taskId, type: 'task.user_denial', source: 'user',
+      message: `User denied ${tool} (denial #${count} of 4).${reasonText}`,
+      data: { tool, denialCount: count, feedback: feedback ?? null }, priority: 2,
+    });
+    if (count >= 4) {
+      // §13 — Denial #4: stop. Never loop forever.
+      ctx.blockedStop = {
+        reason: `user_denied: ${tool} was denied ${count} times by the user — task stopped.${reasonText}`,
+      };
+      void emitEvent({
+        taskId: ctx.taskId, type: 'tool.execution.blocked', source: 'runtime',
+        message: `Task stopped after ${count} user denials (user_denied).`,
+        data: { tool, denialCount: count, cause: 'user_denied' }, priority: 2,
+      });
+      return 'denied';
+    }
     // §9.10 — skip; continue according to the task plan (dependent steps get
     // an explicit observation so the planner never assumes success).
     const message = `${tool} was denied by the user — skipped. Dependent steps must not assume this step succeeded.`;
@@ -374,11 +407,34 @@ async function executeWithApproval(
 ): Promise<ToolExecution> {
   const outcome = await requestApprovalIfNeeded(ctx, tool, params, { purpose: opts.purpose, reason: opts.reason });
   if (outcome === 'auto' || outcome === 'allowed') {
-    return executeTool(tool, params, { timeoutMs: opts.timeoutMs ?? ctx.config.toolTimeoutMs, networkTimeoutMs: ctx.config.networkTimeoutMs, taskId: ctx.taskId, signal: ctx.handle.abortController.signal, batch: opts.batch });
+    return executeTool(tool, params, { timeoutMs: opts.timeoutMs ?? ctx.config.toolTimeoutMs, networkTimeoutMs: ctx.config.networkTimeoutMs, taskId: ctx.taskId, signal: ctx.handle.abortController.signal, batch: opts.batch, // v1.0.13 §10 — an explicit ALLOW at this gate satisfies the
+      // FORCE_APPROVAL_TOOLS handler gate too (no double confirmation).
+      approved: outcome === 'allowed' });
   }
   return deniedExecution(tool, params, outcome === 'denied'
-    ? `${tool} was denied by the user — skipped. Dependent steps must not assume this step succeeded.`
+    // v1.0.13 §13 — the denied execution carries the escalation directive so
+    // the planner's knownFailures context understands what to do next:
+    // #1 retry the same logical state, #2/#3 change the approach.
+    ? denialEscalationMessage(ctx, tool)
     : outcome === 'timeout' ? 'Approval timeout — not executed.' : 'Task stopped while awaiting approval.');
+}
+
+/**
+ * v1.0.13 §13 — the escalation directive attached to a denied execution.
+ * ctx.state.userDenialCount was already incremented by the approval gate, so
+ * #1 = retry, #2/#3 = plan change (final on #3). Denial #4 never reaches this
+ * message — the gate sets ctx.blockedStop and the loop stops the task.
+ */
+function denialEscalationMessage(ctx: RunContext, tool: string): string {
+  const count = ctx.state.userDenialCount ?? 1;
+  const reason = ctx.state.lastDenialReason ? ` User reason: "${ctx.state.lastDenialReason.slice(0, 300)}".` : '';
+  if (count <= 1) {
+    return `${tool} was denied by the user (denial #1) — understand the rejection reason and RETRY the same logical state. Do not abandon the task.${reason}`;
+  }
+  if (count === 2) {
+    return `${tool} was denied again (denial #2) — CHANGE THE PLAN: retry with a modified approach.${reason}`;
+  }
+  return `${tool} was denied again (denial #3) — FINAL plan revision: change the approach a second time; another denial stops the task.${reason}`;
 }
 
 
@@ -930,7 +986,8 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
           } else {
             denied.push({ stepId: d.step.id, tool });
             const deniedExec = deniedExecution(tool, d.decision.params ?? {}, outcome === 'denied'
-              ? `${tool} was denied by the user — skipped. Dependent steps must not assume this step succeeded.`
+              // v1.0.13 §13 — escalation directive in the denied execution.
+              ? denialEscalationMessage(ctx, tool)
               : 'Task stopped while awaiting approval.');
             recordExecution(ctx, tool, {
               execution: deniedExec,
@@ -953,6 +1010,9 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
               taskId: ctx.taskId,
               signal: ctx.handle.abortController.signal,
               maxParallel: ctx.config.maxParallelToolCalls,
+              // v1.0.13 §10 — every parallel member collected its own explicit
+              // ALLOW above; the FORCE_APPROVAL_TOOLS handler gate is satisfied.
+              approved: true,
             },
           );
           let failed = 0;
