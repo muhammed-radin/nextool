@@ -45,11 +45,11 @@ export async function generateMetadata(): Promise<Metadata> {
       apple: branding.appleTouch ? dir(branding.appleTouch) : undefined,
     };
   } else {
-    // v1.0.13 §3 — hardcoded CORRECT generated logo paths. The generated
-    // branding package lives at /icons/icons-mupc8ncv/ (public/icons/); when
+    // v1.0.13 §3 — hardcoded CORRECT generated logo paths. The shipped
+    // branding package lives at /icons/icons-muy8s37a/ (public/icons/); when
     // no active manifest exists (fresh DB before adoption) the metadata still
-    // points at the REAL generated assets instead of a wrong/stale path.
-    const gen = (file: string) => `/icons/icons-mupc8ncv/${file}`;
+    // points at the REAL shipped assets instead of a wrong/stale path.
+    const gen = (file: string) => `/icons/icons-muy8s37a/${file}`;
     icons = {
       icon: [
         { url: gen('favicon.ico') },

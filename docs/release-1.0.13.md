@@ -231,3 +231,57 @@ Application version is **1.0.13** everywhere (`package.json`,
 `version.ts`, `/api/system`, Settings, Dashboard). The model version remains
 dynamically sourced (llm-core 1.0.0 provider-served; trained classifier
 generation 1.0.3) and is NOT bumped by an application release.
+
+---
+
+## 28. Post-release polish — branding + FS Inspector mobile (operator feedback)
+
+Follow-up round after the initial v1.0.13 drop, fixing the issues found in
+real use:
+
+### 28.1 Logo / branding — the shipped icon pack is applied
+
+- The previously referenced generated package contained **placeholder
+  solid-color tiles**, and `/logo.svg` was a foreign mark — the navbar, tab
+  favicon and OS icons all rendered a blank tile. The real icon pack
+  (`favicon_io.zip`: favicon.ico 16/32/48 multi-layer, favicon-16/32,
+  android-chrome-192/512, apple-touch-icon 180) is now staged through
+  `POST /api/icons` (canonical-name aliases validated against real PNG
+  IHDR dimensions) and **activated** via `PATCH /api/icons` — the same
+  flow the Settings → Branding UI drives.
+- `public/favicon.ico` is synced from the active package; the metadata
+  fallback paths in `layout.tsx` point at the shipped package
+  (`/icons/icons-muy8s37a/`); the obsolete placeholder package was removed
+  with zero stale references.
+- BrandLogo picks the best square PNG from the live manifest, so navbar and
+  mobile header show the real logo without any hardcoding.
+
+### 28.2 FS Inspector — mobile design fixes (§2.9)
+
+1. **Environment card overlay** — on narrow screens the environment label,
+   selector, environment badge and the VFS usage snapshot competed for one
+   row and overlapped. The card is now a **column on mobile** (selector row →
+   badge row → usage row under a hairline divider) and returns to a single
+   row at `sm:` and up.
+2. **Tabs container vs. active-tab height** — the full-width mobile tab grid
+   is `h-11` so the triggers (`h-[calc(100%-1px)]`) and the active highlight
+   never overflow the container; `sm:` and up restore the compact `h-9` pill
+   with `w-fit` + `self-start` so the flex-col parent can no longer stretch
+   the list edge-to-edge.
+3. **Inactive panel bleed-through** — the Editors panel used Radix
+   `forceMount` (to keep editor state alive) which never applies `hidden`
+   itself; the editor and terminal panels rendered **simultaneously** on the
+   Terminal tab. Fixed with `data-[state=inactive]:hidden`.
+4. **Render-phase session creation** — the VFS shell session was created via
+   an inline `setSessions` call inside JSX (StrictMode hazard); it now lives
+   in the mode-switch effect with an idempotent guard.
+5. **Touch & density** — row action buttons are 36 px targets, toolbar
+   labels collapse below 420 px (icon + environment suffix remain), the KIND
+   column hides below `sm` with an inline `dir/`/`file` prefix, listing is
+   55 vh tall on mobile, terminal output 50 vh.
+
+### 28.3 Dynamic labels
+
+The FS Inspector description no longer hardcodes the release number — it
+renders `v${APP_VERSION}` from `version.ts`, keeping §7's dynamic-version
+contract intact across the whole console.

@@ -295,12 +295,13 @@ export default function InspectorView() {
         desc={`v${APP_VERSION} operator file manager — browse, edit, compress, upload/download and run terminals in the shared Virtual FS and the real host filesystem (confined to the runtime working directory).`}
       />
 
-      {/* environment selector + VFS usage snapshot */}
-      <div className="glass-card flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg px-4 py-2.5">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:flex-none">
+      {/* environment selector + VFS usage snapshot — mobile: stacked column
+          (selector row, then usage row) so the labels never overlay; sm+: one row */}
+      <div className="glass-card flex flex-col gap-2.5 rounded-lg px-4 py-2.5 sm:flex-row sm:items-center sm:gap-x-4 sm:gap-y-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:flex-none">
           <span className="font-tech text-[10px] uppercase tracking-wider text-muted-foreground">Environment</span>
           <Select value={mode} onValueChange={(v) => setMode(v as FsMode)}>
-            <SelectTrigger className="h-9 w-[120px] border-white/[0.09] bg-white/[0.04] font-mono text-xs" aria-label="Filesystem environment">
+            <SelectTrigger className="h-10 w-[130px] border-white/[0.09] bg-white/[0.04] font-mono text-xs sm:h-9 sm:w-[120px]" aria-label="Filesystem environment">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -314,7 +315,7 @@ export default function InspectorView() {
           </Badge>
         </div>
         {mode === 'vfs' ? (
-          <div className="ml-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/[0.06] pt-2 font-mono text-xs sm:ml-auto sm:border-t-0 sm:pt-0">
             <span className="flex items-center gap-1.5 text-sky-300/80">
               <HardDrive className="size-3.5" aria-hidden /> usage
             </span>
@@ -326,11 +327,14 @@ export default function InspectorView() {
       </div>
 
       <Tabs value={topTab} onValueChange={(v) => setTopTab(v as typeof topTab)} className="gap-4">
-        {/* Mobile: full-width, ≥44px touch targets (§2.9). */}
-        <TabsList className="grid w-full grid-cols-3 sm:inline-flex sm:w-auto">
-          <TabsTrigger value="files" className="min-h-11 px-4 sm:min-h-9 sm:px-3">Files</TabsTrigger>
-          <TabsTrigger value="editors" className="min-h-11 px-4 sm:min-h-9 sm:px-3">Editors</TabsTrigger>
-          <TabsTrigger value="terminal" className="min-h-11 px-4 sm:min-h-9 sm:px-3">Terminal</TabsTrigger>
+        {/* Mobile: full-width equal columns; the LIST grows to h-11 so the
+            triggers (h-[calc(100%-1px)]) and the active highlight never
+            overflow the container (sm+ restores the compact pill). sm:self-start
+            + w-fit stop the flex-col parent from stretching the list full-width. */}
+        <TabsList className="grid h-11 w-full grid-cols-3 rounded-lg p-1 sm:inline-flex sm:h-9 sm:w-fit sm:self-start sm:p-[3px]">
+          <TabsTrigger value="files" className="px-2 text-xs sm:px-3 sm:text-sm">Files</TabsTrigger>
+          <TabsTrigger value="editors" className="px-2 text-xs sm:px-3 sm:text-sm">Editors</TabsTrigger>
+          <TabsTrigger value="terminal" className="px-2 text-xs sm:px-3 sm:text-sm">Terminal</TabsTrigger>
         </TabsList>
         <TabsContent value="files">
           <FilesTab
