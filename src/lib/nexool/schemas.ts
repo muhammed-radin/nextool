@@ -120,6 +120,10 @@ export const taskConfigSchema = z
     // task.recoveryMaxAttempts limits (shipped 2..4). REJECTED (not clamped)
     // when out of range — same contract as prePlanMaxSteps.
     recoveryMaxAttempts: intLimit('recoveryMaxAttempts', 2, 4).optional(),
+    // v1.0.13 — per-task safety-limit continuation cap (0..5, default 1;
+    // 0 disables the continuation question for this task). REJECTED (not
+    // clamped) when out of range — same contract as recoveryMaxAttempts.
+    limitContinuations: intLimit('limitContinuations', 0, 5).optional(),
     sessionId: z.string().trim().max(200).optional(),
     context: jsonObject.optional(),
   })
@@ -317,6 +321,10 @@ export const settingsSchema = z
     prePlanMaxSteps: intLimit('prePlanMaxSteps', 1, 122),
     // v1.0.11 — global default recovery attempt cap (2..4, default 4)
     recoveryMaxAttempts: intLimit('recoveryMaxAttempts', 2, 4),
+    // v1.0.13 — safety-limit continuation policy (default ON) + per-continuation
+    // budget granted to both limits (central bounds 1..500, default 25)
+    safetyLimitContinuation: z.boolean(),
+    safetyLimitContinuationExtra: intLimit('limitContinuationExtra', 1, 500),
     logLevel: z.enum(['info', 'debug', 'error']),
     realTimeTransport: z.literal('sse'),
   })
@@ -355,6 +363,8 @@ export const registerJsToolSchema = z
     metadata: metadataRecordSchema.optional(),
     // v1.0.6 §9.2 — per-tool auto-execute (default false = approval required)
     autoExecute: z.boolean().optional(),
+    // v1.0.13 — verification latch: completed executions wait for operator verification
+    verificationLatch: z.boolean().optional(),
     // v1.0.7 §1 — tool-specific execution timeout (default: global 10000 ms,
     // ceiling = the configured execution.timeoutMs.max). Values above the
     // ceiling are rejected at registration.
@@ -387,6 +397,8 @@ export const updateToolSchema = z
     metadata: metadataRecordSchema.optional(),
     // v1.0.6 §9.2 — per-tool auto-execute switch
     autoExecute: z.boolean().optional(),
+    // v1.0.13 — per-tool verification latch switch
+    verificationLatch: z.boolean().optional(),
     // v1.0.7 §1 — per-tool execution timeout (undefined keeps stored value).
     timeoutMs: toolTimeoutValidator().optional(),
     /** v1.0.9 §14 — per-tool Network Policy request timeout (undefined keeps stored value). */

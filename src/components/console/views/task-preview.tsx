@@ -26,8 +26,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useNexoolStream } from '@/hooks/use-nexool-stream';
 import { useConsoleStore } from '../console-store';
-import { ApiClientError, answerConfirmation, answerPrompt, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, listApprovals, listConfirmations, listPrompts, pauseTask, resolveApprovalRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
-import type { PendingApprovalDTO, PendingConfirmationDTO, PendingPromptDTO } from '@/lib/nexool/client';
+import { ApiClientError, answerChoice, answerConfirmation, answerPrompt, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, listApprovals, listChoices, listConfirmations, listLimitContinuations, listPrompts, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
+import type { PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
 import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { RuntimeTerminal } from '../terminal';
@@ -35,7 +35,7 @@ import { ChecklistItems, TaskChecklist } from '../task-checklist';
 import { EmptyState, ErrorCard, ExecutionStatusBadge, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
 import { reconcileExecutions, isTerminalExecutionStatus } from '@/lib/nexool/execution-merge';
 import {
-  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Wrench, X, Zap,
+  Ban, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Gauge, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Wrench, X, Zap,
 } from 'lucide-react';
 
 const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
@@ -172,10 +172,17 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const [prompts, setPrompts] = useState<PendingPromptDTO[]>([]);
   // v1.0.8 §1.5 — pending tool confirmations for THIS task
   const [confirmations, setConfirmations] = useState<PendingConfirmationDTO[]>([]);
+  // v1.0.13 — operator choices / verification latches / safety-limit continuations for THIS task
+  const [choices, setChoices] = useState<PendingChoiceDTO[]>([]);
+  const [verifications, setVerifications] = useState<PendingVerificationDTO[]>([]);
+  const [continuations, setContinuations] = useState<PendingLimitContinuationDTO[]>([]);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [promptBusy, setPromptBusy] = useState(false);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [choiceBusy, setChoiceBusy] = useState(false);
+  const [verificationBusy, setVerificationBusy] = useState(false);
+  const [continuationBusy, setContinuationBusy] = useState(false);
   const [denyFeedback, setDenyFeedback] = useState('');
   const [promptAnswer, setPromptAnswer] = useState('');
 
@@ -242,11 +249,15 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
   // v1.0.6 §16 — pending approvals + prompts for THIS task (real approvalIds).
   // v1.0.8 §1.5 — plus pending confirmations.
+  // v1.0.13 — plus operator choices, verification latches and safety-limit continuations.
   const loadInteractive = useCallback(async () => {
-    const [a, p, c] = await Promise.allSettled([listApprovals(taskId), listPrompts(taskId), listConfirmations(taskId)]);
+    const [a, p, c, ch, v, lc] = await Promise.allSettled([listApprovals(taskId), listPrompts(taskId), listConfirmations(taskId), listChoices(taskId), listVerifications(taskId), listLimitContinuations(taskId)]);
     if (a.status === 'fulfilled') setApprovals(a.value.approvals);
     if (p.status === 'fulfilled') setPrompts(p.value.prompts);
     if (c.status === 'fulfilled') setConfirmations(c.value.confirmations);
+    if (ch.status === 'fulfilled') setChoices(ch.value.choices);
+    if (v.status === 'fulfilled') setVerifications(v.value.verifications);
+    if (lc.status === 'fulfilled') setContinuations(lc.value.continuations);
   }, [taskId]);
 
   useEffect(() => {
@@ -367,6 +378,56 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
       toast.error('Confirmation failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
     } finally {
       setConfirmBusy(false);
+    }
+  };
+
+  // v1.0.13 — the operator's option pick resumes the waiting tool (null cancels).
+  const doAnswerChoice = async (choiceId: string, value: string | null) => {
+    setChoiceBusy(true);
+    try {
+      await answerChoice(choiceId, value);
+      void loadInteractive();
+      toast.success(value === null ? 'Choice cancelled' : 'Choice submitted', {
+        description: value === null ? 'The tool receives no answer.' : `The tool receives: ${value}`,
+      });
+    } catch (e) {
+      toast.error('Choice failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setChoiceBusy(false);
+    }
+  };
+
+  // v1.0.13 — verify the held-open tool result; rejecting fails the execution (VERIFICATION_REJECTED).
+  const doResolveVerification = async (verificationId: string, accepted: boolean) => {
+    setVerificationBusy(true);
+    try {
+      await resolveVerificationRequest(verificationId, accepted);
+      void loadInteractive();
+      void loadSide(); // execution status changes (completes or fails) — refresh the Tools panel
+      toast.success(accepted ? 'Result verified' : 'Result rejected', {
+        description: accepted ? 'The execution completes with your verification.' : 'The execution fails as VERIFICATION_REJECTED.',
+      });
+    } catch (e) {
+      toast.error('Verification failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setVerificationBusy(false);
+    }
+  };
+
+  // v1.0.13 — 'continue' grows the limits and resumes the task; 'deny' ends it as limit_reached.
+  const doResolveContinuation = async (continuationId: string, decision: 'continue' | 'deny') => {
+    setContinuationBusy(true);
+    try {
+      await resolveLimitContinuationRequest(continuationId, decision);
+      void loadInteractive();
+      void loadDetail(); // task status changes (awaiting_approval → running / limit_reached)
+      toast.success(decision === 'continue' ? 'Budget granted' : 'Continuation denied', {
+        description: decision === 'continue' ? 'The limits grow and the task resumes.' : 'The task ends as limit_reached.',
+      });
+    } catch (e) {
+      toast.error('Continuation failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setContinuationBusy(false);
     }
   };
 
@@ -1004,6 +1065,93 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
                     <X className="size-3.5" aria-hidden /> Cancel
                   </Button>
                 </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {/* v1.0.13 — operator choice requests (askForUserAsChoice): pick ONE option or cancel */}
+        {choices.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {choices.map((ch) => (
+              <div key={ch.choiceId} className="rounded-md border border-violet-400/30 bg-violet-400/[0.05] p-3">
+                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-violet-300">
+                  <ListChecks className="size-3.5" aria-hidden /> operator choice {ch.toolName ? `· ${ch.toolName}` : ''}
+                </p>
+                <p className="mt-1 break-words text-xs text-foreground">{ch.message}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {ch.options.map((opt) => (
+                    <Button
+                      key={opt.value}
+                      size="sm"
+                      variant="outline"
+                      disabled={choiceBusy}
+                      onClick={() => void doAnswerChoice(ch.choiceId, opt.value)}
+                      className="min-h-9 border-violet-400/30 text-violet-200 hover:bg-violet-400/10"
+                    >
+                      {opt.label ?? opt.value}
+                    </Button>
+                  ))}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={choiceBusy}
+                    onClick={() => void doAnswerChoice(ch.choiceId, null)}
+                    className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"
+                  >
+                    <X className="size-3.5" aria-hidden /> Cancel
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {/* v1.0.13 — verification latch: the operator must verify the held-open tool result */}
+        {verifications.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {verifications.map((v) => (
+              <div key={v.verificationId} className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.05] p-3">
+                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-cyan-300">
+                  <ShieldCheck className="size-3.5" aria-hidden /> verification required · {v.tool}
+                </p>
+                {v.resultSummary ? (
+                  <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-black/30 p-2 font-mono text-[10px] text-slate-300 nextool-scroll">{v.resultSummary}</pre>
+                ) : null}
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" disabled={verificationBusy} onClick={() => void doResolveVerification(v.verificationId, true)} className="min-h-9 border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20">
+                    <Check className="size-3.5" aria-hidden /> Verify result
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={verificationBusy} onClick={() => void doResolveVerification(v.verificationId, false)} className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10">
+                    <X className="size-3.5" aria-hidden /> Reject
+                  </Button>
+                </div>
+                <p className="mt-2 text-[10px] text-muted-foreground">rejecting fails the execution (VERIFICATION_REJECTED) · auto-verifies after 5 min</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {/* v1.0.13 — safety-limit continuation: grant extra budget or end the task */}
+        {continuations.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {continuations.map((lc) => (
+              <div key={lc.continuationId} className="rounded-md border border-amber-400/30 bg-amber-400/[0.05] p-3">
+                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-amber-300">
+                  <Gauge className="size-3.5" aria-hidden /> safety limit · {lc.limitKind}
+                </p>
+                <p className="mt-1 break-words text-xs text-foreground">
+                  iterations {lc.iterations}/{lc.maxIterations} · tool calls {lc.toolCalls}/{lc.safetyLimit} — continue with +{lc.extraBudget} more of each?
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" disabled={continuationBusy} onClick={() => void doResolveContinuation(lc.continuationId, 'continue')} className="min-h-9 border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20">
+                    <Check className="size-3.5" aria-hidden /> Continue +{lc.extraBudget}
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={continuationBusy} onClick={() => void doResolveContinuation(lc.continuationId, 'deny')} className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10">
+                    <X className="size-3.5" aria-hidden /> End task
+                  </Button>
+                </div>
+                <p className="mt-2 text-[10px] text-muted-foreground">denying ends the task as limit_reached · auto-denied after 5 min</p>
               </div>
             ))}
           </div>

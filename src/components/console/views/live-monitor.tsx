@@ -19,15 +19,15 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useConsoleStore } from '../console-store';
 import { useGlobalStream } from '../providers';
-import { ApiClientError, answerConfirmation, answerPrompt, getLiveState, getTaskDetail, injectEnvEvent, listApprovals, listConfirmations, listPrompts, listTasks, pauseTask, resolveApprovalRequest, resumeTask, stopTask } from '@/lib/nexool/client';
-import type { PendingApprovalDTO, PendingConfirmationDTO, PendingPromptDTO } from '@/lib/nexool/client';
+import { ApiClientError, answerChoice, answerConfirmation, answerPrompt, getLiveState, getTaskDetail, injectEnvEvent, listApprovals, listChoices, listConfirmations, listLimitContinuations, listPrompts, listTasks, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, stopTask } from '@/lib/nexool/client';
+import type { PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
 import type { GlobalLiveState, NexToolEvent, TaskSummary } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { ServerCard } from '../server-card';
 import { TaskChecklist } from '../task-checklist';
 import { RuntimeTerminal } from '../terminal';
 import { EmptyState, ErrorCard, PulsingDot, SectionTitle, StatusChip, TimeAgo, fmtMs } from '../ui-bits';
-import { Ban, Check, ChevronDown, CirclePause, CirclePlay, Loader2, MessageSquareQuote, MessageSquareWarning, RadioTower, ShieldAlert, Square, Timer, X } from 'lucide-react';
+import { Ban, Check, ChevronDown, CirclePause, CirclePlay, Gauge, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, RadioTower, ShieldAlert, ShieldCheck, Square, Timer, X } from 'lucide-react';
 
 const STREAM_SOURCES = new Set(['environment', 'planner', 'core', 'tool']);
 
@@ -47,12 +47,16 @@ interface LiveTaskCardData {
   lastTickAt: string | null;
 }
 
-function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, onStop, stopping, onPause, onResume, pauseResumeBusy, onResolveApproval, resolvingApproval, onAnswerPrompt, answeringPrompt, onAnswerConfirmation, answeringConfirmation, onOpen }: {
+// v1.0.13 — adds operator choice / verification latch / safety-limit continuation cards.
+function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, choices, verifications, continuations, onStop, stopping, onPause, onResume, pauseResumeBusy, onResolveApproval, resolvingApproval, onAnswerPrompt, answeringPrompt, onAnswerConfirmation, answeringConfirmation, onAnswerChoice, answeringChoice, onResolveVerification, resolvingVerification, onResolveContinuation, resolvingContinuation, onOpen }: {
   data: LiveTaskCardData;
   taskEvents: NexToolEvent[];
   approvals: PendingApprovalDTO[];
   prompts: PendingPromptDTO[];
   confirmations: PendingConfirmationDTO[];
+  choices: PendingChoiceDTO[];
+  verifications: PendingVerificationDTO[];
+  continuations: PendingLimitContinuationDTO[];
   onStop: (id: string) => void;
   stopping: boolean;
   onPause: (id: string) => void;
@@ -64,6 +68,12 @@ function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, onS
   answeringPrompt: boolean;
   onAnswerConfirmation: (confirmId: string, accepted: boolean) => void;
   answeringConfirmation: boolean;
+  onAnswerChoice: (choiceId: string, value: string | null) => void;
+  answeringChoice: boolean;
+  onResolveVerification: (verificationId: string, accepted: boolean) => void;
+  resolvingVerification: boolean;
+  onResolveContinuation: (continuationId: string, decision: 'continue' | 'deny') => void;
+  resolvingContinuation: boolean;
   onOpen: (id: string) => void;
 }) {
   const { summary, detail, eventCount, lastTickAt } = data;
@@ -295,6 +305,115 @@ function LiveTaskCard({ data, taskEvents, approvals, prompts, confirmations, onS
         </div>
       ) : null}
 
+      {/* v1.0.13 — operator choice requests (askForUserAsChoice): pick ONE option or cancel */}
+      {choices.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {choices.map((ch) => (
+            <div key={ch.choiceId} className="rounded-md border border-violet-400/30 bg-violet-400/[0.05] p-3">
+              <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-violet-300">
+                <ListChecks className="size-3.5" aria-hidden /> operator choice {ch.toolName ? `· ${ch.toolName}` : ''}
+              </p>
+              <p className="mt-1 break-words text-xs text-foreground">{ch.message}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {ch.options.map((opt) => (
+                  <Button
+                    key={opt.value}
+                    size="sm"
+                    variant="outline"
+                    disabled={answeringChoice}
+                    onClick={() => onAnswerChoice(ch.choiceId, opt.value)}
+                    className="min-h-9 border-violet-400/30 text-violet-200 hover:bg-violet-400/10"
+                  >
+                    {opt.label ?? opt.value}
+                  </Button>
+                ))}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={answeringChoice}
+                  onClick={() => onAnswerChoice(ch.choiceId, null)}
+                  className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"
+                >
+                  <X className="size-3.5" aria-hidden /> Cancel
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* v1.0.13 — verification latch: the operator must verify the held-open tool result */}
+      {verifications.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {verifications.map((v) => (
+            <div key={v.verificationId} className="rounded-md border border-cyan-400/30 bg-cyan-400/[0.05] p-3">
+              <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-cyan-300">
+                <ShieldCheck className="size-3.5" aria-hidden /> verification required · {v.tool}
+              </p>
+              {v.resultSummary ? (
+                <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-black/30 p-2 font-mono text-[10px] text-slate-300 nextool-scroll">{v.resultSummary}</pre>
+              ) : null}
+              <div className="mt-2 flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={resolvingVerification}
+                  onClick={() => onResolveVerification(v.verificationId, true)}
+                  className="min-h-9 border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20"
+                >
+                  <Check className="size-3.5" aria-hidden /> Verify result
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={resolvingVerification}
+                  onClick={() => onResolveVerification(v.verificationId, false)}
+                  className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"
+                >
+                  <X className="size-3.5" aria-hidden /> Reject
+                </Button>
+              </div>
+              <p className="mt-2 text-[10px] text-muted-foreground">rejecting fails the execution (VERIFICATION_REJECTED) · auto-verifies after 5 min</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* v1.0.13 — safety-limit continuation: grant extra budget or end the task */}
+      {continuations.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {continuations.map((lc) => (
+            <div key={lc.continuationId} className="rounded-md border border-amber-400/30 bg-amber-400/[0.05] p-3">
+              <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-amber-300">
+                <Gauge className="size-3.5" aria-hidden /> safety limit · {lc.limitKind}
+              </p>
+              <p className="mt-1 break-words text-xs text-foreground">
+                iterations {lc.iterations}/{lc.maxIterations} · tool calls {lc.toolCalls}/{lc.safetyLimit} — continue with +{lc.extraBudget} more of each?
+              </p>
+              <div className="mt-2 flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={resolvingContinuation}
+                  onClick={() => onResolveContinuation(lc.continuationId, 'continue')}
+                  className="min-h-9 border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20"
+                >
+                  <Check className="size-3.5" aria-hidden /> Continue +{lc.extraBudget}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={resolvingContinuation}
+                  onClick={() => onResolveContinuation(lc.continuationId, 'deny')}
+                  className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"
+                >
+                  <X className="size-3.5" aria-hidden /> End task
+                </Button>
+              </div>
+              <p className="mt-2 text-[10px] text-muted-foreground">denying ends the task as limit_reached · auto-denied after 5 min</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {/* v1.0.6 §10.8 — event queue (multi-event mode): real runtime state */}
       {queue.length > 0 ? (
         <Collapsible className="mt-3">
@@ -373,10 +492,17 @@ export default function LiveMonitorView() {
   const [promptsByTask, setPromptsByTask] = useState<Record<string, PendingPromptDTO[]>>({});
   // v1.0.8 §1.5 — pending confirmations per active task
   const [confirmationsByTask, setConfirmationsByTask] = useState<Record<string, PendingConfirmationDTO[]>>({});
+  // v1.0.13 — operator choices / verification latches / safety-limit continuations per active task
+  const [choicesByTask, setChoicesByTask] = useState<Record<string, PendingChoiceDTO[]>>({});
+  const [verificationsByTask, setVerificationsByTask] = useState<Record<string, PendingVerificationDTO[]>>({});
+  const [continuationsByTask, setContinuationsByTask] = useState<Record<string, PendingLimitContinuationDTO[]>>({});
   const [pauseResumeBusy, setPauseResumeBusy] = useState(false);
   const [resolvingApproval, setResolvingApproval] = useState(false);
   const [answeringPrompt, setAnsweringPrompt] = useState(false);
   const [answeringConfirmation, setAnsweringConfirmation] = useState(false);
+  const [answeringChoice, setAnsweringChoice] = useState(false);
+  const [resolvingVerification, setResolvingVerification] = useState(false);
+  const [resolvingContinuation, setResolvingContinuation] = useState(false);
 
   const load = useCallback(async () => {
     const [stateRes, tasksRes] = await Promise.allSettled([getLiveState(), listTasks({ mode: 'live', limit: 50 })]);
@@ -395,17 +521,28 @@ export default function LiveMonitorView() {
       const nextApprovals: Record<string, PendingApprovalDTO[]> = {};
       const nextPrompts: Record<string, PendingPromptDTO[]> = {};
       const nextConfirmations: Record<string, PendingConfirmationDTO[]> = {};
+      const nextChoices: Record<string, PendingChoiceDTO[]> = {};
+      const nextVerifications: Record<string, PendingVerificationDTO[]> = {};
+      const nextContinuations: Record<string, PendingLimitContinuationDTO[]> = {};
       await Promise.all(
         activeIds.map(async (id) => {
-          const [a, p, c] = await Promise.allSettled([listApprovals(id), listPrompts(id), listConfirmations(id)]);
+          // v1.0.13 — the interaction poll is now a 6-tuple: approvals, prompts,
+          // confirmations, choices, verifications, limit continuations.
+          const [a, p, c, ch, v, lc] = await Promise.allSettled([listApprovals(id), listPrompts(id), listConfirmations(id), listChoices(id), listVerifications(id), listLimitContinuations(id)]);
           if (a.status === 'fulfilled') nextApprovals[id] = a.value.approvals;
           if (p.status === 'fulfilled') nextPrompts[id] = p.value.prompts;
           if (c.status === 'fulfilled') nextConfirmations[id] = c.value.confirmations;
+          if (ch.status === 'fulfilled') nextChoices[id] = ch.value.choices;
+          if (v.status === 'fulfilled') nextVerifications[id] = v.value.verifications;
+          if (lc.status === 'fulfilled') nextContinuations[id] = lc.value.continuations;
         }),
       );
       setApprovalsByTask(nextApprovals);
       setPromptsByTask(nextPrompts);
       setConfirmationsByTask(nextConfirmations);
+      setChoicesByTask(nextChoices);
+      setVerificationsByTask(nextVerifications);
+      setContinuationsByTask(nextContinuations);
     }
   }, []);
 
@@ -536,6 +673,54 @@ export default function LiveMonitorView() {
     }
   };
 
+  // v1.0.13 — the operator's option pick resumes the waiting tool (null cancels).
+  const answerChoiceById = async (choiceId: string, value: string | null) => {
+    setAnsweringChoice(true);
+    try {
+      await answerChoice(choiceId, value);
+      void load();
+      toast.success(value === null ? 'Choice cancelled' : 'Choice submitted', {
+        description: value === null ? 'The tool receives no answer.' : `The tool receives: ${value}`,
+      });
+    } catch (e) {
+      toast.error('Choice failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setAnsweringChoice(false);
+    }
+  };
+
+  // v1.0.13 — verify the held-open tool result; rejecting fails the execution (VERIFICATION_REJECTED).
+  const resolveVerificationById = async (verificationId: string, accepted: boolean) => {
+    setResolvingVerification(true);
+    try {
+      await resolveVerificationRequest(verificationId, accepted);
+      void load();
+      toast.success(accepted ? 'Result verified' : 'Result rejected', {
+        description: accepted ? 'The execution completes with your verification.' : 'The execution fails as VERIFICATION_REJECTED.',
+      });
+    } catch (e) {
+      toast.error('Verification failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setResolvingVerification(false);
+    }
+  };
+
+  // v1.0.13 — 'continue' grows the limits and resumes the task; 'deny' ends it as limit_reached.
+  const resolveContinuationById = async (continuationId: string, decision: 'continue' | 'deny') => {
+    setResolvingContinuation(true);
+    try {
+      await resolveLimitContinuationRequest(continuationId, decision);
+      void load();
+      toast.success(decision === 'continue' ? 'Budget granted' : 'Continuation denied', {
+        description: decision === 'continue' ? 'The limits grow and the task resumes.' : 'The task ends as limit_reached.',
+      });
+    } catch (e) {
+      toast.error('Continuation failed', { description: e instanceof ApiClientError ? e.message : 'Unknown error' });
+    } finally {
+      setResolvingContinuation(false);
+    }
+  };
+
   const liveTaskEvents = (taskId: string) => events.filter((ev) => ev.taskId === taskId).length;
   const lastTick = (taskId: string) => {
     for (let i = events.length - 1; i >= 0; i--) {
@@ -582,6 +767,9 @@ export default function LiveMonitorView() {
                 approvals={approvalsByTask[t.id] ?? []}
                 prompts={promptsByTask[t.id] ?? []}
                 confirmations={confirmationsByTask[t.id] ?? []}
+                choices={choicesByTask[t.id] ?? []}
+                verifications={verificationsByTask[t.id] ?? []}
+                continuations={continuationsByTask[t.id] ?? []}
                 onStop={(id) => setStopCandidate(id)}
                 stopping={stoppingId === t.id}
                 onPause={(id) => void pauseById(id)}
@@ -593,6 +781,12 @@ export default function LiveMonitorView() {
                 answeringPrompt={answeringPrompt}
                 onAnswerConfirmation={(confirmId, accepted) => void answerConfirmationById(confirmId, accepted)}
                 answeringConfirmation={answeringConfirmation}
+                onAnswerChoice={(choiceId, value) => void answerChoiceById(choiceId, value)}
+                answeringChoice={answeringChoice}
+                onResolveVerification={(verificationId, accepted) => void resolveVerificationById(verificationId, accepted)}
+                resolvingVerification={resolvingVerification}
+                onResolveContinuation={(continuationId, decision) => void resolveContinuationById(continuationId, decision)}
+                resolvingContinuation={resolvingContinuation}
                 onOpen={openTaskPreview}
               />
             ))}

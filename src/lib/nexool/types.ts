@@ -124,6 +124,13 @@ export interface ToolDefinition {
   /** v1.0.12 — mcp tools only: connector + remote tool reference. Identity
    *  only — NEVER credentials (they resolve through the connector). */
   mcp?: McpToolRef;
+  /** v1.0.13 — VERIFICATION LATCH: when true, a COMPLETED execution of this
+   *  tool is held open until the operator verifies the result in the console.
+   *  Verify → completes normally; Reject → structured VERIFICATION_REJECTED
+   *  failure; timeout (5 min) → auto-verified with a warning event (the
+   *  latch is a review gate, deliberately NOT a security gate). Subtool and
+   *  test executions never latch. Default: false. */
+  verificationLatch?: boolean;
 }
 
 // ---------- Tool execution approval (v1.0.6 §9) ----------
@@ -349,6 +356,12 @@ export interface TaskConfig {
    *  observe failure → recovery subgoal → recovery pre-plan → execute →
    *  verify. Pre-plan planner only; one-by-one replans by design. */
   recoveryMaxAttempts?: number;
+  /** v1.0.13 — per-task cap on SAFETY-LIMIT CONTINUATIONS (0..5, default 1;
+   *  0 disables the continuation question). When the goal loop hits
+   *  maxIterations/safetyLimit the runtime ASKS the operator instead of
+   *  failing: continue → both limits grow by limitContinuationExtra and the
+   *  task proceeds; deny/timeout → terminal exactly as before. */
+  limitContinuations?: number;
   sessionId?: string;
   context?: Record<string, unknown>;
 }
@@ -605,6 +618,15 @@ export interface NexToolSettings {
   /** v1.0.11 — global default cap on recovery attempts per failed pre-plan
    *  step (2..4 via the central task.recoveryMaxAttempts limits, default 4). */
   recoveryMaxAttempts: number;
+  /** v1.0.13 — safety-limit continuation policy: when true (default), the
+   *  goal loop ASKS the operator for a continuation instead of failing at
+   *  maxIterations/safetyLimit (per-task limitContinuations caps still apply
+   *  and 0 disables per task). */
+  safetyLimitContinuation: boolean;
+  /** v1.0.13 — budget granted to BOTH maxIterations and safetyLimit per
+   *  granted continuation (1..500 via the central task.limitContinuationExtra
+   *  limits, default 25). */
+  safetyLimitContinuationExtra: number;
 }
 
 // ---------- Training (v1.0.2) ----------

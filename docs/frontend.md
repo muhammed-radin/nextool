@@ -250,6 +250,33 @@ Typed helpers cover the whole endpoint surface (`getSystemStats`, `createTask`,
 - Nothing is cached beyond provider state — reloads are always truthful.
 - Any panel can be in `loading | error | empty | data` — all four are rendered honestly.
 
+## v1.0.13 frontend changes
+
+- **FS Inspector view** (nav: "FS Inspector"): the operator console's read-only
+  window onto BOTH filesystems. Two tabs — **Virtual FS** (the ONE shared VFS via
+  `/api/inspector/vfs`) and **Real FS** (`/api/inspector/fs`, read-only, confined
+  to the runtime working directory). Each tab offers a path bar (Go / Up / Root /
+  Refresh), an entry table (kind badges, humanized sizes, updated timestamps) and
+  a preview card (64 KiB text cap, truncated badge, honest error alerts). The
+  header shows the live VFS usage (usedBytes / files / limits).
+- **Operator interaction cards** in Live Monitor + Task Preview, below the
+  confirmation cards, each with its own accent and polling integration:
+  - **Operator choice** (violet): one button per `askForUserAsChoice()` option
+    (+ Cancel) — resolved via `/api/choices`; never fabricates an answer.
+  - **Verification required** (cyan): the latched execution's result summary in a
+    mono block with **Verify result** / **Reject** actions — resolved via
+    `/api/verifications`; rejecting fails the execution (`VERIFICATION_REJECTED`).
+  - **Safety limit** (amber): the tripped limit with real numbers and the budget
+    on offer — **Continue +N** / **End task** — resolved via
+    `/api/limits/continuations`; denying ends the task as `limit_reached`.
+- **Tool IDE**: a **Verification latch** switch joins the Auto-execution block
+  (per-tool, default off), and the structured schema form ⇄ JSON draft projection
+  (§17) is fully wired.
+- **Task Console**: a **Safety-limit continuations** numeric field (0–5, default
+  1; 0 = fail at the limit as before) travels in every submitted task config.
+- **Settings**: "Ask before safety-limit failure" switch + "Continuation budget"
+  field (both bounded by the central `task.limitContinuationExtra` limits).
+
 ## v1.0.11 frontend changes
 
 - **Task Preview Recovery panel**: when a pre-plan task enters recovery

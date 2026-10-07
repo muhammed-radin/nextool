@@ -12,6 +12,7 @@ export type ConsoleView =
   | 'connectors'
   | 'memory'
   | 'live-state'
+  | 'inspector'
   | 'events'
   | 'history'
   | 'models'

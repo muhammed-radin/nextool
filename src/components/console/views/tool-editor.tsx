@@ -151,6 +151,9 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
   // v1.0.6 §9.2 / v1.0.11 §40 — tri-state per-tool auto-execution:
   // undefined = INHERIT (the hierarchy decides), true = force ON, false = OFF.
   const [autoExecute, setAutoExecute] = useState<boolean | undefined>(initial?.autoExecute);
+  // v1.0.13 — verification latch: hold COMPLETED executions of this tool open
+  // until the operator verifies the result (review gate; default OFF).
+  const [verificationLatch, setVerificationLatch] = useState<boolean>(initial?.verificationLatch === true);
   // v1.0.7 §1 — tool-specific execution timeout (ms). Empty string = use the
   // global default (10 s). Stored value round-trips through edit/duplicate.
   const [timeoutMsInput, setTimeoutMsInput] = useState<string>(
@@ -389,6 +392,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           functionSource: code,
           metadata,
           ...(autoExecute !== undefined ? { autoExecute } : {}),
+          verificationLatch,
           timeoutMs,
           enabled,
         });
@@ -404,6 +408,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
           functionSource: code,
           metadata,
           ...(autoExecute !== undefined ? { autoExecute } : {}),
+          verificationLatch,
           timeoutMs,
           enabled,
         });
@@ -665,6 +670,23 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
                 ? 'Effective auto-execution: TOOL DISABLED — approval required unless the Task Console enables it.'
                 : 'Effective auto-execution: INHERIT — approval required unless the Task Console enables it.'}
         </p>
+      </div>
+      {/* v1.0.13 — verification latch: the operator reviews the RESULT after
+          execution (approval reviews the intention BEFORE it). Timeout (5 min)
+          auto-verifies with a warning — a review gate, never a security gate. */}
+      <div className="flex items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+        <div className="min-w-0">
+          <Label htmlFor="tool-verification-latch" className="text-sm">Verification latch</Label>
+          <p className="text-[11px] text-muted-foreground">
+            After this tool completes, hold the execution until the operator verifies the result in the console.
+          </p>
+        </div>
+        <Switch
+          id="tool-verification-latch"
+          checked={verificationLatch}
+          onCheckedChange={(v) => { setVerificationLatch(v === true); markDirty(); }}
+          aria-label="Verification latch"
+        />
       </div>
       {!isNew && sessionToolName ? (
         <p className="font-mono text-[10px] text-muted-foreground">
@@ -1049,7 +1071,7 @@ export default function ToolEditorView({ toolName, initial, onSaved, onDeleted, 
             </Button>
           </div>
           <p className="text-[11px] text-muted-foreground">Form edits apply to the JSON schema with “Apply to schema” — the json view stays available for advanced fields.</p>
-        </div>
+        </fieldset>
       )}
       {schemaError && schemaView === 'json' ? (
         <p role="alert" className="rounded-md border border-rose-400/30 bg-rose-400/5 px-2.5 py-1.5 font-mono text-[11px] text-rose-300">
@@ -1458,6 +1480,16 @@ function MonacoSurface({ onDispose, ...props }: ComponentProps<typeof MonacoEdit
 
 function emptySchema(): ToolSchema {
   return { type: 'object', properties: [] };
+}
+
+/**
+ * §17 — serialize the FORM PROJECTION (schemaRows) into the canonical schema
+ * draft text. The exact inverse of parseSchemaText for valid inputs: both the
+ * JSON view and the structured form are projections of ONE draft, so this is
+ * the single writer used by flushSchemaRows and "Apply to schema".
+ */
+function serializeSchemaRows(rows: ToolParamDef[]): string {
+  return JSON.stringify({ type: 'object', properties: rows }, null, 2);
 }
 
 function schemaToEditable(schema: ToolSchema | undefined): ToolSchema | null {

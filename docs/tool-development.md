@@ -195,6 +195,73 @@ resolves immediately, `prompt` resolves with its default value (or `null`) and `
 resolves with its declared default (or the conservative `false`) — tests never hang
 waiting for interactive input that nobody can answer.
 
+### askForUserAsChoice(message, choices, options?) — multiple-choice operator question (v1.0.13)
+
+The structured sibling of `prompt()`: instead of free text, the operator picks ONE
+option from a list you provide:
+
+```js
+const region = await askForUserAsChoice('Deploy target?', ['staging', 'production']);
+const action = await askForUserAsChoice('API-01 is unhealthy — what now?', [
+  { value: 'restart', label: 'Restart the server' },
+  { value: 'failover', label: 'Fail over to the standby' },
+  { value: 'ignore',  label: 'Log and continue' },
+], { default: 'restart' });
+if (action === null) return { skipped: true }; // cancelled or 120 s timeout
+```
+
+| Rule | Behavior |
+| --- | --- |
+| Resolution | The chosen **VALUE** string — never a fabricated answer. Cancel / task stop / the **120 s timeout** resolve **`null`**. |
+| Options | 1–12 options; plain strings or `{ value, label? }` objects (value ≤ 120 chars, label ≤ 200); duplicate values are deduped; invalid input throws honestly. |
+| Message | ≤ 2000 chars. |
+| Deadline | Same deferral model as prompt/confirm: the execution deadline is deferred while the question pends and reset after the answer. |
+| UI | One button per option (+ Cancel) in Live Monitor / Task Preview; resolved via `POST /api/choices`. |
+| Events | `tool.user_choice.requested` → `tool.user_choice.responded`. |
+| Test mode | Resolves immediately with `{ default }` when it matches an option, otherwise the FIRST option's value — tests never hang. |
+
+### context.tools.call(name, params?) — the SUBTOOL API (v1.0.13)
+
+A tool can execute ANOTHER registered NexTool tool by awaiting the subtool API
+on its context:
+
+```js
+const health = await context.tools.call('server.health', { serverId: 'api-01' });
+if (context.tools.remainingCalls() === 0) log('subtool budget exhausted');
+```
+
+Every subtool call is a REAL ToolExecution — it reuses the one `executeTool()`
+path, so `tool.*` events, stats, history entries and the executions listing all
+apply. Safety model (fail closed):
+
+- **Depth** ≤ `SUBTOOL_MAX_DEPTH` (shipped 3) — violations fail with `SUBTOOL_DEPTH`.
+- **Budget** ≤ `SUBTOOL_MAX_CALLS` (shipped 20) per top-level execution, shared
+  across the whole call tree — `SUBTOOL_LIMIT`.
+- **Recursion**: direct and indirect cycles (A→B→A) fail with `SUBTOOL_CYCLE`.
+- **Cancellation/time budget**: the parent's abort signal and deadline are inherited.
+- **Approval is skipped** (the parent execution was already approved); the called
+  tool must exist and be ENABLED (`UNKNOWN_TOOL` / `TOOL_DISABLED` otherwise).
+- **Test mode** (Tool IDE): the API exists but can only invoke BUILT-IN tools —
+  anything else fails with `SUBTOOL_TEST_MODE`.
+
+### Verification latch (v1.0.13) — hold completed executions for operator review
+
+A tool can ask the operator to review its RESULT after execution: set the
+**Verification latch** switch in the Tool IDE (or `verificationLatch: true` on
+the definition). While enabled, every COMPLETED top-level task execution is
+held open until the operator verifies it in the console:
+
+| Outcome | Effect |
+| --- | --- |
+| **Verify** | The execution completes normally; the result flows to the planner unchanged. |
+| **Reject** (+ optional feedback) | The execution is recorded as FAILED with the structured error `VERIFICATION_REJECTED`; the planner observes the failure like any other. |
+| **Timeout** (5 min) | **Auto-verified** with an honest warning event — the latch is a REVIEW gate, deliberately NOT a security gate; an absent operator never destroys automation. |
+| Task stop | The execution completes as `CANCELLED`. |
+
+Subtool executions and Tool IDE test runs never latch. Events:
+`tool.verification.required` / `.verified` / `.rejected` / `.timeout`; resolved
+via `POST /api/verifications`.
+
 ### Standard globals
 
 Both environments expose the standard JavaScript globals tool authors expect:

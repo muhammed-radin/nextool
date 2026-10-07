@@ -11,6 +11,8 @@ import type { ToolDefinition, ToolParamDef } from '../types';
 import type { HandlerContext } from './handler';
 import { resolveEffectiveToolTimeout, maxToolTimeoutMs } from './timeout';
 import { hasPendingInteraction } from './sandbox-interactive';
+import type { SubtoolParentInfo } from './subtool';
+import { requestVerification, summarizeResult } from '../verification';
 
 export interface ExecuteOptions {
   timeoutMs?: number;
@@ -23,6 +25,14 @@ export interface ExecuteOptions {
   /** v1.0.3: batch info stamped on the execution + events when the call runs
    *  as part of a parallel batch (dependency-aware, capped by the runtime). */
   batch?: { batchId: string; parallelGroup: number };
+  /** v1.0.13 §14 — caller-supplied execution id (subtool calls pass their
+   *  pre-generated `sub_…` id so every layer correlates). Absent = generated. */
+  executionId?: string;
+  /** v1.0.13 §14 — the caller-supplied PARENT info for subtool executions
+   *  (chain/depth/budget/deadline). The executor derives the executed call's
+   *  SubtoolLink by appending the executed tool to the chain. Absent = a
+   *  fresh root link is created so `context.tools` always exists. */
+  subtool?: SubtoolParentInfo;
 }
 
 function newExecutionId(): string {
@@ -142,7 +152,8 @@ export async function executeTool(
   rawParams: Record<string, unknown> | undefined,
   opts: ExecuteOptions = {},
 ): Promise<ToolExecution> {
-  const executionId = newExecutionId();
+  // v1.0.13 §14 — subtool calls carry their own pre-generated execution id.
+  const executionId = opts.executionId ?? newExecutionId();
   const startedAt = new Date().toISOString();
 
   const execution: ToolExecution = {
@@ -204,7 +215,26 @@ export async function executeTool(
       return finish('failed', undefined, { code: 'NO_HANDLER', message: `No handler available for tool: ${toolName}` });
     }
 
-    const ctx: HandlerContext = { taskId: opts.taskId, executionId, timeoutMs, networkTimeoutMs: opts.networkTimeoutMs };
+    const ctx: HandlerContext = {
+      taskId: opts.taskId,
+      executionId,
+      timeoutMs,
+      networkTimeoutMs: opts.networkTimeoutMs,
+      // v1.0.13 §14 — EVERY production execution gets a subtool link: derived
+      // from the caller's parent info (chain gets the executed tool appended)
+      // or a fresh root link (chain=[this tool], depth 0, fresh budget) so
+      // `context.tools` works for top-level tools too. The signal threads
+      // cancellation down the whole subtool tree.
+      subtool: opts.subtool
+        ? {
+          chain: [...opts.subtool.parentChain, toolName],
+          depth: opts.subtool.depth,
+          budget: opts.subtool.budget,
+          deadlineAt: opts.subtool.deadlineAt,
+          signal: opts.signal,
+        }
+        : { chain: [toolName], depth: 0, budget: { calls: 0 }, signal: opts.signal },
+    };
     const startedEpoch = Date.now();
     const result = await Promise.race([
       handler(params, ctx),
@@ -245,6 +275,32 @@ export async function executeTool(
         else opts.signal.addEventListener('abort', onAbort, { once: true });
       }),
     ]);
+
+    // v1.0.13 — VERIFICATION LATCH: a tool flagged verificationLatch holds
+    // its COMPLETED execution open until the operator verifies the result.
+    // Top-level task executions only (subtool calls run under the parent's
+    // context; test runs have no operator). Outcomes: verified → complete;
+    // rejected → structured VERIFICATION_REJECTED failure; timeout →
+    // auto-verified with a warning event (review gate, not a security gate);
+    // cancelled → the execution completes as cancelled.
+    if (def.verificationLatch === true && opts.taskId && !opts.subtool && !opts.signal?.aborted) {
+      const outcome = await requestVerification({
+        taskId: opts.taskId,
+        executionId,
+        tool: toolName,
+        resultSummary: summarizeResult(result),
+      });
+      if (outcome === 'rejected') {
+        return finish('failed', undefined, {
+          code: 'VERIFICATION_REJECTED',
+          message: `The result of ${toolName} was rejected by the operator during verification.`,
+        });
+      }
+      if (outcome === 'cancelled') {
+        return finish('cancelled', undefined, { code: 'CANCELLED', message: 'Task stopped while awaiting result verification.' });
+      }
+      // 'verified' | 'timeout' → the execution completes normally.
+    }
 
     return finish('completed', result, null);
   } catch (err) {

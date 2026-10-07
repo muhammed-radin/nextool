@@ -1,6 +1,8 @@
 /**
  * Shared tool handler types.
  */
+import type { SubtoolLink } from './subtool';
+
 export interface HandlerContext {
   taskId?: string;
   executionId: string;
@@ -15,6 +17,10 @@ export interface HandlerContext {
    *  Settings → shipped default; it is deliberately NOT derived from
    *  timeoutMs. */
   networkTimeoutMs?: number;
+  /** v1.0.13 §14 — the executor-threaded subtool link for THIS execution
+   *  (call chain, depth, shared budget). Present for every real execution;
+   *  function handlers wrap it into the sandbox-facing `context.tools` API. */
+  subtool?: SubtoolLink;
 }
 
 export type ToolHandler = (

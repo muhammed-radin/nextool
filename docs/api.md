@@ -684,6 +684,60 @@ enveloped). Not used by the console.
 
 ---
 
+## Operator interactions (v1.0.13)
+
+### GET/POST /api/choices — `askForUserAsChoice()`
+
+- `GET ?taskId=` → `{ choices: PendingChoiceDTO[] }` — pending multiple-choice
+  questions (message + one `{ value, label? }` per option, 120 s window).
+- `POST { choiceId, value? , cancel? }` → answer/cancel. `value` MUST exactly
+  match one offered option value — the runtime rejects fabricated answers with
+  `resolved:false`. Cancel/timeout resolve **null** to the tool (never one of
+  the options). Events: `tool.user_choice.requested` / `.responded`.
+
+### GET/POST /api/verifications — the verification latch
+
+- `GET ?taskId=` → `{ verifications: (PendingVerification & { executionId })[] }`
+  — COMPLETED executions of `verificationLatch: true` tools held open for the
+  operator (5-minute window).
+- `POST { verificationId, accepted, feedback? }` → `accepted:true` completes
+  the execution normally; `false` records it as FAILED with the structured
+  error `VERIFICATION_REJECTED` (optional feedback becomes an observer event).
+  Timeout **auto-verifies** with a warning event — a review gate, never a
+  security gate. Events: `tool.verification.required/.verified/.rejected/.timeout`.
+
+### GET/POST /api/limits/continuations — safety-limit continuation
+
+- `GET ?taskId=` → `{ continuations: PendingLimitContinuationDTO[] }` — tripped
+  limit (`maxIterations | safetyLimit | both`), the current numbers and the
+  budget that would be granted (5-minute window).
+- `POST { continuationId, decision: 'continue' \| 'deny', feedback? }` →
+  `continue` grows BOTH limits by `extraBudget` (Settings
+  `safetyLimitContinuationExtra`, shipped 25) and the task proceeds; `deny`
+  ends the task exactly as before (`limit_reached` / `SAFETY_LIMIT`). Timeout
+  = deny (the runtime never grows its own budget unattended). Events:
+  `task.limit.continuation_required/.continued/.continuation_denied/.continuation_timeout`.
+  See [Goal mode](goal-mode.md).
+
+### GET /api/inspector/vfs — FS Inspector: Virtual FS (read-only)
+
+`?path=/&op=list\|read\|stat` over the ONE shared VFS
+(`openGlobalVfs()`): `list` returns enriched entries (500 cap), `read` a
+64 KiB text preview (files > 2 MiB → 400 `FS_TOO_LARGE`), `stat` one entry.
+Every response carries `usage` (usedBytes / files / live limits). Traversal
+attempts surface the documented `VFS_ACCESS` error.
+
+### GET /api/inspector/fs — FS Inspector: REAL filesystem (read-only)
+
+`?path=&op=list\|read\|stat` — READ-ONLY and CONFINED to the runtime working
+directory (`process.cwd()`; realpath containment, symlink escapes rejected
+with 403 `FS_ACCESS`). `list` entries carry `kind: file|dir|link` + lstat
+metadata; `read` is utf8, regular files only, 64 KiB preview cap (files >
+2 MiB → 400 `FS_TOO_LARGE`). Single-user self-hosted: full visibility INSIDE
+the runtime directory, nothing outside it.
+
+---
+
 ## TaskConfig quick reference
 
 | Field | Type | Notes |
@@ -708,6 +762,7 @@ enveloped). Not used by the console.
 | `plannerType` | `'pre-plan' \| 'one-by-one'` | v1.0.10 — planner strategy override; precedence task → global `defaultPlannerType` → `'pre-plan'`; resolved AND persisted in the stored config JSON at creation (invalid values → 400 `INVALID_REQUEST`) |
 | `prePlanMaxSteps` | 1–122 | v1.0.10 — max steps for the pre-plan planner (default 10); `123` → 400 `INVALID_REQUEST` (`"expected number to be <=122"`); persisted with the task config at creation |
 | `recoveryMaxAttempts` | 2–4 | v1.0.11 — recovery attempt budget per failed pre-plan step (default 4, central limit `task.recoveryMaxAttempts`); values outside 2–4 → 400 `INVALID_REQUEST`; persisted with the task config at creation |
+| `limitContinuations` | 0–5 | v1.0.13 — how often the operator may grant extra budget when THIS task trips `maxIterations`/`safetyLimit` (default 1, central limit `task.limitContinuations`); **0 disables the continuation question** (fail at the limit as before); persisted with the task config at creation |
 | `sessionId`, `context` | free-form | |
 
 For payload/response schemas of the domain objects (`TaskDetail`, `NexToolEvent`,

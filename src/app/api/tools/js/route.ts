@@ -28,6 +28,8 @@ export async function POST(req: Request) {
       schema: body.schema,
       functionSource: body.functionSource,
       autoExecute: body.autoExecute,
+      // v1.0.13 — verification latch round-trips on create.
+      verificationLatch: body.verificationLatch,
       // v1.0.7 §1 — tool-specific execution timeout round-trips on create.
       timeoutMs: body.timeoutMs,
       enabled: body.enabled,

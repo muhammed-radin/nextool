@@ -43,6 +43,11 @@ export const DEFAULT_SETTINGS: NexToolSettings = {
   // v1.0.11 — global default recovery attempts per failed pre-plan step
   // (2..4 via the central task.recoveryMaxAttempts limits, default 4).
   recoveryMaxAttempts: limitsDefault('task', 'recoveryMaxAttempts', 4),
+  // v1.0.13 — safety-limit continuation policy: ask the operator instead of
+  // failing silently at maxIterations/safetyLimit (default ON), with the
+  // budget granted per granted continuation (default 25).
+  safetyLimitContinuation: true,
+  safetyLimitContinuationExtra: limitsDefault('task', 'limitContinuationExtra', 25),
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -113,6 +118,10 @@ export async function updateSettings(partial: Partial<NexToolSettings>): Promise
   next.prePlanMaxSteps = clampToLimit('task', 'prePlanMaxSteps', next.prePlanMaxSteps);
   // v1.0.11 — recovery attempt cap clamps into the central bounds (2..4).
   next.recoveryMaxAttempts = clampToLimit('task', 'recoveryMaxAttempts', next.recoveryMaxAttempts);
+  // v1.0.13 — continuation policy: boolean default true; the extra budget
+  // clamps into the central bounds [task.limitContinuationExtra.min, max].
+  next.safetyLimitContinuation = next.safetyLimitContinuation !== false;
+  next.safetyLimitContinuationExtra = clampToLimit('task', 'limitContinuationExtra', next.safetyLimitContinuationExtra);
   if (next.defaultMode !== 'goal' && next.defaultMode !== 'live') next.defaultMode = 'goal';
   next.defaultReasoningLevel = clampNum(next.defaultReasoningLevel, 1, 6) as NexToolSettings['defaultReasoningLevel'];
   if (next.logLevel !== 'info' && next.logLevel !== 'debug' && next.logLevel !== 'error') next.logLevel = 'info';

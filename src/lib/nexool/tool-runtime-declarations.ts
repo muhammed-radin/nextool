@@ -33,6 +33,22 @@ declare function log(...parts: unknown[]): void;
 /** What a tool may return — must be JSON-serializable (max 64 KiB, depth 12). */
 type ToolResult = unknown;
 
+/** v1.0.13 §14 — subtool API exposed as context.tools on the execution context. */
+interface SandboxToolsApi {
+  /** Execute another registered NexTool tool and await its result object. */
+  call(toolName: string, params?: Record<string, unknown>): Promise<unknown>;
+  /** Configured maximum subtool depth (shipped 3). */
+  readonly maxDepth: number;
+  /** Configured maximum calls per top-level execution (shipped 20). */
+  readonly maxCalls: number;
+  /** Calls already consumed by this execution tree. */
+  usedCalls(): number;
+  /** Calls left before SUBTOOL_LIMIT is raised. */
+  remainingCalls(): number;
+  /** Depth of the execution holding this API (0 = top level). */
+  readonly depth: number;
+}
+
 interface ToolContext {
   /** Unique id of this execution (e.g. "exec_...", "test_..."). */
   executionId: string;
@@ -44,6 +60,10 @@ interface ToolContext {
   now: string;
   /** Log helper — collected and shown in the test panel. */
   log: (...parts: unknown[]) => void;
+  /** v1.0.13 §14 — the SUBTOOL API: await context.tools.call(name, params)
+   *  executes another registered tool through THE ONE execution path
+   *  (real ToolExecution, depth/budget/recursion enforced). */
+  tools: SandboxToolsApi;
 }
 
 // ---- v1.0.6 §1.2/§1.5/§1.6 — controlled network + interaction APIs ----
@@ -62,6 +82,10 @@ declare function prompt(message: string, defaultValue?: string): Promise<string 
  *  Pauses the tool until the user answers the confirmation UI, cancels
  *  (false) or the 120s window expires (false). */
 declare function confirm(message: string, options?: { default?: boolean }): Promise<boolean>;
+/** v1.0.13 — async NexTool choice question: the operator picks ONE offered
+ *  option; resolves the chosen VALUE string, or null on cancel/timeout.
+ *  Options are strings or { value, label? } objects (max 12). */
+declare function askForUserAsChoice(message: string, choices: Array<string | { value: string; label?: string }>, options?: { default?: string }): Promise<string | null>;
 declare function setTimeout(cb: (...args: unknown[]) => void, ms?: number): unknown;
 declare function clearTimeout(id: unknown): void;
 declare function setInterval(cb: (...args: unknown[]) => void, ms?: number): unknown;
@@ -136,10 +160,12 @@ export function getReferenceEntries(schema: ToolSchema | undefined | null): {
     { name: 'context.mode', type: '"test" | "production"', description: 'Distinguishes Tool IDE test runs from real task executions.' },
     { name: 'context.now', type: 'string', description: 'ISO timestamp captured at invocation.' },
     { name: 'context.log(...)', type: '(...parts: unknown[]) => void', description: 'Log lines (max 100) surfaced in the test panel.' },
+    { name: 'await context.tools.call(name, params?)', type: '(toolName, params?) => Promise<unknown>', description: 'v1.0.13 §14 SUBTOOL API — executes another registered tool as a REAL ToolExecution. Max depth 3, max 20 calls per top-level execution, recursion/cycles rejected. Test mode: built-in tools only.' },
     { name: 'await fetch(url, init?)', type: '(url, init?) => Promise<Response>', description: 'v1.0.8 controlled fetch — http/https only, 60s timeout default (network.timeoutMs), 5 MiB response cap default, private hosts blocked, max 56 requests per execution default — all configurable via the central limits.' },
     { name: 'await alert(message)', type: '(message) => Promise<void>', description: 'NexTool async alert — emits a tool.user_alert runtime event (tests resolve immediately).' },
     { name: 'await prompt(message, default?)', type: '(message, defaultValue?) => Promise<string | null>', description: 'Pauses THIS tool until the user answers in the console, cancels, or 120s pass. Never blocks the runtime.' },
     { name: 'await confirm(message, options?)', type: '(message, options?: { default?: boolean }) => Promise<boolean>', description: 'v1.0.8 — NexTool confirmation UI. ALWAYS resolves to a boolean; cancellation/timeout resolve false.' },
+    { name: 'await askForUserAsChoice(message, choices, options?)', type: '(message, choices: Array<string | { value, label? }>, options?: { default?: string }) => Promise<string | null>', description: 'v1.0.13 — multiple-choice operator question. Renders one button per option in the console; resolves the chosen VALUE (or null on cancel/timeout — never a fabricated option). Max 12 options.' },
     { name: 'setTimeout / setInterval', type: 'Timers', description: 'Standard timers — the overall execution deadline still applies.' },
     ...(() => {
       const props = schema?.properties ?? [];

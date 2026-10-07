@@ -1,6 +1,11 @@
 /**
  * NexTool v1.0.6 → v1.0.8 — async alert()/prompt()/confirm() runtime functions
  * (spec v1.0.6 §1.5–§1.7, v1.0.8 §1).
+ * NexTool v1.0.13 — await askForUserAsChoice(): the operator picks ONE option
+ * from a tool-provided list (multiple-choice question). Resolves to the
+ * CHOSEN VALUE string, or null on cancel/timeout — the tool decides how to
+ * handle "no answer" (an unresolved choice is never fabricated into one of
+ * the options).
  *
  * These are NEXTOOL runtime functions, not the browser's blocking dialogs:
  *
@@ -11,6 +16,10 @@
  *     tool, shows the NexTool confirmation UI, ALWAYS resolves to a boolean
  *     (never "yes"/"no" strings). Cancellation/timeout resolve FALSE — an
  *     unresolved confirmation is never treated as true (§1.4).
+ *   const region = await askForUserAsChoice("Deploy target?", [
+ *     "staging", "production"]);                       → v1.0.13 — PAUSES the
+ *     tool, renders one button per option; resolves to the chosen VALUE or
+ *     null (cancel/timeout).
  *
  * The runtime is NEVER frozen while a tool waits: only that tool's Promise
  * pends — the task loop, scheduler and other tools keep running. The tool's
@@ -41,13 +50,61 @@ export const PROMPT_TIMEOUT_MS = 120_000;
  *  resolves FALSE (never true). Same runtime semantics as prompts. */
 export const CONFIRM_TIMEOUT_MS = 120_000;
 
+/** v1.0.13 — choice wait window; on expiry the choice resolves null. */
+export const CHOICE_TIMEOUT_MS = 120_000;
+
+/** One selectable option of askForUserAsChoice(). */
+export interface ChoiceOption {
+  /** The value RESOLVED to the tool (stable id — never rewritten). */
+  value: string;
+  /** Optional button label shown to the operator (defaults to the value). */
+  label?: string;
+}
+
 export interface SandboxInteractions {
   alert(message: string): Promise<void>;
   prompt(message: string, defaultValue?: string): Promise<string | null>;
   /** v1.0.8 §1 — async confirmation; ALWAYS resolves to a boolean. */
   confirm(message: string, options?: { default?: boolean }): Promise<boolean>;
-  /** Awaiting a prompt/confirm — the sandbox watchdog extends its deadline. */
+  /** v1.0.13 — multiple-choice operator question; resolves the chosen VALUE
+   *  or null (cancel/timeout). Options may be plain strings or {value,label}. */
+  askForUserAsChoice(
+    message: string,
+    choices: Array<string | ChoiceOption>,
+    options?: { default?: string },
+  ): Promise<string | null>;
+  /** Awaiting a prompt/confirm/choice — the sandbox watchdog extends its deadline. */
   pendingCount(): number;
+}
+
+/** Normalize + validate choice options (fail loud — honest API). */
+export function normalizeChoiceOptions(choices: Array<string | ChoiceOption>): ChoiceOption[] {
+  if (!Array.isArray(choices)) {
+    throw new Error('askForUserAsChoice() choices must be an array of strings or { value, label? } objects.');
+  }
+  if (choices.length === 0) {
+    throw new Error('askForUserAsChoice() requires at least one choice option.');
+  }
+  if (choices.length > 12) {
+    throw new Error('askForUserAsChoice() supports at most 12 choice options.');
+  }
+  const seen = new Set<string>();
+  const out: ChoiceOption[] = [];
+  for (const raw of choices) {
+    const opt: ChoiceOption = typeof raw === 'string' ? { value: raw } : { value: raw?.value, label: raw?.label };
+    const value = typeof opt.value === 'string' ? opt.value.trim() : '';
+    if (!value || value.length > 120) {
+      throw new Error('askForUserAsChoice() option values must be non-empty strings of at most 120 characters.');
+    }
+    const label = opt.label === undefined ? undefined : String(opt.label).slice(0, 200);
+    if (seen.has(value)) continue; // silent dedupe of repeated values
+    seen.add(value);
+    out.push({ value, ...(label !== undefined ? { label } : {}) });
+  }
+  if (out.length === 0) {
+    throw new Error('askForUserAsChoice() requires at least one choice option.');
+  }
+  return out;
 }
 
 interface PendingPrompt {
@@ -73,11 +130,30 @@ interface PendingConfirm {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** v1.0.13 — a pending multiple-choice operator question. */
+interface PendingChoice {
+  choiceId: string;
+  taskId?: string;
+  executionId: string;
+  toolName?: string;
+  message: string;
+  options: ChoiceOption[];
+  requestedAt: string;
+  resolve: (value: string | null) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 const g = globalThis as unknown as {
   __nextoolPrompts?: Map<string, PendingPrompt>;
   __nextoolConfirms?: Map<string, PendingConfirm>;
+  __nextoolChoices?: Map<string, PendingChoice>;
   __nextoolInteractionWatch?: Set<string>;
 };
+
+function choiceRegistry(): Map<string, PendingChoice> {
+  if (!g.__nextoolChoices) g.__nextoolChoices = new Map();
+  return g.__nextoolChoices;
+}
 
 /** v1.0.8 — execution-scoped interaction watch: lets the EXECUTOR timeout
  *  watchdog defer while THIS execution is waiting for a user answer (§1.2 —
@@ -201,6 +277,78 @@ export function resolvePendingConfirmation(confirmId: string, accepted: boolean)
     priority: 3,
   });
   return true;
+}
+
+export interface PendingChoiceInfo {
+  choiceId: string;
+  taskId?: string;
+  toolName?: string;
+  message: string;
+  options: ChoiceOption[];
+  requestedAt: string;
+}
+
+/** List pending choice questions (optionally scoped to a task) — powers the console UI. */
+export function listPendingChoices(taskId?: string): PendingChoiceInfo[] {
+  const now = Date.now();
+  const out: PendingChoiceInfo[] = [];
+  for (const [id, c] of choiceRegistry()) {
+    if (now - Date.parse(c.requestedAt) > CHOICE_TIMEOUT_MS + 1000) {
+      clearTimeout(c.timer);
+      choiceRegistry().delete(id);
+      continue;
+    }
+    if (taskId && c.taskId !== taskId) continue;
+    out.push({
+      choiceId: id,
+      taskId: c.taskId,
+      toolName: c.toolName,
+      message: c.message,
+      options: c.options,
+      requestedAt: c.requestedAt,
+    });
+  }
+  return out;
+}
+
+/**
+ * Resolve a pending choice question from the console UI. `value` MUST be one
+ * of the offered option values (the operator picks, the tool never receives a
+ * fabricated answer); null cancels. Returns false when unknown/expired/mismatch.
+ */
+export function resolvePendingChoice(choiceId: string, value: string | null): boolean {
+  const c = choiceRegistry().get(choiceId);
+  if (!c) return false;
+  if (value !== null && !c.options.some((o) => o.value === value)) return false;
+  clearTimeout(c.timer);
+  choiceRegistry().delete(choiceId);
+  c.resolve(value);
+  void emitEvent({
+    taskId: c.taskId,
+    type: 'tool.user_choice.responded',
+    source: 'user',
+    message: value === null ? `Choice cancelled: ${c.message.slice(0, 120)}` : `Choice answered: ${value}`,
+    data: {
+      choiceId,
+      executionId: c.executionId,
+      toolName: c.toolName ?? null,
+      value,
+      cancelled: value === null,
+      message: c.message.slice(0, 500),
+    },
+    priority: 4,
+  });
+  return true;
+}
+
+/** Cancel every pending choice for a task (task stop/pause transitions). */
+export function cancelPendingChoicesForTask(taskId: string): void {
+  for (const [id, c] of choiceRegistry()) {
+    if (c.taskId !== taskId) continue;
+    clearTimeout(c.timer);
+    choiceRegistry().delete(id);
+    c.resolve(null);
+  }
 }
 
 /** Resolve every pending confirmation for a task as DENIED (§1.4 — used when a
@@ -361,12 +509,86 @@ function makeConfirmer(
   };
 }
 
+/**
+ * v1.0.13 — async askForUserAsChoice(). Pauses THIS tool until the operator
+ * picks one of the offered options in the console UI, the request is
+ * cancelled, or the 120 s window expires. Resolves the chosen VALUE — never
+ * a fabricated one — or null on cancel/timeout.
+ */
+function makeChoiceAsker(
+  mode: 'test' | 'production',
+  taskId: string | undefined,
+  executionId: string,
+  toolName: string | undefined,
+  deadline?: DeadlineController,
+) {
+  return async function askForUserAsChoice(
+    message: string,
+    choices: Array<string | ChoiceOption>,
+    options?: { default?: string },
+  ): Promise<string | null> {
+    const msg = message === undefined || message === null ? '' : String(message);
+    if (msg.length > 2000) throw new Error('askForUserAsChoice() message must be at most 2000 characters.');
+    const normalized = normalizeChoiceOptions(choices); // throws honestly on invalid input
+    if (mode === 'test') {
+      // Test mode resolves immediately (never hangs): the declared default when
+      // it matches an offered option, otherwise the FIRST option's value.
+      const fallback = normalized.find((o) => o.value === options?.default) ?? normalized[0];
+      return fallback ? fallback.value : null;
+    }
+    const choiceId = `chc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    deadline?.extendDeadline();
+    interactionWatch().add(executionId);
+    try {
+      const value = await new Promise<string | null>((resolve) => {
+        const entry: PendingChoice = {
+          choiceId,
+          taskId,
+          executionId,
+          toolName,
+          message: msg,
+          options: normalized,
+          requestedAt: new Date().toISOString(),
+          resolve,
+          timer: setTimeout(() => {
+            // Unresolved choice resolves NULL — never one of the options.
+            choiceRegistry().delete(choiceId);
+            resolve(null);
+          }, CHOICE_TIMEOUT_MS),
+        };
+        if (typeof entry.timer.unref === 'function') entry.timer.unref();
+        choiceRegistry().set(choiceId, entry);
+        void emitEvent({
+          taskId,
+          type: 'tool.user_choice.requested',
+          source: 'tool',
+          message: `Tool asks the operator to choose: ${msg.slice(0, 300)}`,
+          data: {
+            choiceId,
+            executionId,
+            toolName: toolName ?? null,
+            message: msg,
+            options: normalized,
+            hasDefault: options?.default !== undefined,
+          },
+          priority: 3,
+        });
+      });
+      return value;
+    } finally {
+      interactionWatch().delete(executionId);
+      deadline?.resetDeadline();
+    }
+  };
+}
+
 /** Test-mode interactions (Tool IDE "Test Tool") — never hang. */
 export function createTestInteractions(): SandboxInteractions {
   return {
     alert: makeAlerter('test', undefined, 'test', undefined),
     prompt: makePrompter('test', undefined, 'test', undefined),
     confirm: makeConfirmer('test', undefined, 'test', undefined),
+    askForUserAsChoice: makeChoiceAsker('test', undefined, 'test', undefined),
     pendingCount: () => 0,
   };
 }
@@ -382,12 +604,16 @@ export function createRuntimeInteractions(
     alert: makeAlerter('production', taskId, executionId, toolName),
     prompt: makePrompter('production', taskId, executionId, toolName, deadline),
     confirm: makeConfirmer('production', taskId, executionId, toolName, deadline),
+    askForUserAsChoice: makeChoiceAsker('production', taskId, executionId, toolName, deadline),
     pendingCount: () => {
       let n = 0;
       for (const p of promptRegistry().values()) {
         if (p.executionId === executionId) n += 1;
       }
       for (const c of confirmRegistry().values()) {
+        if (c.executionId === executionId) n += 1;
+      }
+      for (const c of choiceRegistry().values()) {
         if (c.executionId === executionId) n += 1;
       }
       return n;

@@ -123,9 +123,37 @@ informational) rather than inventing an answer.
 | Pre-plan step unrecoverable after `recoveryMaxAttempts` attempts (v1.0.11) | failed | failed | `RECOVERY_EXHAUSTED` (stage `recovery`) |
 | Observer judged the failure unrecoverable (v1.0.11) | failed | failed | `RECOVERY_UNRECOVERABLE` (immediate abort — no wasted retry budget) |
 | Stop / approval timeout during recovery (v1.0.11) | failed / stopped | failed / stopped | `RECOVERY_BLOCKED` |
-| `maxIterations` / `safetyLimit` hit | failed | limit_reached | `SAFETY_LIMIT` |
+| `maxIterations` / `safetyLimit` hit — continuation DENIED / timed out / exhausted (v1.0.13) | failed | limit_reached | `SAFETY_LIMIT` |
+| `maxIterations` / `safetyLimit` hit — task stopped while the continuation question pended (v1.0.13) | stopped | stopped | — |
 | `taskTimeoutMs` exceeded | failed | limit_reached | `TIMEOUT` |
 | Loop crash | failed | failed | `RUNTIME_ERROR` / `RUNTIME_CRASH` |
+
+## Safety-limit continuation (v1.0.13)
+
+Since v1.0.13 the goal loop **asks the operator** when it trips
+`maxIterations` or `safetyLimit` instead of failing silently (single-user
+self-hosted operator console):
+
+1. The task parks in `awaiting_approval` with an explicit `statusDetail`
+   (`Safety limit reached (<limitKind>) — waiting for the operator's
+   continuation decision.`) and emits `task.limit.continuation_required`.
+2. Live Monitor / Task Preview render a continuation card showing the real
+   numbers (`iterations i/max`, `tool calls c/limit`) and the budget that
+   would be granted. The API is `GET/POST /api/limits/continuations`.
+3. **Continue** → BOTH limits grow by `safetyLimitContinuationExtra`
+   (Settings; central bounds 1..500, shipped 25) and the loop proceeds.
+   Each grant is counted against the per-task cap
+   `TaskConfig.limitContinuations` (0..5, default 1; 0 disables the question
+   entirely). Events: `task.limit.continued`.
+4. **Deny** (or the 5-minute timeout, or exhausting the cap) → the
+   documented terminal exit above (`limit_reached` / `SAFETY_LIMIT`). The
+   runtime NEVER grows its own budget unattended. Events:
+   `task.limit.continuation_denied` / `task.limit.continuation_timeout`.
+5. A task stop while the question pends ends the task as a normal stop
+   (never as an unattended grant): `cancelPendingLimitContinuationsForTask`.
+
+The question is goal-mode-only (live tasks process events per tick and have
+no iteration budget to extend).
 
 ## Configuration knobs that matter here
 

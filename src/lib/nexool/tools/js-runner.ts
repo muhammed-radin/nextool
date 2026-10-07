@@ -41,6 +41,7 @@ import {
   createTestInteractions,
   type SandboxInteractions,
 } from './sandbox-interactive';
+import type { SandboxToolsApi } from './subtool';
 import type { VirtualFsSession } from './vfs';
 import {
   requireFromVfs,
@@ -122,6 +123,9 @@ export interface JsEnvExecution {
   toolId?: string;
   vfs?: VirtualFsSession;
   interactions?: SandboxInteractions;
+  /** v1.0.13 §14 — the sandbox-facing subtool API (context.tools). Built by
+   *  the registry from the executor-threaded SubtoolLink; absent = no API. */
+  tools?: SandboxToolsApi;
   accounting?: NetworkAccounting;
   moduleCache?: Map<string, unknown>;
   /** v1.0.7 §1 — effective execution timeout (ms) resolved by the tool
@@ -311,6 +315,9 @@ export function runJsTool(
           mode: context.mode,
           now: context.now,
           log: pushLog,
+          // v1.0.13 §14 — the SUBTOOL API (registry builds it from the
+          // executor-threaded link; depth/budget enforced server-side).
+          tools: exec.tools as SandboxToolsApi | undefined,
         },
         console: { log: pushLog, warn: pushLog, error: pushLog, info: pushLog },
         // §7 common APIs — same controlled layers as the nodejs environment.
@@ -320,6 +327,8 @@ export function runJsTool(
         prompt: interactions.prompt,
         // v1.0.8 §1 — async confirm(): NexTool confirmation UI, boolean result.
         confirm: interactions.confirm,
+        // v1.0.13 — async askForUserAsChoice(): operator picks one offered option.
+        askForUserAsChoice: interactions.askForUserAsChoice,
         setTimeout,
         clearTimeout,
         setInterval,

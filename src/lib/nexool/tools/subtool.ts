@@ -53,6 +53,26 @@ export interface SubtoolBudget {
 }
 
 /**
+ * v1.0.13 §14 — what a subtool CALLER hands to executor.executeTool: the
+ * PARENT-side info. The executor derives the CHILD SubtoolLink from it by
+ * appending the executed tool to the chain (chain = [...parentChain, tool]).
+ * This keeps the parent/child relationship explicit at the executor boundary.
+ */
+export interface SubtoolParentInfo {
+  /** Tool-name chain from the top-level execution down to (and including)
+   *  the CALLING tool. The executed tool is appended by the executor. */
+  parentChain: string[];
+  /** The DEPTH OF THE EXECUTED CALL (caller depth + 1). */
+  depth: number;
+  /** Shared budget across the whole subtool tree of the top-level execution. */
+  budget: SubtoolBudget;
+  /** Execution id of the calling tool (observability on events). */
+  parentExecutionId: string;
+  /** Epoch-ms deadline of the top-level execution (subtools never outlive it). */
+  deadlineAt?: number;
+}
+
+/**
  * The executor-threaded subtool state for ONE execution. Built by
  * executor.executeTool for every handler context; handler factories wrap it
  * into the sandbox-facing SandboxToolsApi.

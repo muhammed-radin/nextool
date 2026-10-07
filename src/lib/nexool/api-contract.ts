@@ -43,6 +43,8 @@ export interface ToolEntry {
   metadata?: Record<string, string>;
   /** v1.0.6 §9.2: per-tool auto-execute policy (default false = approval required). */
   autoExecute?: boolean;
+  /** v1.0.13: verification latch — completed executions wait for operator verification. */
+  verificationLatch?: boolean;
   /** v1.0.7 §1: tool-specific execution timeout (ms) — overrides the global
    *  default; the runtime caps at 1 hour. Undefined = use global default. */
   timeoutMs?: number;

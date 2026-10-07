@@ -172,6 +172,8 @@ export interface JsToolPayload {
   metadata?: Record<string, string>;
   /** v1.0.6 §9.2: per-tool auto-execute (default false = approval required). */
   autoExecute?: boolean;
+  /** v1.0.13: verification latch — completed executions wait for operator verification. */
+  verificationLatch?: boolean;
   /** v1.0.7 §1: tool-specific execution timeout (ms, 1000–3600000). */
   timeoutMs?: number;
   enabled?: boolean;
@@ -423,6 +425,68 @@ export const listConfirmations = (taskId?: string) =>
 
 export const answerConfirmation = (confirmId: string, accepted: boolean) =>
   apiFetch<{ resolved: boolean; reason?: string }>('/api/confirmations', body({ confirmId, accepted }));
+
+// ---------- Choice questions (v1.0.13 — askForUserAsChoice) ----------
+
+export interface PendingChoiceOptionDTO {
+  value: string;
+  label?: string;
+}
+
+export interface PendingChoiceDTO {
+  choiceId: string;
+  taskId?: string;
+  toolName?: string;
+  message: string;
+  options: PendingChoiceOptionDTO[];
+  requestedAt: string;
+}
+
+export const listChoices = (taskId?: string) =>
+  apiFetch<{ choices: PendingChoiceDTO[] }>(`/api/choices${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''}`);
+
+/** value=null cancels; otherwise it must EXACTLY match one offered option value. */
+export const answerChoice = (choiceId: string, value: string | null) =>
+  apiFetch<{ resolved: boolean; reason?: string }>('/api/choices', body(value === null ? { choiceId, cancel: true } : { choiceId, value }));
+
+// ---------- Verification latch (v1.0.13) ----------
+
+export interface PendingVerificationDTO {
+  verificationId: string;
+  taskId?: string;
+  executionId?: string;
+  tool: string;
+  resultSummary?: string;
+  requestedAt: string;
+}
+
+export const listVerifications = (taskId?: string) =>
+  apiFetch<{ verifications: PendingVerificationDTO[] }>(`/api/verifications${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''}`);
+
+/** accepted=true verifies the result; false rejects it (execution → VERIFICATION_REJECTED). */
+export const resolveVerificationRequest = (verificationId: string, accepted: boolean, feedback?: string) =>
+  apiFetch<{ resolved: boolean; reason?: string }>('/api/verifications', body({ verificationId, accepted, ...(feedback ? { feedback } : {}) }));
+
+// ---------- Safety-limit continuations (v1.0.13) ----------
+
+export interface PendingLimitContinuationDTO {
+  continuationId: string;
+  taskId?: string;
+  limitKind: 'maxIterations' | 'safetyLimit' | 'both';
+  iterations: number;
+  toolCalls: number;
+  maxIterations: number;
+  safetyLimit: number;
+  extraBudget: number;
+  requestedAt: string;
+}
+
+export const listLimitContinuations = (taskId?: string) =>
+  apiFetch<{ continuations: PendingLimitContinuationDTO[] }>(`/api/limits/continuations${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''}`);
+
+/** decision 'continue' grants the budget to both limits; 'deny' ends the task as before. */
+export const resolveLimitContinuationRequest = (continuationId: string, decision: 'continue' | 'deny', feedback?: string) =>
+  apiFetch<{ resolved: boolean; reason?: string }>('/api/limits/continuations', body({ continuationId, decision, ...(feedback ? { feedback } : {}) }));
 
 // ---------- Configuration limits registry (v1.0.8 §7/§8/§10) ----------
 

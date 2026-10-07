@@ -10,7 +10,9 @@ import { runTask, type TaskRunHandle, type WakePayload } from './loop';
 import { clampToLimit } from '../config-limits';
 import { combineInstructions, type InstructionsInput } from '../instructions';
 import { cancelPendingApprovalsForTask, listPendingApprovals } from '../approval';
-import { cancelPendingPromptsForTask, cancelPendingConfirmationsForTask } from '../tools/sandbox-interactive';
+import { cancelPendingChoicesForTask, cancelPendingConfirmationsForTask, cancelPendingPromptsForTask } from '../tools/sandbox-interactive';
+import { cancelPendingVerificationsForTask } from '../verification';
+import { cancelPendingLimitContinuationsForTask } from '../limit-continuation';
 import type {
   TaskConfig, TaskSummary, MainState, PlanStep, FinalResult, NexToolEvent, EventSource,
 } from '../types';
@@ -182,6 +184,14 @@ export async function stopTask(taskId: string): Promise<TaskDetail | null> {
   cancelPendingApprovalsForTask(taskId);
   cancelPendingPromptsForTask(taskId);
   cancelPendingConfirmationsForTask(taskId);
+  // v1.0.13 — pending choice questions resolve null (never a fabricated option).
+  cancelPendingChoicesForTask(taskId);
+  // v1.0.13 — pending result verifications resolve cancelled (execution completes
+  // as CANCELLED — a stopped task never leaves a latched execution hanging).
+  cancelPendingVerificationsForTask(taskId);
+  // v1.0.13 — a pending safety-limit continuation question resolves cancelled
+  // (the task ends as a stop, never as an unattended budget grant).
+  cancelPendingLimitContinuationsForTask(taskId);
   await emitEvent({
     taskId,
     type: 'task.stop_requested',

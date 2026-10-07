@@ -18,6 +18,7 @@ import { interpret, checkGoalComplete } from './observer';
 import { runPrePlanRecovery } from './recovery';
 import { listServers } from '../environment';
 import { resolveAutoExecution, requestApproval } from '../approval';
+import { requestLimitContinuation } from '../limit-continuation';
 import { clampToLimit, getResolvedLimits } from '../config-limits';
 // v1.0.12 Phase 7 — custom task instructions (sanitize when loading from DB).
 import { sanitizeInstructionsSource, MAX_COMBINED_INSTRUCTIONS_CHARS } from '../instructions';
@@ -114,6 +115,14 @@ export interface ResolvedTaskConfig extends TaskConfig {
   autoExecuteToolsRaw?: boolean;
   /** v1.0.11 §38 — the global Settings auto-execute value at run start. */
   autoExecuteToolsGlobal: boolean;
+  /** v1.0.13 — per-task SAFETY-LIMIT CONTINUATION cap (0..5, default 1;
+   *  0 disables the continuation question for this task). */
+  limitContinuations: number;
+  /** v1.0.13 — global continuation policy (Settings.safetyLimitContinuation). */
+  limitContinuationEnabled: boolean;
+  /** v1.0.13 — budget granted to BOTH limits per granted continuation
+   *  (clamped into the central task.limitContinuationExtra bounds, shipped 25). */
+  limitContinuationExtra: number;
 }
 
 function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<typeof getSettings>>): ResolvedTaskConfig {
@@ -163,6 +172,11 @@ function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<t
     // Back-compat coalesced view (task → global) retained for callers that
     // only need a boolean — never used for the effective-source decision.
     autoExecuteTools: stored.autoExecuteTools ?? settings.autoExecuteTools,
+    // v1.0.13 — safety-limit continuation inputs: the per-task cap (clamped
+    // 0..5, default 1) + the global policy and per-continuation budget.
+    limitContinuations: clampLimit('task', 'limitContinuations', stored.limitContinuations, 1),
+    limitContinuationEnabled: settings.safetyLimitContinuation === true,
+    limitContinuationExtra: clampLimit('task', 'limitContinuationExtra', settings.safetyLimitContinuationExtra, 25),
     sessionId: stored.sessionId,
     context: stored.context,
   };
@@ -209,6 +223,9 @@ interface RunContext {
   /** v1.0.11 — completed recovery cycles per failed-step key (§9 attempt
    *  counting; bounded by task.recoveryMaxAttempts). */
   recoveryAttemptsByStep: Map<string, number>;
+  /** v1.0.13 — safety-limit continuations GRANTED so far (bounded by
+   *  config.limitContinuations; each grants +limitContinuationExtra budget). */
+  limitContinuationsUsed: number;
 }
 
 // ---------- pause (v1.0.6 §11) ----------
@@ -730,6 +747,60 @@ function markStepByExecution(plan: PlanStep[], stepId: string, status: ToolExecu
 
 // ---------- GOAL MODE ----------
 
+/**
+ * v1.0.13 — SAFETY-LIMIT CONTINUATION: when the goal loop trips
+ * maxIterations/safetyLimit, ASK the operator instead of failing silently.
+ * While the question pends the task parks in `awaiting_approval` (§11 —
+ * pausing during the wait keeps the question unresolved, never silently
+ * granted). 'granted' → BOTH limits already grew by limitContinuationExtra
+ * and the caller may `continue` the loop; 'stopped' → the task was stopped
+ * while waiting; 'refused' → no continuations left / disabled / denied /
+ * timeout — the caller applies the documented terminal SAFETY_LIMIT exit.
+ */
+async function requestLimitContinuationIfNeeded(ctx: RunContext): Promise<'granted' | 'refused' | 'stopped'> {
+  const { config } = ctx;
+  if (!config.limitContinuationEnabled || config.limitContinuationExtra <= 0) return 'refused';
+  if (ctx.limitContinuationsUsed >= config.limitContinuations) return 'refused';
+
+  const iterationsExhausted = ctx.state.iterationCount >= config.maxIterations;
+  const callsExhausted = ctx.state.toolCallCount >= config.safetyLimit;
+  const limitKind: 'maxIterations' | 'safetyLimit' | 'both' = iterationsExhausted && callsExhausted ? 'both' : iterationsExhausted ? 'maxIterations' : 'safetyLimit';
+
+  const pausedWhileWaiting = ctx.handle.pauseFlag.paused;
+  await persistTask(ctx.taskId, {
+    status: pausedWhileWaiting ? 'paused' : 'awaiting_approval',
+    statusDetail: pausedWhileWaiting
+      ? `Paused — safety-limit continuation question pending (${limitKind}).`
+      : `Safety limit reached (${limitKind}) — waiting for the operator's continuation decision.`,
+  });
+
+  const outcome = await requestLimitContinuation({
+    taskId: ctx.taskId,
+    limitKind,
+    iterations: ctx.state.iterationCount,
+    toolCalls: ctx.state.toolCallCount,
+    maxIterations: config.maxIterations,
+    safetyLimit: config.safetyLimit,
+    extraBudget: config.limitContinuationExtra,
+  });
+
+  if (outcome === 'continued') {
+    ctx.limitContinuationsUsed += 1;
+    config.maxIterations += config.limitContinuationExtra;
+    config.safetyLimit += config.limitContinuationExtra;
+    await persistTask(ctx.taskId, {
+      status: ctx.handle.pauseFlag.paused ? 'paused' : 'running',
+      statusDetail: null,
+    });
+    return 'granted';
+  }
+  // cancelled: the task was stopped (or paused→stopped) while waiting — the
+  // caller reports the honest stop instead of a limit_reached failure.
+  if (outcome === 'cancelled') return 'stopped';
+  // denied | timeout → the documented terminal exit.
+  return 'refused';
+}
+
 async function runGoalMode(ctx: RunContext): Promise<Termination> {
   const { config } = ctx;
   const startedAt = Date.now();
@@ -755,6 +826,18 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
       };
     }
     if (ctx.state.iterationCount >= config.maxIterations || ctx.state.toolCallCount >= config.safetyLimit) {
+      // v1.0.13 — SAFETY-LIMIT CONTINUATION: ask the operator first. Granted →
+      // both limits grew and the loop proceeds; stopped → honest stop; refused
+      // (disabled / exhausted / denied / timeout) → the documented terminal.
+      const continuation = await requestLimitContinuationIfNeeded(ctx);
+      if (continuation === 'granted') continue;
+      if (continuation === 'stopped') {
+        return {
+          finalStatus: 'stopped', taskStatus: 'stopped',
+          statusDetail: 'Stopped while awaiting the safety-limit continuation decision.',
+          summary: ctx.state.lastObservation ?? 'Task stopped.',
+        };
+      }
       return {
         finalStatus: 'limit_reached', taskStatus: 'failed', statusDetail: 'Iteration/safety limit reached.',
         summary: 'Safety limit reached before goal completion.',
@@ -1612,6 +1695,7 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
     // (combined at creation; survive task restart/reopen).
     instructions: sanitizeInstructionsSource(row.instructions, MAX_COMBINED_INSTRUCTIONS_CHARS) || undefined,
     failureLog: [], oneByOneSubgoalByStep: new Map(), identicalFailureStreak: 0, recoveryAttemptsByStep: new Map(),
+    limitContinuationsUsed: 0,
   };
 
   // v1.0.6 §11.9 — resume support: a task re-created as paused waits at the

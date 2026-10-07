@@ -61,6 +61,9 @@ const DEFAULTS: Draft = {
   prePlanMaxSteps: 10,
   // v1.0.11 — global default recovery attempts per failed pre-plan step
   recoveryMaxAttempts: 4,
+  // v1.0.13 — safety-limit continuation policy + per-continuation budget
+  safetyLimitContinuation: true,
+  safetyLimitContinuationExtra: 25,
   logLevel: 'info',
   realTimeTransport: 'sse',
 };
@@ -651,9 +654,33 @@ export default function SettingsView() {
                 min={limitProps?.['task.recoveryMaxAttempts']?.min}
                 max={limitProps?.['task.recoveryMaxAttempts']?.max}
               />
+              {/* v1.0.13 — safety-limit continuation policy + budget. */}
+              <div className="flex items-center justify-between gap-3 rounded-md border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
+                <div className="min-w-0">
+                  <Label htmlFor="set-limit-continuation" className="text-xs text-muted-foreground">Ask before safety-limit failure</Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    When a task trips its iteration/safety limit, ask the operator to continue instead of failing.
+                  </p>
+                </div>
+                <Switch
+                  id="set-limit-continuation"
+                  checked={draft.safetyLimitContinuation}
+                  onCheckedChange={(v) => set('safetyLimitContinuation', v === true)}
+                  aria-label="Safety-limit continuation"
+                />
+              </div>
+              <NumberField
+                id="set-limit-continuation-extra"
+                label="Continuation budget (steps + tool-calls)"
+                value={draft.safetyLimitContinuationExtra}
+                onChange={(v) => set('safetyLimitContinuationExtra', v)}
+                hint={limitsHint(limitProps?.['task.limitContinuationExtra'])}
+                min={limitProps?.['task.limitContinuationExtra']?.min}
+                max={limitProps?.['task.limitContinuationExtra']?.max}
+              />
             </div>
             <p className="mt-3 text-[11px] text-muted-foreground">
-              Recovery (v1.0.11): when a pre-planned step fails, the runtime creates a recovery subgoal with its own pre-plan, executes it (attempts bounded here), then resumes the main plan. One-by-one planning replans by design and does not use this limit.
+              Recovery (v1.0.11): when a pre-planned step fails, the runtime creates a recovery subgoal with its own pre-plan, executes it (attempts bounded here), then resumes the main plan. One-by-one planning replans by design and does not use this limit. Safety-limit continuation (v1.0.13): instead of failing at the limit the runtime asks the operator; accepting grants the continuation budget to BOTH the iteration and tool-call limits (per-task cap: Task Console, default 1).
             </p>
           </section>
 

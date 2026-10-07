@@ -40,6 +40,7 @@ import {
 } from './fs-tools';
 import { createNetworkAccounting } from './sandbox-net';
 import { createTestInteractions } from './sandbox-interactive';
+import { createSandboxToolsApi } from './subtool';
 import { makeMcpHandler } from './mcp-runner';
 
 // module-scoped syntax cache (compile once per source)
@@ -409,6 +410,8 @@ export interface ToolEntryFull {
   metadata?: Record<string, string>;
   /** v1.0.6: per-tool auto-execute policy (default false = approval required). */
   autoExecute?: boolean;
+  /** v1.0.13: verification latch — completed executions wait for operator verification. */
+  verificationLatch?: boolean;
   /** v1.0.7 §1: tool-specific execution timeout (ms) — overrides the global
    *  default; runtime caps at 1 hour. Undefined = use global default. */
   timeoutMs?: number;
@@ -455,6 +458,8 @@ function rowToEntry(row: {
     metadata: def.metadata && typeof def.metadata === 'object' ? def.metadata : undefined,
     /** v1.0.6: per-tool auto-execute policy (default false = approval required). */
     autoExecute: def.autoExecute === true,
+    /** v1.0.13: verification latch (default OFF). */
+    verificationLatch: def.verificationLatch === true,
     /** v1.0.7 §1: tool-specific execution timeout (ms). */
     timeoutMs: typeof def.timeoutMs === 'number' && Number.isFinite(def.timeoutMs) && def.timeoutMs > 0 ? def.timeoutMs : undefined,
     /** v1.0.9 §14: tool-specific Network Policy request timeout (ms). */
@@ -647,6 +652,9 @@ export interface JsToolRegistration {
   metadata?: Record<string, string>;
   /** v1.0.6 §9.2: per-tool auto-execute configuration (persists with the tool). */
   autoExecute?: boolean;
+  /** v1.0.13 — verification latch: hold COMPLETED executions of this tool
+   *  open until the operator verifies the result (review gate). */
+  verificationLatch?: boolean;
   /** v1.0.7 §1: tool-specific execution timeout (ms, 1000–3600000). */
   timeoutMs?: number;
   /** v1.0.9 §14: tool-specific Network Policy request timeout (ms). */
@@ -701,6 +709,8 @@ export async function registerJsTool(input: JsToolRegistration): Promise<ToolEnt
     // does not force a decision; the hierarchy resolves it). An explicit
     // boolean persists as the tool-level config.
     ...(input.autoExecute !== undefined ? { autoExecute: input.autoExecute === true } : {}),
+    // v1.0.13 — verification latch (default OFF: execution completes directly).
+    ...(input.verificationLatch !== undefined ? { verificationLatch: input.verificationLatch === true } : {}),
     // v1.0.7 §1 — tool-specific execution timeout (runtime also clamps).
     ...(typeof input.timeoutMs === 'number' && Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
       ? { timeoutMs: Math.min(Math.max(Math.round(input.timeoutMs), 1_000), 3_600_000) }
@@ -779,6 +789,11 @@ export async function updateTool(
   const nextAutoExecute = input.autoExecute !== undefined
     ? input.autoExecute === true
     : currentDef.autoExecute;
+  // v1.0.13 — the verification latch persists with the tool (explicit boolean
+  // replaces; undefined keeps the stored state).
+  const nextVerificationLatch = input.verificationLatch !== undefined
+    ? input.verificationLatch === true
+    : currentDef.verificationLatch;
   // v1.0.7 §1 — per-tool execution timeout (undefined keeps stored value; the
   // runtime clamps the stored definition as defense in depth).
   const nextTimeoutMs = input.timeoutMs !== undefined
@@ -836,6 +851,7 @@ export async function updateTool(
     functionSource: nextEnvironment === 'js-function' || nextEnvironment === 'nodejs' || nextEnvironment === 'freedom-node' ? nextSource ?? undefined : undefined,
     toolVersion: nextVersion ?? undefined,
     autoExecute: nextAutoExecute,
+    verificationLatch: nextVerificationLatch,
     ...(nextTimeoutMs !== undefined ? { timeoutMs: nextTimeoutMs } : {}),
     ...(nextNetworkTimeoutMs !== undefined ? { networkTimeoutMs: nextNetworkTimeoutMs } : {}),
     ...(Object.keys(nextMetadata).length > 0 ? { metadata: nextMetadata } : {}),
@@ -914,6 +930,10 @@ function makeJsHandler(name: string, source: string, networkTimeoutMs?: number):
       {
         toolId: name,
         vfs,
+        // v1.0.13 §14 — the SUBTOOL API: built from the executor-threaded
+        // link (present on every production execution since the executor
+        // creates a root link when none was supplied).
+        ...(ctx.subtool ? { tools: createSandboxToolsApi(ctx.subtool, { mode: 'production', taskId: ctx.taskId, executionId: ctx.executionId }) } : {}),
         // v1.0.7 §1 — the sandbox deadline inherits the EFFECTIVE execution
         // timeout resolved by the executor.
         // v1.0.9 §14 — the network accounting inherits the EFFECTIVE Network
@@ -959,6 +979,8 @@ function makeNodeHandler(name: string, source: string, networkTimeoutMs?: number
       {
         toolId: name,
         vfs,
+        // v1.0.13 §14 — the SUBTOOL API (same as the js-function handler).
+        ...(ctx.subtool ? { tools: createSandboxToolsApi(ctx.subtool, { mode: 'production', taskId: ctx.taskId, executionId: ctx.executionId }) } : {}),
         // v1.0.7 §1 — sandbox deadline and the virtual child_process ceiling
         // inherit the EFFECTIVE execution timeout.
         // v1.0.9 §14 — network accounting inherits the EFFECTIVE Network
@@ -1064,6 +1086,9 @@ export async function testToolSource(
       toolId: executionLabel,
       vfs,
       interactions: createTestInteractions(),
+      // v1.0.13 §14 — test mode: the API exists but is LIMITED (built-in
+      // tools only, same depth/call caps; SUBTOOL_TEST_MODE otherwise).
+      tools: createSandboxToolsApi({ chain: [executionLabel], depth: 0, budget: { calls: 0 } }, { mode: 'test', taskId: opts.taskId, executionId }),
       accounting: createNetworkAccounting(net.effective),
       moduleCache: new Map(),
       timeoutMs: opts.timeoutMs,
@@ -1073,6 +1098,9 @@ export async function testToolSource(
       toolId: executionLabel,
       vfs,
       interactions: createTestInteractions(),
+      // v1.0.13 §14 — test mode: the API exists but is LIMITED (built-in
+      // tools only, same depth/call caps; SUBTOOL_TEST_MODE otherwise).
+      tools: createSandboxToolsApi({ chain: [executionLabel], depth: 0, budget: { calls: 0 } }, { mode: 'test', taskId: opts.taskId, executionId }),
       accounting: createNetworkAccounting(net.effective),
       moduleCache: new Map(),
       timeoutMs: opts.timeoutMs,

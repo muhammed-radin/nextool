@@ -40,6 +40,7 @@ import MemoryView from './views/memory';
 import LiveStateView from './views/live-state';
 import EventsView from './views/events';
 import HistoryView from './views/history';
+import InspectorView from './views/inspector';
 import ModelsView from './views/models';
 import DatasetsView from './views/datasets';
 import SettingsView from './views/settings';
@@ -53,6 +54,7 @@ import {
   Database,
   FileJson,
   FlaskConical,
+  FolderTree,
   GraduationCap,
   History,
   LayoutDashboard,
@@ -75,6 +77,7 @@ const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'benchmark', label: 'Benchmark', icon: FlaskConical },
   { view: 'memory', label: 'Memory', icon: Database },
   { view: 'live-state', label: 'Live State', icon: Activity },
+  { view: 'inspector', label: 'FS Inspector', icon: FolderTree },
   { view: 'events', label: 'Events', icon: ListFilter },
   { view: 'history', label: 'History', icon: History },
   { view: 'models', label: 'Models', icon: Box },
@@ -512,6 +515,8 @@ function ViewRouter() {
         return <MemoryView />;
       case 'live-state':
         return <LiveStateView />;
+      case 'inspector':
+        return <InspectorView />;
       case 'events':
         return <EventsView />;
       case 'history':

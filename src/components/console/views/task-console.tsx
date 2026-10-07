@@ -87,6 +87,9 @@ export default function TaskConsoleView() {
   // global setting) and travel inside the submitted task config.
   const [plannerType, setPlannerType] = useState<'pre-plan' | 'one-by-one'>('pre-plan');
   const [prePlanMaxSteps, setPrePlanMaxSteps] = useState<number>(10);
+  // v1.0.13 — per-task safety-limit continuation cap (0..5, default 1;
+  // 0 disables the continuation question for this task).
+  const [limitContinuations, setLimitContinuations] = useState<number>(1);
   const [reasoningLevel, setReasoningLevel] = useState(3);
   const [useMemory, setUseMemory] = useState(true);
   // v1.0.3 §18/§24: explicit parallel tool call policy for THIS task (the
@@ -327,6 +330,8 @@ export default function TaskConsoleView() {
           // pre-plan (one-by-one always plans exactly one step per call).
           plannerType,
           ...(plannerType === 'pre-plan' ? { prePlanMaxSteps } : {}),
+          // v1.0.13 — the continuation cap always travels in the task config.
+          limitContinuations,
           ...(mode === 'live' ? { liveIntervalMs: limits.liveIntervalMs } : {}),
         },
         // v1.0.12 Phase 7 — BOTH instruction sources travel to the server,
@@ -480,6 +485,27 @@ export default function TaskConsoleView() {
               </p>
             </div>
           )}
+        </div>
+
+        {/* v1.0.13 — per-task safety-limit continuation cap. */}
+        <div className="space-y-1.5">
+          <Label htmlFor="task-limit-continuations">Safety-limit continuations</Label>
+          <Input
+            id="task-limit-continuations"
+            type="number"
+            min={limitMeta?.['task.limitContinuations']?.min ?? 0}
+            max={limitMeta?.['task.limitContinuations']?.max ?? 5}
+            value={limitContinuations}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              setLimitContinuations(Number.isFinite(n) ? Math.floor(n) : 1);
+            }}
+            className="min-h-11 w-32 border-white/[0.09] bg-white/[0.04] font-mono text-sm"
+            aria-label="Safety-limit continuations"
+          />
+          <p className="font-mono text-[10px] text-muted-foreground/70">
+            0–{limitMeta?.['task.limitContinuations']?.max ?? 5} · how often the operator may grant extra budget when this task trips its iteration/safety limit (0 = fail at the limit as before)
+          </p>
         </div>
 
         <div className="space-y-1.5">
