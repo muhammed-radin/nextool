@@ -47,6 +47,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { APP_VERSION } from '@/lib/nexool/version';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Editor as MonacoEditor, type OnMount } from '@monaco-editor/react';
 import { cn } from '@/lib/utils';
@@ -291,7 +292,7 @@ export default function InspectorView() {
       <SectionTitle
         icon={<FolderTree className="size-4 text-sky-300" aria-hidden />}
         title="FS Inspector"
-        desc="v1.0.13 operator file manager — browse, edit, compress, upload/download and run terminals in the shared Virtual FS and the real host filesystem (confined to the runtime working directory)."
+        desc={`v${APP_VERSION} operator file manager — browse, edit, compress, upload/download and run terminals in the shared Virtual FS and the real host filesystem (confined to the runtime working directory).`}
       />
 
       {/* environment selector + VFS usage snapshot */}
@@ -325,10 +326,11 @@ export default function InspectorView() {
       </div>
 
       <Tabs value={topTab} onValueChange={(v) => setTopTab(v as typeof topTab)} className="gap-4">
-        <TabsList>
-          <TabsTrigger value="files">Files</TabsTrigger>
-          <TabsTrigger value="editors">Editors</TabsTrigger>
-          <TabsTrigger value="terminal">Terminal</TabsTrigger>
+        {/* Mobile: full-width, ≥44px touch targets (§2.9). */}
+        <TabsList className="grid w-full grid-cols-3 sm:inline-flex sm:w-auto">
+          <TabsTrigger value="files" className="min-h-11 px-4 sm:min-h-9 sm:px-3">Files</TabsTrigger>
+          <TabsTrigger value="editors" className="min-h-11 px-4 sm:min-h-9 sm:px-3">Editors</TabsTrigger>
+          <TabsTrigger value="terminal" className="min-h-11 px-4 sm:min-h-9 sm:px-3">Terminal</TabsTrigger>
         </TabsList>
         <TabsContent value="files">
           <FilesTab
@@ -343,7 +345,11 @@ export default function InspectorView() {
             }}
           />
         </TabsContent>
-        <TabsContent value="editors" forceMount>
+        {/* forceMount keeps editor state alive across tab switches; the
+            data-state selector hides the panel while inactive (Radix with
+            forceMount never applies `hidden` itself — without this BOTH the
+            editor and terminal panels rendered at once). */}
+        <TabsContent value="editors" forceMount className="data-[state=inactive]:hidden">
           <EditorsTab mode={mode} editRequest={editRequest} />
         </TabsContent>
         <TabsContent value="terminal">
@@ -633,7 +639,7 @@ function FilesTab({
 
   return (
     <div className="space-y-4">
-      {/* path bar */}
+      {/* path bar — mobile: path input gets its own row, actions flow below */}
       <div className="flex flex-wrap items-center gap-2">
         <Input
           value={inputValue}
@@ -643,9 +649,9 @@ function FilesTab({
           }}
           placeholder={mode === 'vfs' ? '/workspace' : './src'}
           aria-label={inputLabel}
-          className="h-11 min-w-0 flex-1 font-mono text-xs"
+          className="h-11 min-w-0 flex-1 basis-52 font-mono text-xs"
         />
-        <Button type="button" size="sm" className="h-11 px-4" onClick={() => void list(normalizeInput(mode, inputValue))} disabled={loading}>
+        <Button type="button" size="sm" className="h-11 px-5" onClick={() => void list(normalizeInput(mode, inputValue))} disabled={loading}>
           Go
         </Button>
         <Button
@@ -664,19 +670,19 @@ function FilesTab({
         </Button>
       </div>
 
-      {/* toolbar */}
+      {/* toolbar — icons-only labels collapse on the narrowest screens (§2.9) */}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" className="h-11 px-3 text-xs" onClick={() => setNewFileOpen(true)} aria-label="Create file">
-          <FilePlus2 className="size-4" aria-hidden /> New file
+          <FilePlus2 className="size-4" aria-hidden /> <span className="hidden min-[420px]:inline">New file</span>
         </Button>
         <Button type="button" variant="outline" size="sm" className="h-11 px-3 text-xs" onClick={() => setNewFolderOpen(true)} aria-label="Create folder">
-          <FolderPlus className="size-4" aria-hidden /> New folder
+          <FolderPlus className="size-4" aria-hidden /> <span className="hidden min-[420px]:inline">New folder</span>
         </Button>
         <Button type="button" variant="outline" size="sm" className="h-11 px-3 text-xs" onClick={() => uploadInputRef.current?.click()} aria-label={`Upload files into ${mode === 'vfs' ? 'the VFS' : 'the real FS'}`}>
-          <Upload className="size-4" aria-hidden /> Upload → {mode === 'vfs' ? 'VFS' : 'FS'}
+          <Upload className="size-4" aria-hidden /> <span className="hidden min-[420px]:inline">Upload</span><span className="min-[420px]:hidden" aria-hidden>→</span> {mode === 'vfs' ? 'VFS' : 'FS'}
         </Button>
         <Button type="button" variant="outline" size="sm" className="h-11 px-3 text-xs" onClick={doPaste} disabled={!clipboard || busyOp} aria-label="Paste clipboard">
-          <ClipboardPaste className="size-4" aria-hidden /> Paste{clipboard ? (clipboard.cut ? ' (cut)' : ' (copy)') : ''}
+          <ClipboardPaste className="size-4" aria-hidden /> <span className="hidden min-[420px]:inline">Paste</span>{clipboard ? (clipboard.cut ? ' (cut)' : ' (copy)') : ''}
         </Button>
         {clipboard ? (
           <Button type="button" variant="ghost" size="sm" className="h-11 px-2 text-xs text-muted-foreground" onClick={() => setClipboard(null)} aria-label="Clear clipboard">
@@ -786,8 +792,8 @@ function FilesTab({
         </div>
       ) : null}
 
-      {/* listing */}
-      <ScrollArea className="glass-card max-h-[26rem] rounded-lg border border-white/[0.06] md:max-h-96">
+      {/* listing — mobile gets a taller viewport (55vh) so the file tree is usable */}
+      <ScrollArea className="glass-card max-h-[55vh] rounded-lg border border-white/[0.06] sm:max-h-[26rem] md:max-h-96">
         <Table>
           <TableHeader>
             <TableRow className="border-white/[0.06] hover:bg-transparent">
@@ -795,7 +801,7 @@ function FilesTab({
                 <Checkbox checked={allSelected ? true : selection.size > 0 ? 'indeterminate' : false} onCheckedChange={selectAll} aria-label="Select all" />
               </TableHead>
               <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">name</TableHead>
-              <TableHead className="w-20 text-[10px] uppercase tracking-wider text-muted-foreground">kind</TableHead>
+              <TableHead className="hidden w-20 text-[10px] uppercase tracking-wider text-muted-foreground sm:table-cell">kind</TableHead>
               <TableHead className="hidden w-24 text-right text-[10px] uppercase tracking-wider text-muted-foreground md:table-cell">size</TableHead>
               <TableHead className="hidden w-44 text-right text-[10px] uppercase tracking-wider text-muted-foreground md:table-cell">updated</TableHead>
               <TableHead className="w-12" />
@@ -830,6 +836,10 @@ function FilesTab({
                     </TableCell>
                     <TableCell className="max-w-[240px] py-2 md:max-w-[280px]">
                       <span className="flex min-w-0 items-center gap-2">
+                        {/* mobile: the kind badge column is hidden — kind glyph stays inline before the name */}
+                        <span className="font-mono text-[10px] uppercase text-muted-foreground sm:hidden" aria-hidden>
+                          {entry.kind === 'dir' ? 'dir/' : entry.kind === 'link' ? 'lnk' : 'file'}
+                        </span>
                         {entry.kind === 'dir' ? (
                           <Folder className="size-3.5 shrink-0 text-emerald-300/80" aria-hidden />
                         ) : entry.kind === 'link' ? (
@@ -859,7 +869,7 @@ function FilesTab({
                         </span>
                       </span>
                     </TableCell>
-                    <TableCell className="py-2">
+                    <TableCell className="hidden py-2 sm:table-cell">
                       <Badge variant="outline" className={cn('font-mono text-[11px]', kindBadgeClass(entry.kind))}>{entry.kind}</Badge>
                     </TableCell>
                     <TableCell className="hidden py-2 text-right font-mono text-[11px] tabular-nums text-muted-foreground md:table-cell">{humanBytes(entry.size)}</TableCell>
@@ -867,7 +877,7 @@ function FilesTab({
                     <TableCell className="py-2">
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button type="button" variant="ghost" size="sm" className="h-8 px-2" aria-label={`Actions for ${entry.name}`}>
+                          <Button type="button" variant="ghost" size="sm" className="size-9 p-0 text-base leading-none" aria-label={`Actions for ${entry.name}`}>
                             ⋯
                           </Button>
                         </DropdownMenuTrigger>
@@ -1355,6 +1365,12 @@ function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string })
       setSessions((prev) => [...prev, { id, cwd: initialCwd || '.', lines: [{ kind: 'meta', text: 'Real FS terminal — bash, confined to the NexTool runtime working directory. 30 s hard timeout.' }] }]);
       setActiveId(id);
     }
+    // VFS: ensure the sandbox shell session exists (side effects NEVER run
+    // during render — the old inline `setSessions` in JSX could loop under
+    // StrictMode).
+    if (mode === 'vfs' && !sessions.some((s) => s.id === 'vfs_shell')) {
+      setSessions((prev) => (prev.some((s) => s.id === 'vfs_shell') ? prev : [...prev, { id: 'vfs_shell', cwd: '/', lines: [{ kind: 'meta', text: 'VFS sandboxed shell — every command maps onto the VFS API; host paths are unreachable. Type "help".' }] }]));
+    }
   }, [mode]);
 
   useEffect(() => {
@@ -1510,12 +1526,8 @@ function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string })
         </div>
       ) : null}
 
-      {mode === 'vfs' && !sessions.some((s) => s.id === 'vfs_shell') ? (
-        setSessions((prev) => [...prev, { id: 'vfs_shell', cwd: '/', lines: [{ kind: 'meta', text: 'VFS sandboxed shell — every command maps onto the VFS API; host paths are unreachable. Type "help".' }] }])
-      ) : null}
-
       <div className="glass-card rounded-lg border border-white/[0.06]">
-        <div ref={scrollRef} className="nextool-scroll h-[360px] overflow-y-auto p-3 font-mono text-[11px] leading-relaxed">
+        <div ref={scrollRef} className="nextool-scroll h-[50vh] overflow-y-auto p-3 font-mono text-[11px] leading-relaxed md:h-[360px]">
           {(active?.lines ?? []).map((line, i) => (
             <p
               key={i}
