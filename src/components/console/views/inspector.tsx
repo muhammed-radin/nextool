@@ -56,7 +56,7 @@ import { SectionTitle } from '../ui-bits';
 import {
   Copy, CornerLeftUp, Download, File as FileIcon, FilePlus2, Folder, FolderPlus, FolderTree, FolderOpen,
   HardDrive, Info, Link2, Loader2, Pencil, Plus, RefreshCw, Save, Scissors, Search, ShieldCheck,
-  TerminalSquare, Trash2, Upload, X, ClipboardPaste, FileArchive, XCircle,
+  TerminalSquare, Trash2, Upload, X, ClipboardPaste, FileArchive, XCircle, CirclePlay, Braces, Ban,
 } from 'lucide-react';
 
 // ---------- shared types ----------
@@ -619,7 +619,10 @@ function FilesTab({
     const q = searchQuery.trim();
     if (!q) return;
     setSearching(true);
-    void inspectorPost<{ matches: SearchMatch[]; truncated: boolean }>(mode, { op: 'search', path, query: q, depth: Number(searchDepth) })
+    // v1.0.15 §30 — an empty path (the FS-mode landing root) is the ROOT,
+    // never a missing value: send the environment root explicitly and the
+    // server additionally defaults '' → '.' (fs) / '/' (vfs).
+    void inspectorPost<{ matches: SearchMatch[]; truncated: boolean }>(mode, { op: 'search', path: path || rootOf(mode) || '.', query: q, depth: Number(searchDepth) })
       .then((res) => {
         setSearchResults(res.matches);
         setSearchTruncated(res.truncated);
@@ -1353,72 +1356,411 @@ function EditorsTab({ mode, editRequest }: { mode: FsMode; editRequest: { seq: n
 }
 
 // =====================================================================
-// TERMINAL tab (§2.5 — FS real sessions / VFS sandboxed virtual shell)
+// TERMINAL tab (v1.0.15 §37-§43 — FS REAL interactive terminal / VFS
+// sandboxed virtual shell)
 // =====================================================================
 
-let terminalSessionSeq = 0;
+/** v1.0.15 §41 — server-side terminal session info (real process lifecycle). */
+interface FsServerSession {
+  id: string;
+  pid: number | null;
+  cwd: string;
+  status: 'starting' | 'running' | 'stopped' | 'exited' | 'failed';
+  startedAt: string;
+  exitCode: number | null;
+  exitSignal: string | null;
+  lastActivityAt: string;
+}
 
-function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string }) {
-  const [sessions, setSessions] = useState<TerminalSession[]>([]);
+const MAX_TERMINAL_LINES = 1000;
+
+function appendCapped(lines: TerminalLine[], add: TerminalLine[]): TerminalLine[] {
+  const next = [...lines, ...add];
+  return next.length > MAX_TERMINAL_LINES ? next.splice(next.length - MAX_TERMINAL_LINES) : next;
+}
+
+// ---------------------------------------------------------------------
+// FS mode — REAL persistent interactive bash sessions (server-backed):
+// stdout/stderr SSE streaming, real stdin (interactive programs work),
+// Ctrl+C process-group interrupt, cwd tracking, history, multi-session.
+// ---------------------------------------------------------------------
+function FsTerminal({ initialCwd }: { initialCwd: string }) {
+  const [sessions, setSessions] = useState<FsServerSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [linesBy, setLinesBy] = useState<Record<string, TerminalLine[]>>({});
+  const [cwdBy, setCwdBy] = useState<Record<string, string>>({});
+  const [busyBy, setBusyBy] = useState<Record<string, boolean>>({});
   const [inputs, setInputs] = useState<Record<string, string>>({});
+  const histories = useRef<Record<string, string[]>>({});
+  const historyIdx = useRef<Record<string, number>>({});
+  const [booting, setBooting] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [vfsCwd, setVfsCwd] = useState('/');
+  const busyRef = useRef<Record<string, boolean>>({});
 
-  const visible = sessions.filter((s) => s.cwd !== undefined && (mode === 'fs' ? s.id.startsWith('fs_') : s.id.startsWith('vfs_')));
-  const active = visible.find((s) => s.id === activeId) ?? visible[visible.length - 1] ?? null;
+  const active = sessions.find((s) => s.id === activeId) ?? sessions[sessions.length - 1] ?? null;
+  const activeLines = active ? linesBy[active.id] ?? [] : [];
 
+  const pushLines = useCallback((id: string, add: TerminalLine[]) => {
+    setLinesBy((prev) => ({ ...prev, [id]: appendCapped(prev[id] ?? [], add) }));
+  }, []);
+
+  const termPost = useCallback(async (body: Record<string, unknown>) => {
+    return apiFetch<{ session?: FsServerSession; written?: boolean; interrupted?: boolean; cleared?: boolean; closed?: boolean }>(
+      '/api/inspector/terminal',
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  }, []);
+
+  // Boot: list server sessions (create the first when none exist).
   useEffect(() => {
-    if (mode === 'fs' && visible.length === 0) {
-      const id = `fs_${Date.now().toString(36)}_${terminalSessionSeq++}`;
-      setSessions((prev) => [...prev, { id, cwd: initialCwd || '.', lines: [{ kind: 'meta', text: 'Real FS terminal — bash, confined to the NexTool runtime working directory. 30 s hard timeout.' }] }]);
-      setActiveId(id);
-    }
-    // VFS: ensure the sandbox shell session exists (side effects NEVER run
-    // during render — the old inline `setSessions` in JSX could loop under
-    // StrictMode).
-    if (mode === 'vfs' && !sessions.some((s) => s.id === 'vfs_shell')) {
-      setSessions((prev) => (prev.some((s) => s.id === 'vfs_shell') ? prev : [...prev, { id: 'vfs_shell', cwd: '/', lines: [{ kind: 'meta', text: 'VFS sandboxed shell — every command maps onto the VFS API; host paths are unreachable. Type "help".' }] }]));
-    }
-  }, [mode]);
+    let cancelled = false;
+    const boot = async () => {
+      try {
+        const res = await apiFetch<{ sessions: FsServerSession[] }>('/api/inspector/terminal');
+        if (cancelled) return;
+        let list = res.sessions;
+        if (list.length === 0) {
+          const created = await termPost({ op: 'create', cwd: initialCwd || '.' });
+          list = created.session ? [created.session] : [];
+        }
+        if (cancelled) return;
+        setSessions(list);
+        for (const s of list) {
+          setCwdBy((prev) => (prev[s.id] ? prev : { ...prev, [s.id]: s.cwd }));
+        }
+        setActiveId((cur) => cur ?? list[list.length - 1]?.id ?? null);
+      } catch {
+        if (!cancelled) pushLines('boot', [{ kind: 'err', text: 'terminal backend unavailable — reload the page' }]);
+      } finally {
+        if (!cancelled) setBooting(false);
+      }
+    };
+    void boot();
+    return () => { cancelled = true; };
+  }, []);
 
+  // SSE stream for the ACTIVE session — real stdout/stderr streaming while
+  // the command runs (never buffered until exit), cwd + exit markers,
+  // lifecycle transitions (§38/§41).
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [active?.lines.length]);
+    if (!active?.id) return;
+    const id = active.id;
+    const es = new EventSource(`/api/inspector/terminal/stream?sessionId=${encodeURIComponent(id)}`);
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data) as {
+          type: string; chunk?: { stream: 'stdout' | 'stderr'; text: string };
+          cwd?: string; lastExitCode?: number | null; first?: boolean;
+          status?: FsServerSession['status']; pid?: number | null;
+          exitCode?: number | null; exitSignal?: string | null;
+        };
+        if (msg.type === 'chunk' && msg.chunk) {
+          const text = msg.chunk.text.replace(/\n$/, '');
+          if (text) pushLines(id, [{ kind: msg.chunk.stream === 'stderr' ? 'err' : 'out', text }]);
+        } else if (msg.type === 'cwd') {
+          if (msg.cwd) setCwdBy((prev) => ({ ...prev, [id]: msg.cwd }));
+          if (!msg.first) {
+            // a submitted command finished: publish its exit status (§41)
+            const wasBusy = busyRef.current[id];
+            busyRef.current[id] = false;
+            setBusyBy((prev) => ({ ...prev, [id]: false }));
+            if (wasBusy && msg.lastExitCode !== null && msg.lastExitCode !== undefined) {
+              pushLines(id, [{ kind: 'code', text: `[exit ${msg.lastExitCode}]` }]);
+            }
+          }
+        } else if (msg.type === 'hello') {
+          if (msg.pid) setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, pid: msg.pid ?? null } : s)));
+        } else if (msg.type === 'status') {
+          setSessions((prev) => prev.map((s) => (s.id === id
+            ? { ...s, status: msg.status ?? s.status, exitCode: msg.exitCode ?? s.exitCode, exitSignal: msg.exitSignal ?? s.exitSignal }
+            : s)));
+          if (msg.status && msg.status !== 'running') {
+            busyRef.current[id] = false;
+            setBusyBy((prev) => ({ ...prev, [id]: false }));
+          }
+        }
+      } catch { /* malformed SSE frame — ignore */ }
+    };
+    return () => es.close();
+  }, [active?.id, pushLines]);
 
-  const appendLines = (id: string, lines: TerminalLine[]) => {
-    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, lines: [...s.lines, ...lines] } : s)));
+  // Auto-scroll with manual override (§38): scrolling up pauses the chase;
+  // the floating chip (or scrolling back to the bottom) re-enables it.
+  useEffect(() => {
+    if (autoScroll) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [activeLines.length, autoScroll]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    setAutoScroll(nearBottom);
   };
 
-  const setRunning = (id: string, running: boolean) => {
-    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, running } : s)));
-  };
-
-  const runFsCommand = async (session: TerminalSession, command: string) => {
-    appendLines(session.id, [{ kind: 'cmd', text: `${session.cwd} $ ${command}` }]);
-    setRunning(session.id, true);
+  const submit = async (session: FsServerSession) => {
+    const input = inputs[session.id] ?? '';
+    const isBusy = busyBy[session.id];
+    if (!input.trim() && !isBusy) {
+      // bare Enter still reaches the process (empty stdin line)
+      await termPost({ op: 'write', sessionId: session.id, input: '' });
+      return;
+    }
+    setInputs((prev) => ({ ...prev, [session.id]: '' }));
+    if (!isBusy) {
+      // NOTE: no local echo — the interactive shell echoes the input line
+      // itself after its prompt (authentic terminal behavior).
+      if (input.trim()) {
+        const h = histories.current[session.id] ?? [];
+        if (h[h.length - 1] !== input) histories.current[session.id] = [...h.slice(-99), input];
+        historyIdx.current[session.id] = histories.current[session.id].length;
+      }
+      busyRef.current[session.id] = true;
+      setBusyBy((prev) => ({ ...prev, [session.id]: true }));
+    }
     try {
-      const res = await apiFetch<{ stdout: string; stderr: string; code: number | null; signal: string | null; truncated: boolean; timedOut: boolean; cwd: string }>(
-        '/api/inspector/terminal',
-        { method: 'POST', body: JSON.stringify({ cwd: session.cwd, command }) },
-      );
-      const lines: TerminalLine[] = [];
-      if (res.stdout) lines.push({ kind: 'out', text: res.stdout.replace(/\n$/, '') });
-      if (res.stderr) lines.push({ kind: 'err', text: res.stderr.replace(/\n$/, '') });
-      if (res.timedOut) lines.push({ kind: 'meta', text: 'command killed — 30 s hard timeout reached' });
-      lines.push({ kind: 'code', text: `[exit ${res.code ?? 'null'}${res.signal ? ` · ${res.signal}` : ''}${res.truncated ? ' · output truncated' : ''}]` });
-      appendLines(session.id, lines);
-      if (command.trim().startsWith('cd ')) {
-        setSessions((prev) => prev.map((s) => (s.id === session.id ? { ...s, cwd: res.cwd } : s)));
+      await termPost({ op: 'write', sessionId: session.id, input });
+    } catch (e) {
+      busyRef.current[session.id] = false;
+      setBusyBy((prev) => ({ ...prev, [session.id]: false }));
+      pushLines(session.id, [{ kind: 'err', text: fmtError(e) }]);
+    }
+  };
+
+  const interrupt = async () => {
+    if (!active) return;
+    busyRef.current[active.id] = false;
+    setBusyBy((prev) => ({ ...prev, [active.id]: false }));
+    pushLines(active.id, [{ kind: 'meta', text: '^C — SIGINT sent to the process group' }]);
+    try { await termPost({ op: 'interrupt', sessionId: active.id }); } catch { /* already gone */ }
+  };
+
+  const createSession = async () => {
+    if (actionBusy) return;
+    setActionBusy(true);
+    try {
+      const res = await termPost({ op: 'create', cwd: initialCwd || '.' });
+      if (res.session) {
+        const created = res.session;
+        setSessions((prev) => [...prev, created]);
+        setCwdBy((prev) => ({ ...prev, [created.id]: created.cwd }));
+        setActiveId(created.id);
+        setAutoScroll(true);
       }
     } catch (e) {
-      appendLines(session.id, [{ kind: 'err', text: fmtError(e) }]);
+      toast.error('Cannot open session', { description: fmtError(e) });
     } finally {
-      setRunning(session.id, false);
+      setActionBusy(false);
     }
   };
 
-  // VFS sandboxed virtual shell — mapped onto the VFS API, CANNOT escape.
+  const restartActive = async () => {
+    if (!active || actionBusy) return;
+    setActionBusy(true);
+    try {
+      const res = await termPost({ op: 'restart', sessionId: active.id });
+      setLinesBy((prev) => ({ ...prev, [active.id]: [] }));
+      if (res.session) {
+        const restarted = res.session;
+        setSessions((prev) => prev.map((s) => (s.id === active.id ? restarted : s)));
+        setCwdBy((prev) => ({ ...prev, [active.id]: restarted.cwd }));
+      }
+      pushLines(active.id, [{ kind: 'meta', text: 'session restarted — fresh interactive bash' }]);
+    } catch (e) {
+      toast.error('Restart failed', { description: fmtError(e) });
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const clearActive = async () => {
+    if (!active) return;
+    setLinesBy((prev) => ({ ...prev, [active.id]: [] }));
+    try { await termPost({ op: 'clear', sessionId: active.id }); } catch { /* local clear is enough */ }
+  };
+
+  const closeSessionById = async (id: string) => {
+    try { await termPost({ op: 'close', sessionId: id }); } catch { /* already gone */ }
+    setSessions((prev) => {
+      const next = prev.filter((s) => s.id !== id);
+      if (activeId === id) setActiveId(next[next.length - 1]?.id ?? null);
+      return next;
+    });
+  };
+
+  const copyOutput = () => {
+    const text = activeLines.map((l) => l.text).join('\n');
+    void navigator.clipboard.writeText(text)
+      .then(() => toast.success('Output copied'))
+      .catch(() => toast.error('Clipboard unavailable'));
+  };
+
+  const statusColor = (s: FsServerSession['status']) =>
+    s === 'running' ? 'text-emerald-300' : s === 'starting' ? 'text-amber-300' : s === 'exited' ? 'text-slate-400' : 'text-rose-300';
+
+  if (booting) {
+    return <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" aria-hidden /> starting real FS terminal…</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-tech text-[10px] uppercase tracking-wider text-muted-foreground">terminal sessions</span>
+        <Badge variant="outline" className="border-amber-400/40 bg-amber-400/10 font-mono text-[10px] text-amber-300">
+          REAL FILESYSTEM — real bash processes
+        </Badge>
+        <Button type="button" variant="outline" size="sm" className="min-h-9 text-xs" onClick={createSession} disabled={actionBusy || sessions.length >= 4}>
+          <Plus className="size-3.5" aria-hidden /> New session {sessions.length >= 4 ? '(cap 4)' : ''}
+        </Button>
+        {active ? (
+          <>
+            <Button type="button" variant="ghost" size="sm" className="min-h-9 text-xs text-muted-foreground" onClick={restartActive} disabled={actionBusy}>
+              <CirclePlay className="size-3.5" aria-hidden /> Restart
+            </Button>
+            <Button type="button" variant="ghost" size="sm" className="min-h-9 text-xs text-muted-foreground" onClick={clearActive}>
+              <XCircle className="size-3.5" aria-hidden /> Clear
+            </Button>
+            <Button type="button" variant="ghost" size="sm" className="min-h-9 text-xs text-muted-foreground" onClick={copyOutput}>
+              <Braces className="size-3.5" aria-hidden /> Copy output
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      {sessions.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {sessions.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => { setActiveId(s.id); setAutoScroll(true); }}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-[11px]',
+                active?.id === s.id ? 'border-sky-400/40 bg-sky-400/10 text-foreground' : 'border-white/[0.07] bg-white/[0.02] text-muted-foreground hover:bg-white/[0.05]',
+              )}
+            >
+              <TerminalSquare className="size-3" aria-hidden />
+              <span className="max-w-40 truncate">{cwdBy[s.id] ?? s.cwd}</span>
+              <span className={cn('font-tech text-[9px] uppercase', statusColor(s.status))}>{s.status}{busyBy[s.id] ? '·busy' : ''}</span>
+              <X
+                className="size-3 text-muted-foreground hover:text-rose-300"
+                aria-label={`Close terminal session ${s.id}`}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); void closeSessionById(s.id); } }}
+                onClick={(e) => { e.stopPropagation(); void closeSessionById(s.id); }}
+              />
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="glass-card relative rounded-lg border border-white/[0.06]">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="nextool-scroll h-[50vh] overflow-y-auto p-3 font-mono text-[11px] leading-relaxed md:h-[360px]"
+        >
+          {activeLines.length === 0 ? (
+            <p className="text-muted-foreground">Interactive bash ready — commands run as real host processes; output streams live. Ctrl+C interrupts; Restart spawns a fresh shell.</p>
+          ) : (
+            activeLines.map((line, i) => (
+              <p
+                key={i}
+                className={cn(
+                  'whitespace-pre-wrap break-all',
+                  line.kind === 'cmd' && 'text-sky-300',
+                  line.kind === 'out' && 'text-slate-200',
+                  line.kind === 'err' && 'text-rose-300',
+                  line.kind === 'meta' && 'text-muted-foreground',
+                  line.kind === 'code' && 'text-amber-300/80',
+                )}
+              >
+                {line.text}
+              </p>
+            ))
+          )}
+          {active?.status === 'starting' ? <p className="flex items-center gap-1.5 text-amber-300"><Loader2 className="size-3 animate-spin" aria-hidden /> starting bash…</p> : null}
+        </div>
+        {!autoScroll ? (
+          <button
+            type="button"
+            onClick={() => { setAutoScroll(true); scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }); }}
+            className="absolute bottom-16 right-4 rounded-full border border-white/10 bg-black/60 px-3 py-1 font-tech text-[10px] uppercase tracking-wider text-slate-200 hover:bg-black/80"
+          >
+            ↓ jump to bottom
+          </button>
+        ) : null}
+        {active ? (
+          <div className="flex items-center gap-2 border-t border-white/[0.06] p-2">
+            <span className="shrink-0 font-mono text-[11px] text-emerald-300">{cwdBy[active.id] ?? active.cwd} $</span>
+            <Input
+              value={inputs[active.id] ?? ''}
+              onChange={(e) => setInputs((prev) => ({ ...prev, [active.id]: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); void submit(active); return; }
+                if (e.ctrlKey && e.key.toLowerCase() === 'c' && !(inputs[active.id] ?? '').length) { e.preventDefault(); void interrupt(); return; }
+                if (e.ctrlKey && e.key.toLowerCase() === 'l') { e.preventDefault(); void clearActive(); return; }
+                // command history recall (§38)
+                const h = histories.current[active.id] ?? [];
+                if (e.key === 'ArrowUp' && h.length > 0) {
+                  e.preventDefault();
+                  const idx = Math.max(0, (historyIdx.current[active.id] ?? h.length) - 1);
+                  historyIdx.current[active.id] = idx;
+                  setInputs((prev) => ({ ...prev, [active.id]: h[idx] ?? '' }));
+                } else if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  const idx = Math.min(h.length, (historyIdx.current[active.id] ?? h.length) + 1);
+                  historyIdx.current[active.id] = idx;
+                  setInputs((prev) => ({ ...prev, [active.id]: h[idx] ?? '' }));
+                }
+              }}
+              placeholder={busyBy[active.id] ? 'stdin — type input for the running program…' : 'command — real bash, REAL filesystem…'}
+              className="h-9 min-w-0 flex-1 border-white/[0.09] bg-white/[0.04] font-mono text-xs"
+              aria-label="Terminal input"
+              autoComplete="off"
+            />
+            <Button type="button" variant="outline" size="sm" className="min-h-9 border-rose-500/40 text-xs text-rose-300 hover:bg-rose-500/10" onClick={interrupt} aria-label="Interrupt (Ctrl+C)">
+              <Ban className="size-3.5" aria-hidden /> Ctrl+C
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {active ? (
+        <p className="font-mono text-[10px] text-muted-foreground">
+          pid {active.pid ?? '—'} · status <span className={statusColor(active.status)}>{active.status}</span>
+          {active.exitCode !== null ? ` · last exit ${active.exitCode}` : ''}
+          {active.exitSignal ? ` · signal ${active.exitSignal}` : ''}
+          {` · started ${new Date(active.startedAt).toLocaleTimeString()}`}
+        </p>
+      ) : null}
+      <p className="text-[10px] text-muted-foreground">
+        The FS terminal runs REAL processes on the self-hosted machine — commands affect the actual host (REAL FILESYSTEM). stdin works for interactive programs, Ctrl+C sends a real SIGINT, sessions stream stdout/stderr live and track their own working directory. The MCP environment has no route here (VFS-only).
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// VFS mode — sandboxed virtual shell (unchanged boundary: VFS API only).
+// ---------------------------------------------------------------------
+function VfsTerminal() {
+  const [vfsSession, setVfsSession] = useState<TerminalSession>({ id: 'vfs_shell', cwd: '/', lines: [{ kind: 'meta', text: 'VFS sandboxed shell — every command maps onto the VFS API; host paths are unreachable. Type "help".' }], running: false });
+  const [input, setInput] = useState('');
+  const [vfsCwd, setVfsCwd] = useState('/');
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
+
+  useEffect(() => {
+    if (autoScroll) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [vfsSession.lines.length, autoScroll]);
+
+  const appendLines = (lines: TerminalLine[]) => {
+    setVfsSession((prev) => ({ ...prev, lines: appendCapped(prev.lines, lines) }));
+  };
+
   const runVfsCommand = async (command: string) => {
     const trimmed = command.trim();
     const out: TerminalLine[] = [{ kind: 'cmd', text: `${vfsCwd} $ ${command}` }];
@@ -1434,7 +1776,7 @@ function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string })
       else if (trimmed === 'help') {
         out.push({ kind: 'out', text: 'sandboxed VFS shell — commands: pwd · ls [path] · cd <path> · cat <file> · mkdir <dir> · touch <file> · rm <path> · cp <a> <b> · mv <a> <b> · echo <text> [> file] · find <query> · clear · help' });
       } else if (trimmed === 'clear') {
-        setSessions((prev) => prev.map((s) => (s.id === 'vfs_shell' ? { ...s, lines: [] } : s)));
+        setVfsSession((prev) => ({ ...prev, lines: [] }));
         return;
       } else if (trimmed.startsWith('ls')) {
         const target = resolve(trimmed.slice(2));
@@ -1480,64 +1822,25 @@ function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string })
     } catch (e) {
       out.push(failLine(fmtError(e)));
     }
-    appendLines('vfs_shell', out);
-  };
-
-  const submit = (session: TerminalSession) => {
-    const command = (inputs[session.id] ?? '').trim();
-    if (!command || session.running) return;
-    setInputs((prev) => ({ ...prev, [session.id]: '' }));
-    if (mode === 'fs') void runFsCommand(session, command);
-    else void runVfsCommand(command);
-  };
-
-  const newSession = () => {
-    const id = `fs_${Date.now().toString(36)}_${terminalSessionSeq++}`;
-    setSessions((prev) => [...prev, { id, cwd: '.', lines: [{ kind: 'meta', text: 'Real FS terminal session — confined to the runtime cwd.' }] }]);
-    setActiveId(id);
+    appendLines(out);
   };
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-tech text-[10px] uppercase tracking-wider text-muted-foreground">terminal sessions</span>
-        <Badge variant="outline" className={cn('font-mono text-[10px]', mode === 'vfs' ? 'border-sky-400/30 bg-sky-400/10 text-sky-300' : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300')}>
-          {mode === 'vfs' ? 'VFS sandbox — virtual shell (cannot escape)' : 'REAL FS — bash, confined to runtime cwd'}
-        </Badge>
-        {mode === 'fs' ? (
-          <Button type="button" variant="outline" size="sm" className="min-h-9 text-xs" onClick={newSession} disabled={visible.length >= 4}>
-            <Plus className="size-3.5" aria-hidden /> New session {visible.length >= 4 ? '(cap 4)' : ''}
-          </Button>
-        ) : null}
-        {active ? (
-          <Button type="button" variant="ghost" size="sm" className="ml-auto min-h-9 text-xs text-muted-foreground" onClick={() => setSessions((prev) => prev.map((s) => (s.id === active.id ? { ...s, lines: [] } : s)))}>
-            <XCircle className="size-3.5" aria-hidden /> Clear
-          </Button>
-        ) : null}
+        <Badge variant="outline" className="border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-300">VFS sandbox — virtual shell (cannot escape)</Badge>
       </div>
-
-      {mode === 'fs' && visible.length > 1 ? (
-        <div className="flex flex-wrap gap-1.5">
-          {visible.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => setActiveId(s.id)}
-              className={cn(
-                'flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-mono text-[11px]',
-                active?.id === s.id ? 'border-sky-400/40 bg-sky-400/10 text-foreground' : 'border-white/[0.07] bg-white/[0.02] text-muted-foreground hover:bg-white/[0.05]',
-              )}
-            >
-              <TerminalSquare className="size-3" aria-hidden /> {s.cwd} {s.running ? '· running' : ''}
-              <X className="size-3 text-muted-foreground hover:text-rose-300" aria-label="Close session" onClick={(e) => { e.stopPropagation(); setSessions((prev) => prev.filter((x) => x.id !== s.id)); }} />
-            </button>
-          ))}
-        </div>
-      ) : null}
-
       <div className="glass-card rounded-lg border border-white/[0.06]">
-        <div ref={scrollRef} className="nextool-scroll h-[50vh] overflow-y-auto p-3 font-mono text-[11px] leading-relaxed md:h-[360px]">
-          {(active?.lines ?? []).map((line, i) => (
+        <div
+          ref={scrollRef}
+          onScroll={() => {
+            const el = scrollRef.current;
+            if (el) setAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 48);
+          }}
+          className="nextool-scroll h-[50vh] overflow-y-auto p-3 font-mono text-[11px] leading-relaxed md:h-[360px]"
+        >
+          {vfsSession.lines.map((line, i) => (
             <p
               key={i}
               className={cn(
@@ -1546,40 +1849,42 @@ function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string })
                 line.kind === 'out' && 'text-slate-200',
                 line.kind === 'err' && 'text-rose-300',
                 line.kind === 'meta' && 'text-muted-foreground',
-                line.kind === 'code' && 'text-amber-300/80',
               )}
             >
               {line.text}
             </p>
           ))}
-          {active?.running ? <p className="flex items-center gap-1.5 text-amber-300"><Loader2 className="size-3 animate-spin" aria-hidden /> running…</p> : null}
         </div>
-        {active ? (
-          <div className="flex items-center gap-2 border-t border-white/[0.06] p-2">
-            <span className={cn('shrink-0 font-mono text-[11px]', mode === 'vfs' ? 'text-sky-300' : 'text-emerald-300')}>{mode === 'vfs' ? vfsCwd : active.cwd} $</span>
-            <Input
-              value={inputs[active.id] ?? ''}
-              onChange={(e) => setInputs((prev) => ({ ...prev, [active.id]: e.target.value }))}
-              onKeyDown={(e) => e.key === 'Enter' && submit(active)}
-              placeholder={mode === 'vfs' ? 'ls · cat · mkdir · echo hi > file.txt … (help)' : 'command (30 s timeout)…'}
-              className="h-9 min-w-0 flex-1 border-white/[0.09] bg-white/[0.04] font-mono text-xs"
-              aria-label="Terminal command"
-              autoComplete="off"
-            />
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2 border-t border-white/[0.06] p-2">
+          <span className="shrink-0 font-mono text-[11px] text-sky-300">{vfsCwd} $</span>
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && input.trim()) {
+                e.preventDefault();
+                const cmd = input;
+                setInput('');
+                void runVfsCommand(cmd);
+              }
+            }}
+            placeholder="ls · cat · mkdir · echo hi > file.txt … (help)"
+            className="h-9 min-w-0 flex-1 border-white/[0.09] bg-white/[0.04] font-mono text-xs"
+            aria-label="VFS terminal command"
+            autoComplete="off"
+          />
+        </div>
       </div>
-      {mode === 'vfs' ? (
-        <p className="text-[10px] text-muted-foreground">
-          The VFS terminal is a sandboxed interpreter: each command maps onto the same secure VFS API the restricted tool runtimes use — MCP and virtual tools can never reach the real host filesystem (spec §4.3/§19).
-        </p>
-      ) : (
-        <p className="text-[10px] text-muted-foreground">
-          The FS terminal executes REAL commands on the self-hosted machine (bash, minimal env, 30 s hard timeout, output-capped) but its working directory stays confined to the NexTool runtime directory.
-        </p>
-      )}
+      <p className="text-[10px] text-muted-foreground">
+        The VFS terminal is a sandboxed interpreter: each command maps onto the same secure VFS API the restricted tool runtimes use — MCP and virtual tools can never reach the real host filesystem (spec §4.3/§19).
+      </p>
     </div>
   );
+}
+
+/** v1.0.15 §37 — the Terminal tab: REAL FS sessions vs the VFS sandbox. */
+function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string }) {
+  return mode === 'fs' ? <FsTerminal initialCwd={initialCwd} /> : <VfsTerminal />;
 }
 
 function childVfs(dir: string, name: string): string {

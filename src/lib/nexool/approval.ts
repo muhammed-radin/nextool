@@ -15,9 +15,21 @@
  * through it (no accidental boolean merging).
  *
  * An approval is a runtime event (§9.14): tool.approval.required →
- * allowed/denied/timeout → tool.execution.blocked on rejection. The waiting
- * tool does NOT continue automatically to dependent or sequential steps —
- * the task parks in `awaiting_approval` until the user decides.
+ * allowed/skipped/denied/timeout → tool.execution.blocked on rejection.
+ * v1.0.15 §31-§36 — THREE operator choices: [Skip] [Reject] [Accept] with
+ * the explicit state machine pending → accepted | skipped | rejected
+ * (+ cancelled on task stop):
+ *   - ACCEPT  → the tool executes normally and the plan continues.
+ *   - SKIP    → the tool does NOT execute; the execution is recorded as
+ *               `skipped` and the plan continues to the next logical step —
+ *               the planner receives "Tool X was skipped by the user".
+ *               A skip is NOT a denial: it never burns the denial ladder.
+ *   - REJECT  → the tool is blocked (v1.0.13 denial/recovery ladder; the
+ *               planner must revise the plan or stop, never repeat the
+ *               rejected action).
+ * The waiting tool does NOT continue automatically to dependent or
+ * sequential steps — the task parks in `awaiting_approval` until the user
+ * decides.
  *
  * Timeout (§9.7): 5 minutes. No decision ⇒ the TASK STOPS — a timeout never
  * silently executes the tool (§9.11).
@@ -39,7 +51,7 @@ export const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
  */
 export const FORCE_APPROVAL_TOOLS: ReadonlySet<string> = new Set(['fs.cmd']);
 
-export type ApprovalOutcome = 'allowed' | 'denied' | 'timeout' | 'cancelled';
+export type ApprovalOutcome = 'allowed' | 'denied' | 'skipped' | 'timeout' | 'cancelled';
 
 /** v1.0.11 §38 — where an auto-execution decision came from. */
 export type AutoExecutionSource = 'global' | 'tool' | 'task' | 'default';
@@ -118,9 +130,9 @@ export function listPendingApprovals(taskId?: string): PendingApproval[] {
       continue;
     }
     if (taskId && entry.taskId !== taskId) continue;
-    const { taskId: _t, resolve: _r, timer: _timer, ...rest } = entry;
-    void _t; void _r; void _timer;
-    out.push(rest);
+    const { taskId: _t, resolve: _r, timer: _timer, feedback: _f, ...rest } = entry;
+    void _t; void _r; void _timer; void _f;
+    out.push({ ...rest, state: rest.state ?? 'pending' });
   }
   return out;
 }
@@ -136,6 +148,8 @@ export function requestApproval(input: {
   params: Record<string, unknown>;
   purpose?: string;
   reason?: string;
+  description?: string;
+  environment?: string;
   subgoal?: string;
 }): Promise<{ outcome: ApprovalOutcome; feedback?: string }> {
   const approvalId = `apr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -146,6 +160,9 @@ export function requestApproval(input: {
     params: input.params,
     purpose: input.purpose,
     reason: input.reason,
+    description: input.description,
+    environment: input.environment,
+    state: 'pending',
     subgoal: input.subgoal,
     requestedAt,
   };
@@ -194,11 +211,15 @@ export function requestApproval(input: {
 
 /**
  * Resolve a pending approval from the console UI (§9.6/§9.8/§9.9).
- * deny feedback (optional) becomes a runtime feedback event.
+ * v1.0.15 §31-§34 — decisions: 'allow' (ACCEPT — execute + continue),
+ * 'skip' (SKIP — do not execute, record `skipped`, continue to the next
+ * logical step; the planner is told via the outcome), 'deny' (REJECT —
+ * blocked, v1.0.13 denial/recovery ladder). Denial/skip feedback (optional)
+ * becomes a runtime feedback event.
  */
 export async function resolveApproval(
   approvalId: string,
-  decision: 'allow' | 'deny',
+  decision: 'allow' | 'deny' | 'skip',
   feedback?: string,
 ): Promise<boolean> {
   const entry = approvalRegistry().get(approvalId);
@@ -206,44 +227,78 @@ export async function resolveApproval(
   clearTimeout(entry.timer);
   approvalRegistry().delete(approvalId);
 
+  const trimmed = feedback?.trim();
+  if (trimmed) {
+    entry.feedback = trimmed.slice(0, 2000);
+  }
+
   if (decision === 'allow') {
+    entry.state = 'accepted';
     void emitEvent({
       taskId: entry.taskId,
       type: 'tool.approval.allowed',
       source: 'user',
       message: `User approved execution of ${entry.tool}.`,
-      data: { approvalId, tool: entry.tool },
+      data: { approvalId, tool: entry.tool, state: 'accepted' },
       priority: 3,
     });
     entry.resolve('allowed');
     return true;
   }
 
+  if (decision === 'skip') {
+    // v1.0.15 §33 — SKIP: do not execute, record the skip observably, and
+    // let the plan continue. NOT a denial (the escalation ladder is not
+    // burned) and NOT a silent drop (the planner receives the skip).
+    entry.state = 'skipped';
+    void emitEvent({
+      taskId: entry.taskId,
+      type: 'tool.approval.skipped',
+      source: 'user',
+      message: `Tool ${entry.tool} was skipped by the user — the plan continues with the next logical step.`,
+      data: { approvalId, tool: entry.tool, state: 'skipped' },
+      priority: 3,
+    });
+    if (entry.feedback) {
+      void emitEvent({
+        taskId: entry.taskId,
+        type: 'observer.feedback_applied',
+        source: 'user',
+        message: `Skip feedback: ${entry.feedback.slice(0, 300)}`,
+        data: { approvalId, tool: entry.tool, skipFeedback: entry.feedback },
+        priority: 3,
+      });
+    }
+    entry.resolve('skipped');
+    return true;
+  }
+
+  // decision === 'deny' → REJECT (§34): the execution is blocked; the
+  // v1.0.13 denial/recovery ladder decides retry vs plan change vs stop.
+  entry.state = 'rejected';
   void emitEvent({
     taskId: entry.taskId,
     type: 'tool.approval.denied',
     source: 'user',
-    message: `User denied execution of ${entry.tool} — the tool is skipped.`,
-    data: { approvalId, tool: entry.tool },
+    message: `User rejected execution of ${entry.tool}.`,
+    data: { approvalId, tool: entry.tool, state: 'rejected' },
     priority: 2,
   });
   void emitEvent({
     taskId: entry.taskId,
     type: 'tool.execution.blocked',
     source: 'runtime',
-    message: `${entry.tool} execution blocked: denied by user.`,
-    data: { approvalId, tool: entry.tool, cause: 'user_denied' },
+    message: `${entry.tool} execution blocked: rejected by user.`,
+    data: { approvalId, tool: entry.tool, cause: 'user_denied', state: 'rejected' },
     priority: 2,
   });
-  // §9.9 — optional user feedback after denial → feedback event → runtime context
-  const trimmed = feedback?.trim();
-  if (trimmed) {
-    entry.feedback = trimmed.slice(0, 2000);
+  // §9.9 — optional user feedback after rejection → feedback event → context
+  if (entry.feedback) {
     void emitEvent({
       taskId: entry.taskId,
       type: 'observer.feedback_applied',
       source: 'user',
-      message: `Denial feedback: ${trimmed.slice(0, 300)}`,
+      message: `Denial feedback: ${entry.feedback.slice(0, 300)}`,
       data: { approvalId, tool: entry.tool, denialFeedback: entry.feedback },
       priority: 3,
     });
@@ -258,6 +313,7 @@ export function cancelPendingApprovalsForTask(taskId: string): void {
     if (entry.taskId !== taskId) continue;
     clearTimeout(entry.timer);
     approvalRegistry().delete(id);
+    entry.state = 'cancelled';
     entry.resolve('cancelled');
   }
 }

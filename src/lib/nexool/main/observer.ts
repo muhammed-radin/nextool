@@ -19,7 +19,16 @@ export function interpret(
   if (execution.status === 'timeout') {
     return `${toolName} timed out after ${execution.durationMs ?? 0}ms — no result observed.`;
   }
+  if (execution.status === 'skipped') {
+    // v1.0.15 §33 — a user SKIP is NOT a success: the observer must say so
+    // explicitly or the planner assumes the step succeeded and re-issues it.
+    return `Tool ${toolName} was skipped by the user — it did NOT run. Dependent steps must not assume this step succeeded; continue with the next logical step or an alternative.`;
+  }
   if (execution.status === 'cancelled') {
+    // v1.0.15 §34 — a user REJECTION (or task-stop cancel) is not a success.
+    if (execution.error?.code === 'DENIED_BY_USER') {
+      return `Tool ${toolName} was REJECTED by the user — it did NOT run. Understand the rejection reason, change the plan (or stop); never repeat the same rejected action indefinitely.${execution.error.message ? ` Reason/directive: ${execution.error.message}` : ''}`;
+    }
     return `${toolName} execution was cancelled.`;
   }
   if (execution.status === 'failed') {

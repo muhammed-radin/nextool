@@ -13,8 +13,8 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.14** — release name: *"THE LIVELY AI — event-driven Live Mode (events are first-class triggers, immediate wake, per-task Read & Act All Events queue, event admission/rejection lifecycle), AskSelf + AskForUser tools, Limitations control page with Standard/Unrestricted presets, fully interactive Tool Editor test runtime (await alert/confirm/askForUserAsChoice/prompt with advanced input types), production Assistant chat experience, real-directory VFS/"* — see [What's new in v1.0.14](#whats-new-in-v1014) and the [v1.0.13 release page](release-1.0.13.md) for history |
-| **Model version** | **llm-core 1.0.0** (provider-served, NOT retrained — releases add tooling around it; locally trained tool-selection classifier checkpoints are generation **1.0.3** since v1.0.12 — MCP/VFS/identity-aware 447-example curriculum; unchanged in v1.0.14 — the app release does NOT change the model version; 1.0.2 in v1.0.11, 1.0.1 in v1.0.10). The UI always reads the version dynamically — never hard-coded. |
+| **Application version** | **1.0.15** — release name: *"THE LEARNED MIND — v1.0.4 trained classifier generation on the expanded curriculum (851 examples: coding, errors, GK, languages, creative, complex/pattern content, self-understanding, PCB/electronics/electricity, software/computer engineering, design, improvement, JSON, tool-title+body, AskSelf/AskForUser, user events, approvals, terminal environments), current-model registry + runtime integration, checkpoint exported to model-checkpoints/v1.0.4 (TFJS model.zip + model.nextool), three-way tool approval (Accept/Skip/Reject) with the explicit approval state machine, real interactive FS terminal (persistent bash, stdin, streaming, Ctrl+C, cwd tracking, multi-session), real-FS search path fix, verified user-event delivery."* — see [What's new in v1.0.15](#whats-new-in-v1015) and the [v1.0.15 release page](release-1.0.15.md) |
+| **Model version** | **CURRENT TRAINED CHECKPOINT: v1.0.4** (v1.0.15 — 851-example expanded curriculum, bigram featurization, 33/33 tool classes, exported to `model-checkpoints/v1.0.4/` as `model.zip` + `model.nextool`, marked CURRENT in the model registry and served by the runtime classifier as a CoreModule hint + first fallback). llm-core stays **1.0.0** (provider-served, NOT retrained). Historical checkpoints 1.0.3 (v1.0.12), 1.0.2 (v1.0.11), 1.0.1 (v1.0.10) keep their versions. The UI always reads versions dynamically — never hard-coded. |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
 
@@ -60,11 +60,49 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Operations | [Testing](testing.md) | `bun test` unit suite (371 tests across 11 files) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
+| Reference | [Release 1.0.15](release-1.0.15.md) | THE LEARNED MIND (current release page): v1.0.4 trained checkpoint (model.zip + model.nextool) exported + validated, current-model registry + CoreModule integration, [Skip]/[Reject]/[Accept] approval state machine, REAL interactive FS terminal, real-FS search fix, user-event delivery verification. |
 | Reference | [Release 1.0.14](release-1.0.14.md) | THE LIVELY AI (current release page): event-driven Live Mode, per-task Read & Act All Events queue + event lifecycle, AskSelf/AskForUser, Limitations page + presets, interactive Tool Editor test runtime, Assistant chat, real-directory VFS/. |
 | Reference | [Release 1.0.13](release-1.0.13.md) | THE OPERATOR CONSOLE (historical v1.0.13 page): single-user product model, environment rules, FS Inspector file manager, MCP customizable auth/OAuth, denial escalation, continuation, tool runtime interactivity. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
+
+## What's new in v1.0.15
+
+**One-line summary:** THE LEARNED MIND — the trained model becomes a first-class runtime
+participant (v1.0.4 checkpoint trained on the expanded 851-example curriculum, exported to
+`model-checkpoints/v1.0.4/` as **model.zip + model.nextool**, validated by real load +
+inference, marked CURRENT in a real model registry and wired into CoreModule as hint +
+first fallback), plus the three-way **[Skip] [Reject] [Accept]** approval state machine, a
+**REAL interactive FS terminal** (persistent bash, stdin, SSE streaming, Ctrl+C, cwd
+tracking, multi-session) and the real-FS search path fix.
+
+- **Training** — `seed-dataset-v1.0.4.json`: the full v1.0.3 curriculum + every v1.0.15
+  knowledge domain (coding, error understanding, GK, 14 coding languages, creative/AskSelf,
+  complex content, patterns, self-understanding incl. built-by-Muhammed-Radin, PCB,
+  electronics, electricity, software/computer engineering, design, intelligent improvement,
+  tool title+BODY+environment, AskSelf/AskForUser, user events, approval states, terminal
+  environments, planner/recovery, JSON); bigram featurization + `hiddenUnits` config;
+  benchmark-driven improvement loop (54% → 59% test-split tool accuracy across passes,
+  all runs persisted).
+- **Current model** — `markModelCurrent()` / `getActiveTrainedModel()` in
+  `training/current-model.ts`; `/api/models` reports `currentModel`; the Models page shows
+  the CURRENT badge; training completion auto-promotes the fresh checkpoint.
+- **Checkpoint** — `scripts/release-checkpoint-v104.ts`: safety check → registry cleanup →
+  real export (TFJS native ZIP + .nextool) → validation (load, package gate, metadata v1.0.4,
+  7/8 real-inference samples) — fail-fast, no placeholders.
+- **Approvals** — explicit `pending → accepted | skipped | rejected (+cancelled)` states;
+  SKIP records `skipped` + continues (never burns the denial ladder); REJECT keeps the
+  escalation ladder; the approval card shows tool description, environment, params and the
+  target command/working directory; every decision lands in the execution history and in the
+  planner's knownFailures context.
+- **Terminal** — server-side persistent interactive bash sessions with real stdin, live
+  stdout/stderr SSE streaming, process-group SIGINT, PROMPT_COMMAND cwd/exit markers,
+  lifecycle (PID/status/exit code), 4-session tabs, history, auto-scroll override.
+- **Real-FS search** — the empty-path (`''` = ROOT) INVALID_PARAMS bug is fixed at the route
+  and client layers; wrong types still fail with structured errors.
+- **User events** — goal-mode tasks now drain admitted events into observations (no more
+  black hole); events into a handle-less task are observably REJECTED.
 
 ## What's new in v1.0.14
 
@@ -79,7 +117,7 @@ operator, with 14 advanced prompt input types incl. file upload), the production
 **Assistant** chat experience (glassmorphism + the NexTool robot), and the **VFS
 becomes a real `VFS/` directory** (automatic one-time migration from `data/vfs`).
 llm-core stays 1.0.0 (provider-served, never retrained); the trained classifier
-generation stays 1.0.3.
+generation moved to **1.0.4 in v1.0.15**.
 
 - **Event-driven Live Mode** — EVERY injected event wakes a live task IMMEDIATELY
   regardless of priority (the old priority ≤ 5 wake gate is REMOVED — priority is

@@ -24,8 +24,8 @@ export const TRAINING_LOG_CAP = 400;
 
 /** Internal resolved config: modelVersion stays OPTIONAL (legacy tc-<job>
  *  versions remain the default when unset). */
-type ResolvedTrainingConfig = Required<Omit<TrainingConfig, 'earlyStoppingPatience' | 'modelVersion'>> &
-  Pick<TrainingConfig, 'earlyStoppingPatience' | 'modelVersion'>;
+type ResolvedTrainingConfig = Required<Omit<TrainingConfig, 'earlyStoppingPatience' | 'modelVersion' | 'hiddenUnits'>> &
+  Pick<TrainingConfig, 'earlyStoppingPatience' | 'modelVersion' | 'hiddenUnits'>;
 
 const DEFAULT_CONFIG: ResolvedTrainingConfig = {
   epochs: 20,
@@ -34,6 +34,7 @@ const DEFAULT_CONFIG: ResolvedTrainingConfig = {
   validationSplit: 0.2,
   shuffle: true,
   vocabSize: 128,
+  hiddenUnits: 64,
   earlyStoppingPatience: 0,
   modelVersion: undefined,
 };
@@ -46,6 +47,8 @@ export function resolveTrainingConfig(partial?: Partial<TrainingConfig>): Resolv
     validationSplit: clampNum(partial?.validationSplit, DEFAULT_CONFIG.validationSplit, 0, 0.5),
     shuffle: partial?.shuffle ?? true,
     vocabSize: clampInt(partial?.vocabSize, DEFAULT_CONFIG.vocabSize, 16, 1024),
+    // v1.0.15 — configurable hidden width (8-512) for the expanded curriculum.
+    hiddenUnits: clampInt(partial?.hiddenUnits, DEFAULT_CONFIG.hiddenUnits, 8, 512),
     earlyStoppingPatience: clampInt(partial?.earlyStoppingPatience, 0, 0, 50),
     // v1.0.10 §29 — semantic checkpoint version (e.g. '1.0.1'); validated for
     // shape here, honest fallback to the legacy tc-<job> version when unset.
@@ -86,11 +89,26 @@ export function tokenize(text: string): string[] {
     .filter((t) => t.length > 1);
 }
 
-/** Hashed bag-of-words vector, L2-normalized. Deterministic across runs. */
+/**
+ * Hashed bag-of-words + bigram vector, L2-normalized. Deterministic across runs.
+ *
+ * v1.0.15 — adjacent-token bigram features were added so the classifier sees
+ * word order and structure, not just a bag of tokens. Within-family requests
+ * ("show the contents of X" vs "show the metadata of X" vs "does X exist")
+ * share nearly identical unigram vocabulary — the bigram terms
+ * ("contents of", "does the", "metadata for") are what actually separate
+ * them. Training (this file) and every inference path (benchmark runner,
+ * runtime classifier) import this ONE function, so featurization can never
+ * drift between train and serve. Checkpoints trained before v1.0.15
+ * (unigram-only weights) keep their records for traceability but should be
+ * retrained under v1.0.4+ for benchmark numbers to be meaningful.
+ */
 export function vectorize(text: string, vocabSize: number): number[] {
   const vec = new Float32Array(vocabSize);
-  for (const token of tokenize(text)) {
-    vec[hashToken(token) % vocabSize] += 1;
+  const tokens = tokenize(text);
+  for (let i = 0; i < tokens.length; i++) {
+    vec[hashToken(tokens[i]) % vocabSize] += 1;
+    if (i > 0) vec[hashToken(`b:${tokens[i - 1]} ${tokens[i]}`) % vocabSize] += 0.5;
   }
   let norm = 0;
   for (let i = 0; i < vocabSize; i++) norm += vec[i] * vec[i];
@@ -226,7 +244,7 @@ export async function runTrainingJob(input: {
     const valY = bundle.val.map((e) => bundle.classes.indexOf(e.tool));
     const hasVal = valX.length > 0;
 
-    await jobLog(jobId, 'info', 'Model initialized: dense(64,relu) → dropout(0.1) → dense(softmax)');
+    await jobLog(jobId, 'info', `Model initialized: dense(${config.hiddenUnits ?? 64},relu) → dropout(0.1) → dense(softmax)`);
 
     // v1.0.10 — unique per-job model AND layer names: tf.js registers
     // variables by LAYER name, so two jobs in one process (or a job whose
@@ -234,7 +252,7 @@ export async function runTrainingJob(input: {
     // `dense_Dense1` — otherwise "Variable ... was already registered".
     const uid = `${jobId.replace(/[^a-z0-9]/gi, '').slice(-8)}${Date.now().toString(36).slice(-4)}`;
     model = tf.sequential({ name: `nexool-tc-${uid}`, layers: [
-      tf.layers.dense({ name: `din_${uid}`, inputShape: [config.vocabSize], units: 64, activation: 'relu' }),
+      tf.layers.dense({ name: `din_${uid}`, inputShape: [config.vocabSize], units: config.hiddenUnits ?? 64, activation: 'relu' }),
       tf.layers.dropout({ name: `drop_${uid}`, rate: 0.1 }),
       tf.layers.dense({ name: `dout_${uid}`, units: bundle.classes.length, activation: 'softmax' }),
     ] });
@@ -416,7 +434,8 @@ export async function runTrainingJob(input: {
       checkpointId: legacyVersion, // v1.0.10 — legacy per-job identifier kept for traceability
       modelSemanticVersion: config.modelVersion ?? TRAINED_MODEL_VERSION,
       format: 'tfjs-trained-classifier',
-      architecture: 'dense-64-relu → dropout-0.1 → dense-softmax',
+      architecture: `dense-${config.hiddenUnits ?? 64}-relu → dropout-0.1 → dense-softmax`,
+      featurization: 'hashed bag-of-words + bigrams, L2-normalized (v1.0.15)',
       parameterCount,
       classes: bundle.classes,
       vocabSize: config.vocabSize,
@@ -448,6 +467,19 @@ export async function runTrainingJob(input: {
     await jobLog(jobId, 'info', `Checkpoint saved: ${packageName} v${modelVersion} (${parameterCount} parameters) — model version ${config.modelVersion ?? TRAINED_MODEL_VERSION}`);
     await jobLog(jobId, 'info', `Training completed in ${(trainMs / 1000).toFixed(1)}s`);
     model.dispose();
+
+    // v1.0.15 §29 — the freshly trained checkpoint becomes the CURRENT model:
+    // the registry demotes every other active checkpoint and promotes this
+    // one, so the runtime classifier (CoreModule hint + fallback) serves the
+    // new generation immediately. Dynamic import — avoids the module cycle
+    // with current-model.ts (which imports vectorize from this file).
+    try {
+      const { markModelCurrent } = await import('./current-model');
+      await markModelCurrent(modelRecord.id);
+      await jobLog(jobId, 'info', `Model registry: v${modelVersion} checkpoint marked CURRENT (active).`);
+    } catch (promoteErr) {
+      await jobLog(jobId, 'warn', `Model registry update failed (checkpoint stays registered): ${promoteErr instanceof Error ? promoteErr.message : String(promoteErr)}`);
+    }
 
     await db.trainingJobRecord.update({
       where: { id: jobId },

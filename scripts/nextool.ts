@@ -93,7 +93,10 @@ program
   .option('-v, --val-split <x>', 'validation split fraction 0..0.5 (default 0.2)')
   .option('--no-shuffle', 'disable shuffling')
   .option('--early-stop <n>', 'early stopping patience on val_loss (0 = off, default 0)')
-  .action(async (opts: { dataset: string; datasetVersion?: string; epochs?: string; batchSize?: string; learningRate?: string; valSplit?: string; shuffle?: boolean; earlyStop?: string }) => {
+  .option('--vocab <n>', 'hashed bag-of-words vocabulary size (16-1024, default 128)')
+  .option('--hidden-units <n>', 'hidden layer width (8-512, default 64)')
+  .option('--model-version <version>', 'semantic version stamped on the trained checkpoint (default: shipped TRAINED_MODEL_VERSION)')
+  .action(async (opts: { dataset: string; datasetVersion?: string; epochs?: string; batchSize?: string; learningRate?: string; valSplit?: string; shuffle?: boolean; earlyStop?: string; vocab?: string; hiddenUnits?: string; modelVersion?: string }) => {
     const dataset = await resolveDataset(opts.dataset, opts.datasetVersion);
     const config = resolveTrainingConfig({
       epochs: opts.epochs ? Number(opts.epochs) : undefined,
@@ -102,10 +105,13 @@ program
       validationSplit: opts.valSplit ? Number(opts.valSplit) : undefined,
       shuffle: opts.shuffle,
       earlyStoppingPatience: opts.earlyStop !== undefined ? Number(opts.earlyStop) : undefined,
+      vocabSize: opts.vocab ? Number(opts.vocab) : undefined,
+      hiddenUnits: opts.hiddenUnits ? Number(opts.hiddenUnits) : undefined,
+      modelVersion: opts.modelVersion,
     });
 
     console.log(`> dataset: ${dataset.name} v${dataset.version} (${dataset.id.slice(0, 8)})`);
-    console.log(`> config: epochs=${config.epochs} batch=${config.batchSize} lr=${config.learningRate} valSplit=${config.validationSplit} shuffle=${config.shuffle}${config.earlyStoppingPatience ? ` earlyStop=${config.earlyStoppingPatience}` : ''}`);
+    console.log(`> config: epochs=${config.epochs} batch=${config.batchSize} lr=${config.learningRate} valSplit=${config.validationSplit} shuffle=${config.shuffle}${config.earlyStoppingPatience ? ` earlyStop=${config.earlyStoppingPatience}` : ''} vocab=${config.vocabSize}${config.modelVersion ? ` modelVersion=${config.modelVersion}` : ''}`);
 
     const job = await db.trainingJobRecord.create({
       data: {

@@ -1,7 +1,7 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.14",
-  "description": "NexTool Q1 v1.0.14 — THE LIVELY AI: event-driven Live Mode (immediate event wake, per-task Read & Act All Events queue), AskSelf + AskForUser tools, Limitations control page, interactive Tool Editor test runtime, production Assistant chat, real-directory VFS/.",
+  "version": "1.0.15",
+  "description": "NexTool Q1 v1.0.15 \u2014 THE LEARNED MIND: v1.0.4 trained classifier generation (expanded curriculum) exported to model-checkpoints/v1.0.4 (model.zip + model.nextool), three-way tool approval (Accept/Skip/Reject) with explicit approval state machine, real interactive FS terminal (persistent bash, stdin, streaming, Ctrl+C, history, multi-session), real-FS search path fix, verified user-event delivery.",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",

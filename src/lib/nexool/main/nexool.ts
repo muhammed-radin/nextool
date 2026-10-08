@@ -341,6 +341,15 @@ export async function injectEvent(
       taskId, eventId: event.id, eventType: event.type, state: 'rejected',
       reason: 'Task is stopped.', priority: 6,
     });
+  } else {
+    // v1.0.15 §44/§45 — no runtime handle at all (task completed, terminal
+    // task, or the server restarted): the event is observably REJECTED, never
+    // left in silent limbo without a lifecycle verdict.
+    emitEventLifecycle({
+      taskId, eventId: event.id, eventType: event.type, state: 'rejected',
+      reason: 'No active runtime for this task (it may have completed, or the runtime restarted).',
+      priority: 6,
+    });
   }
   return event;
 }

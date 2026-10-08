@@ -293,7 +293,7 @@ async function waitWhilePaused(ctx: RunContext): Promise<void> {
   }
 }
 
-// ---------- approval (v1.0.6 §9) ----------
+// ---------- approval (v1.0.6 §9 / v1.0.15 §31-§36) ----------
 
 function deniedExecution(tool: string, params: Record<string, unknown>, reason: string): ToolExecution {
   return {
@@ -309,18 +309,61 @@ function deniedExecution(tool: string, params: Record<string, unknown>, reason: 
 }
 
 /**
+ * v1.0.15 §33 — a SKIPPED tool: the user chose Skip (not Reject) — the tool
+ * was NOT executed and the plan continues to the next logical step. The
+ * execution record says `skipped` (distinct from a rejection's `cancelled`)
+ * and the message tells the planner exactly what happened.
+ */
+function skippedExecution(tool: string, params: Record<string, unknown>): ToolExecution {
+  return {
+    executionId: `exec_skipped_${Date.now().toString(36)}`,
+    tool,
+    status: 'skipped',
+    params,
+    error: { code: 'SKIPPED_BY_USER', message: `Tool ${tool} was skipped by the user.` },
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    durationMs: 0,
+  };
+}
+
+/**
+ * v1.0.15 §36 — the operator's decision is recorded in the EXECUTION HISTORY
+ * (not only in task events), so Task Preview / History / the planner context
+ * can audit every accept/skip/reject. Denied decisions keep the 'cancelled'
+ * status with decision metadata; skips record 'skipped'.
+ */
+async function recordApprovalDecisionHistory(taskId: string | undefined, execution: ToolExecution, decision: 'accepted' | 'skipped' | 'rejected'): Promise<void> {
+  try {
+    await db.historyEntry.create({
+      data: {
+        taskId: taskId ?? null,
+        action: execution.tool,
+        params: JSON.stringify(execution.params ?? {}),
+        result: JSON.stringify({ decision, executed: false, message: execution.error?.message ?? null }),
+        status: decision === 'skipped' ? 'skipped' : 'cancelled',
+      },
+    });
+  } catch (err) {
+    console.error('[loop] approval decision history write failed:', err);
+  }
+}
+
+/**
  * §9.5/§9.6 — approval gate in front of EVERY task-driven tool execution.
  * Returns the resolved outcome WITHOUT executing: 'auto' | 'allowed' mean the
- * caller may execute; 'denied' means skip; 'timeout' means the task must
- * stop; 'cancelled' means the task was stopped while waiting. Nothing
- * silently executes — the caller executes ONLY on 'auto'/'allowed'.
+ * caller may execute; 'skipped' means the user chose Skip — record and
+ * continue; 'denied' means the user rejected — escalation ladder; 'timeout'
+ * means the task must stop; 'cancelled' means the task was stopped while
+ * waiting. Nothing silently executes — the caller executes ONLY on
+ * 'auto'/'allowed'.
  */
 async function requestApprovalIfNeeded(
   ctx: RunContext,
   tool: string,
   params: Record<string, unknown>,
   opts: { purpose?: string; reason?: string } = {},
-): Promise<'auto' | 'allowed' | 'denied' | 'timeout' | 'cancelled'> {
+): Promise<'auto' | 'allowed' | 'denied' | 'skipped' | 'timeout' | 'cancelled'> {
   const def = ctx.toolDefs.find((d) => d.name === tool);
   // v1.0.11 §34-§38 — the auto-execution hierarchy resolved through ONE
   // centralized resolver: GLOBAL (Settings) → TOOL config → TASK console →
@@ -347,12 +390,17 @@ async function requestApprovalIfNeeded(
   }
 
   const subgoal = ctx.state.activeSubgoal?.title;
+  // v1.0.15 §35 — the approval card shows the tool's environment + registry
+  // description so the operator can judge what they are approving.
   ctx.state.pendingApproval = {
     approvalId: 'pending',
     tool,
     params,
     purpose: opts.purpose ?? def?.purpose,
     reason: opts.reason,
+    environment: def?.environment,
+    description: def?.description,
+    state: 'pending',
     subgoal,
     requestedAt: new Date().toISOString(),
   };
@@ -374,6 +422,8 @@ async function requestApprovalIfNeeded(
     params,
     purpose: opts.purpose ?? def?.purpose,
     reason: opts.reason,
+    description: def?.description,
+    environment: def?.environment,
     subgoal,
   });
 
@@ -386,6 +436,22 @@ async function requestApprovalIfNeeded(
       statusDetail: ctx.handle.pauseFlag.paused ? 'Paused by user — resumable.' : null,
     });
     return 'allowed';
+  }
+  if (outcome === 'skipped') {
+    // v1.0.15 §33 — SKIP: NOT a denial. The tool is not executed, the
+    // execution is recorded as `skipped`, and the plan continues to the next
+    // logical step. The planner receives the exact fact so dependent steps
+    // never assume success. The denial ladder is NOT burned.
+    const message = `Tool ${tool} was skipped by the user — continue with the next logical step. Dependent steps must not assume this step succeeded.`;
+    void emitEvent({
+      taskId: ctx.taskId, type: 'observer.state_changed', source: 'observer',
+      message, data: { tool, state: 'skipped', dependencyUnavailable: true }, priority: 3,
+    });
+    await persistTask(ctx.taskId, {
+      status: ctx.handle.pauseFlag.paused ? 'paused' : 'running',
+      statusDetail: ctx.handle.pauseFlag.paused ? 'Paused by user — resumable.' : null,
+    });
+    return 'skipped';
   }
   if (outcome === 'denied') {
     // v1.0.13 §13 — USER DENIAL / TOOL REJECTION ESCALATION. Every denial is
@@ -448,12 +514,24 @@ async function executeWithApproval(
       // FORCE_APPROVAL_TOOLS handler gate too (no double confirmation).
       approved: outcome === 'allowed' });
   }
-  return deniedExecution(tool, params, outcome === 'denied'
+  if (outcome === 'skipped') {
+    // v1.0.15 §33 — the skip is recorded as a real execution row so the
+    // task history and the planner context both show it.
+    const skipped = skippedExecution(tool, params);
+    await recordApprovalDecisionHistory(ctx.taskId, skipped, 'skipped');
+    return skipped;
+  }
+  const denied = deniedExecution(tool, params, outcome === 'denied'
     // v1.0.13 §13 — the denied execution carries the escalation directive so
     // the planner's knownFailures context understands what to do next:
     // #1 retry the same logical state, #2/#3 change the approach.
     ? denialEscalationMessage(ctx, tool)
     : outcome === 'timeout' ? 'Approval timeout — not executed.' : 'Task stopped while awaiting approval.');
+  if (outcome === 'denied') {
+    // v1.0.15 §36 — record the REJECT decision in the execution history.
+    await recordApprovalDecisionHistory(ctx.taskId, denied, 'rejected');
+  }
+  return denied;
 }
 
 /**
@@ -615,7 +693,13 @@ function recordExecution(ctx: RunContext, tool: string, result: ActionResult): v
   ctx.state.toolCallCount += 1;
   // v1.0.10 §10 — bounded in-memory failure log feeding the one-by-one
   // planner's knownFailures (never blindly repeat a failed action).
-  if (result.execution.status === 'failed' || result.execution.status === 'timeout') {
+  // v1.0.15 §33/§52 — user decisions travel too: a SKIPPED or REJECTED tool
+  // is exactly the fact the planner must see so it never re-issues the same
+  // request and never assumes a skipped step succeeded.
+  if (
+    result.execution.status === 'failed' || result.execution.status === 'timeout' || result.execution.status === 'skipped'
+    || (result.execution.status === 'cancelled' && result.execution.error?.code === 'DENIED_BY_USER')
+  ) {
     const message = result.execution.error?.message ?? result.execution.status;
     ctx.failureLog.push(`${result.execution.tool}: ${message} (${result.execution.status})`);
     if (ctx.failureLog.length > 10) ctx.failureLog.shift();
@@ -845,7 +929,8 @@ interface Termination {
 function markStepByExecution(plan: PlanStep[], stepId: string, status: ToolExecution['status']): void {
   const step = plan.find((s) => s.id === stepId);
   if (!step) return;
-  step.status = status === 'completed' ? 'completed' : status === 'cancelled' ? 'skipped' : 'failed';
+  // v1.0.15 §33 — a SKIPPED execution marks the step 'skipped' explicitly.
+  step.status = status === 'completed' ? 'completed' : status === 'cancelled' || status === 'skipped' ? 'skipped' : 'failed';
 }
 
 // ---------- GOAL MODE ----------
@@ -904,6 +989,37 @@ async function requestLimitContinuationIfNeeded(ctx: RunContext): Promise<'grant
   return 'refused';
 }
 
+/**
+ * v1.0.15 §44-§49 — GOAL MODE processes injected events too. Live tasks wake
+ * immediately on admission; goal mode has no wait to interrupt, so the inbox
+ * is drained at every safe iteration boundary: user messages/corrections
+ * become first-class observations that shape the NEXT decision cycle. An
+ * admitted event is never silently dropped in goal mode.
+ */
+async function drainGoalInbox(ctx: RunContext): Promise<void> {
+  const inbox = ctx.handle.inbox;
+  let drained = 0;
+  while (inbox.length > 0) {
+    const event = inbox.shift();
+    if (!event) break;
+    drained += 1;
+    const data = event.data as Record<string, unknown> | undefined;
+    const message = typeof data?.message === 'string' ? data.message : event.message;
+    const isUser = event.source === 'user' || event.type === 'user.message' || event.type === 'user.feedback';
+    const note = isUser
+      ? `User message received during the task: "${message.slice(0, 400)}" — take it into account before the next step.`
+      : `Runtime event ${event.type}: ${message.slice(0, 400)}`;
+    ctx.state.observations.push({ at: new Date().toISOString(), message: note });
+    if (ctx.state.observations.length > 30) ctx.state.observations.splice(0, ctx.state.observations.length - 30);
+    ctx.state.lastObservation = note;
+    void emitEvent({
+      taskId: ctx.taskId, type: 'observer.state_changed', source: 'observer',
+      message: note, data: { eventId: event.id, eventType: event.type, source: event.source }, priority: 3,
+    });
+  }
+  if (drained > 0) await persistState(ctx);
+}
+
 async function runGoalMode(ctx: RunContext): Promise<Termination> {
   const { config } = ctx;
   const startedAt = Date.now();
@@ -912,6 +1028,9 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
     if (ctx.handle.stopFlag.stopped) {
       return { finalStatus: 'stopped', taskStatus: 'stopped', statusDetail: 'Stopped by user.', summary: ctx.state.lastObservation ?? 'Task stopped.' };
     }
+    // v1.0.15 §44-§49 — drain admitted events at the safe boundary BEFORE
+    // planning the next step, so a user message/correction steers the goal.
+    await drainGoalInbox(ctx);
     // v1.0.6 §11 — pause at the safe point between iterations.
     await waitWhilePaused(ctx);
     if (ctx.handle.stopFlag.stopped) {
@@ -1017,6 +1136,7 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
         // OWN decision; approving one never auto-approves its batch siblings.
         const approved: { tool: string; params: Record<string, unknown>; stepId: string }[] = [];
         const denied: { stepId: string; tool: string }[] = [];
+        const skippedBatch: { stepId: string; tool: string }[] = [];
         for (const d of decisions) {
           const tool = d.decision.tool as string;
           const outcome = await requestApprovalIfNeeded(ctx, tool, d.decision.params ?? {}, { reason: d.decision.reason });
@@ -1030,12 +1150,25 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
           }
           if (outcome === 'auto' || outcome === 'allowed') {
             approved.push({ tool, params: d.decision.params ?? {}, stepId: d.step.id });
+          } else if (outcome === 'skipped') {
+            // v1.0.15 §33 — batch SKIP: recorded, step marked skipped, plan continues.
+            skippedBatch.push({ stepId: d.step.id, tool });
+            const skippedExec = skippedExecution(tool, d.decision.params ?? {});
+            await recordApprovalDecisionHistory(ctx.taskId, skippedExec, 'skipped');
+            recordExecution(ctx, tool, {
+              execution: skippedExec,
+              observation: `Tool ${tool} was skipped by the user — continue with the next logical step.`,
+            });
+            markStepByExecution(ctx.state.plan, d.step.id, 'skipped');
           } else {
             denied.push({ stepId: d.step.id, tool });
             const deniedExec = deniedExecution(tool, d.decision.params ?? {}, outcome === 'denied'
               // v1.0.13 §13 — escalation directive in the denied execution.
               ? denialEscalationMessage(ctx, tool)
               : 'Task stopped while awaiting approval.');
+            if (outcome === 'denied') {
+              await recordApprovalDecisionHistory(ctx.taskId, deniedExec, 'rejected');
+            }
             recordExecution(ctx, tool, {
               execution: deniedExec,
               observation: interpret(tool, deniedExec, { goal: ctx.goal }),
@@ -1082,6 +1215,13 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
             taskId: ctx.taskId, type: 'planner.partial_failure', source: 'planner',
             message: `${denied.length} parallel call(s) denied by user — skipped (batch siblings unaffected).`,
             data: { batchId, denied: denied.map((d) => d.tool) }, priority: 4,
+          });
+        }
+        if (skippedBatch.length > 0) {
+          void emitEvent({
+            taskId: ctx.taskId, type: 'planner.partial_failure', source: 'planner',
+            message: `${skippedBatch.length} parallel call(s) skipped by the user — the plan continues (batch siblings unaffected).`,
+            data: { batchId, skipped: skippedBatch.map((d) => d.tool) }, priority: 4,
           });
         }
         await persistState(ctx);

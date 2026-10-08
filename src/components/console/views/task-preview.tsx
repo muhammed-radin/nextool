@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { ApprovalCard } from '@/components/console/approval-card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -188,7 +189,6 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const [verificationBusy, setVerificationBusy] = useState(false);
   const [continuationBusy, setContinuationBusy] = useState(false);
   const [fileRequestBusy, setFileRequestBusy] = useState(false);
-  const [denyFeedback, setDenyFeedback] = useState('');
   const [promptAnswer, setPromptAnswer] = useState('');
 
   const { events: streamEvents } = useNexoolStream({ taskId, max: 300 });
@@ -339,19 +339,23 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
     }
   };
 
-  // v1.0.6 §9.6 — approval actions from the Task Preview header area.
-  const doResolveApproval = async (approvalId: string, decision: 'allow' | 'deny') => {
+  // v1.0.15 §31-§34 — approval actions from the Task Preview header area:
+  // Accept executes; Skip records `skipped` + continues; Reject blocks.
+  const doResolveApproval = async (approvalId: string, decision: 'accept' | 'skip' | 'reject', feedback?: string) => {
     setApprovalBusy(true);
     try {
-      const res = await resolveApprovalRequest(approvalId, decision, decision === 'deny' ? denyFeedback.trim() || undefined : undefined);
+      const res = await resolveApprovalRequest(approvalId, decision, feedback);
       if (res.resolved) {
-        toast.success(decision === 'allow' ? 'Tool approved' : 'Tool denied', {
-          description: decision === 'allow' ? 'Execution continues.' : 'The tool is skipped; the plan continues.',
-        });
+        const label = decision === 'accept' ? 'Tool accepted' : decision === 'skip' ? 'Tool skipped' : 'Tool rejected';
+        const desc = decision === 'accept'
+          ? 'Executing; the plan continues.'
+          : decision === 'skip'
+            ? 'Not executed — marked skipped; the plan continues with the next logical step.'
+            : 'Not executed — the planner must revise the plan or stop.';
+        toast.success(label, { description: desc });
       } else {
         toast.info('Approval no longer pending', { description: res.reason ?? 'It may have timed out.' });
       }
-      setDenyFeedback('');
       void loadDetail();
       void loadInteractive();
     } catch (e) {
@@ -1074,34 +1078,12 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
         {detail.statusDetail ? <p className="mt-2 text-xs text-muted-foreground">{detail.statusDetail}</p> : null}
         {detail.error ? <p className="mt-2 font-mono text-xs text-rose-300">{detail.error.code} [{detail.error.stage}]: {detail.error.message}</p> : null}
 
-        {/* v1.0.6 §16 — pending approval (collapsible-safe, inside the header card) */}
+        {/* v1.0.15 §31-§35 — pending approval: [Skip] [Reject] [Accept] card
+            (collapsible-safe, inside the header card) */}
         {approvals.length > 0 ? (
           <div className="mt-3 space-y-2" role="alert">
             {approvals.map((a) => (
-              <div key={a.approvalId} className="rounded-md border border-amber-400/30 bg-amber-400/[0.06] p-3">
-                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-amber-300">
-                  <ShieldAlert className="size-3.5" aria-hidden /> pending approval — task waits (timeout 5 min)
-                </p>
-                <p className="mt-1 break-words font-mono text-xs text-foreground">{a.tool}</p>
-                {a.purpose ? <p className="mt-0.5 break-words text-[11px] text-muted-foreground">purpose: {a.purpose}</p> : null}
-                {a.subgoal ? <p className="mt-0.5 break-words text-[11px] text-muted-foreground">subgoal: {a.subgoal}</p> : null}
-                <pre className="glass-inset nextool-scroll mt-1.5 max-h-24 overflow-auto rounded p-2 font-mono text-[10px] text-slate-300">{JSON.stringify(a.params, null, 2)}</pre>
-                <Input
-                  value={denyFeedback}
-                  onChange={(e) => setDenyFeedback(e.target.value)}
-                  placeholder="Optional: why deny? (feedback becomes a runtime event)"
-                  className="mt-2 min-h-9 border-white/[0.09] bg-white/[0.04] text-xs"
-                  aria-label={`Optional denial feedback for ${a.tool}`}
-                />
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <Button size="sm" disabled={approvalBusy} onClick={() => void doResolveApproval(a.approvalId, 'allow')} className="min-h-11 border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20">
-                    {approvalBusy ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Check className="size-3.5" aria-hidden />} Allow
-                  </Button>
-                  <Button size="sm" disabled={approvalBusy} onClick={() => void doResolveApproval(a.approvalId, 'deny')} className="min-h-11 border-rose-500/40 text-rose-300 hover:bg-rose-500/10">
-                    <X className="size-3.5" aria-hidden /> Deny
-                  </Button>
-                </div>
-              </div>
+              <ApprovalCard key={a.approvalId} approval={a} busy={approvalBusy} onResolve={(id, decision, fb) => void doResolveApproval(id, decision, fb)} />
             ))}
           </div>
         ) : null}

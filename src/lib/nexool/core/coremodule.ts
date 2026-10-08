@@ -9,6 +9,10 @@ import { heuristicDecide } from './heuristic';
 import { coerceParams } from '../tools/executor';
 // v1.0.12 Phase 7 — custom task instructions (delimited user block).
 import { appendInstructionsBlock } from '../instructions';
+// v1.0.15 — the ACTIVE TRAINED CHECKPOINT (model v1.0.4) participates in
+// every decision: as a hint inside the LLM prompt and as the FIRST fallback
+// when the LLM call fails (the heuristic matcher stays last).
+import { suggestToolFromTrainedModel } from '../training/current-model';
 
 const CORE_TIMEOUT_MS = 25_000;
 
@@ -36,6 +40,11 @@ export interface DecideInput {
   /** v1.0.12 Phase 7 — combined custom task instructions; appended to the
    *  USER message as a delimited block BELOW the fixed system prompt. */
   instructions?: string | null;
+  /** v1.0.15 — tool suggestion from the active trained checkpoint (model
+   *  v1.0.4). Included in the CONTEXT payload so the LLM sees what the
+   *  learned classifier thinks BEFORE deciding; consumed directly on
+   *  LLM failure as the structured fallback. */
+  classifierHint?: { tool: string; confidence: number; modelVersion: string } | null;
 }
 
 function buildSystemPrompt(): string {
@@ -91,6 +100,8 @@ function buildUserMessage(input: DecideInput): string {
       lastObservation: ctx.lastObservation,
       // v1.0.14 §14 — the Live trigger (interval vs full event body).
       trigger: ctx.trigger,
+      // v1.0.15 — the trained v1.0.4 classifier's read of the request.
+      ...(input.classifierHint ? { classifierHint: input.classifierHint } : {}),
     },
     reasoningLevel: input.reasoningLevel,
   });
@@ -191,11 +202,22 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
   const started = Date.now();
   let output: CoreModuleOutput | null = null;
 
+  // v1.0.15 — ask the ACTIVE TRAINED CHECKPOINT (v1.0.4) what it thinks
+  // BEFORE the LLM call. Never throws; null when no model is active.
+  let classifierHint: { tool: string; confidence: number; modelVersion: string } | null = null;
+  try {
+    const suggestion = await suggestToolFromTrainedModel(`${input.objective}\n${input.request}`);
+    if (suggestion && input.toolDefs.some((t) => t.name === suggestion.tool)) {
+      classifierHint = { tool: suggestion.tool, confidence: suggestion.confidence, modelVersion: suggestion.modelVersion };
+    }
+  } catch { /* classifier hint is advisory only */ }
+  const hinted = { ...input, classifierHint };
+
   try {
     const zai = await getZai();
     const messages = [
       { role: 'assistant' as const, content: getSystemPrompt() },
-      { role: 'user' as const, content: buildUserMessage(input) },
+      { role: 'user' as const, content: buildUserMessage(hinted) },
     ];
 
     let content: string | undefined;
@@ -222,6 +244,25 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
     console.error('[coremodule] LLM decision failed, using heuristic fallback:', err);
   }
 
+  if (!output) {
+    // v1.0.15 fallback ladder: the LLM failed → 1) the trained v1.0.4
+    // classifier's suggestion (when it is reasonably confident), then
+    // 2) the deterministic heuristic matcher.
+    if (classifierHint && classifierHint.confidence >= 0.45) {
+      const def = input.toolDefs.find((t) => t.name === classifierHint.tool);
+      if (def) {
+        output = {
+          status: 'tool_call',
+          tool: def.name,
+          params: {},
+          confidence: classifierHint.confidence,
+          reason: `Trained classifier v${classifierHint.modelVersion} selected ${def.name} (LLM unavailable) — parameters follow the schema defaults.`,
+          engine: `trained-classifier:v${classifierHint.modelVersion}`,
+          latencyMs: Date.now() - started,
+        };
+      }
+    }
+  }
   if (!output) {
     output = heuristicDecide({
       objective: input.objective,

@@ -133,14 +133,31 @@ export interface ToolDefinition {
   verificationLatch?: boolean;
 }
 
-// ---------- Tool execution approval (v1.0.6 §9) ----------
+// ---------- Tool execution approval (v1.0.6 §9 / v1.0.15 §31-§36) ----------
+
+/**
+ * v1.0.15 §36 — EXPLICIT approval state machine. An approval is never a
+ * single boolean: it moves pending → accepted | skipped | rejected, and
+ * pending → cancelled on task stop. The decision is recorded in task events
+ * AND the execution history so the planner (and the operator) can audit it.
+ */
+export type ApprovalState = 'pending' | 'accepted' | 'skipped' | 'rejected' | 'cancelled';
 
 export interface PendingApproval {
   approvalId: string;
   tool: string;
   params: Record<string, unknown>;
   purpose?: string;
+  /** v1.0.15 §35 — WHY the tool is being requested (command, target path,
+   *  working directory … — populated by the caller/force-approval layer). */
   reason?: string;
+  /** v1.0.15 §35 — the tool's environment (fs, vfs, freedom-node, js-function,
+   *  nodejs, mcp …) so the operator can judge the blast radius. */
+  environment?: string;
+  /** v1.0.15 §35 — the tool's registry description, rendered on the card. */
+  description?: string;
+  /** v1.0.15 §36 — lifecycle state of THIS approval (pending on request). */
+  state?: ApprovalState;
   /** Current subgoal title when the approval was raised from a subgoal. */
   subgoal?: string;
   requestedAt: string;
@@ -181,7 +198,7 @@ export interface ToolStats {
  *  Task Preview maps every value 1:1 (running → Running, timeout → Timed out,
  *  stopped → Stopped, …) via ExecutionStatusBadge — never a hard-coded
  *  running state. */
-export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'timeout' | 'cancelled' | 'stopped';
+export type ExecutionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'timeout' | 'cancelled' | 'stopped' | 'skipped';
 
 export interface ToolExecution {
   executionId: string;
@@ -652,6 +669,9 @@ export interface TrainingConfig {
   shuffle: boolean;
   earlyStoppingPatience?: number; // 0 = disabled
   vocabSize?: number; // hashed bag-of-words dimension (default 128)
+  /** v1.0.15 — hidden layer width of the classifier (default 64). Wider
+   *  hidden layers give the expanded v1.0.4 curriculum more capacity. */
+  hiddenUnits?: number; // 8..512
   /** v1.0.10 §29 — semantic model version for the produced checkpoint
    *  (e.g. '1.0.1'). When absent the legacy tc-<job> version is kept. */
   modelVersion?: string;

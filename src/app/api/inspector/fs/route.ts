@@ -488,7 +488,19 @@ export async function POST(req: Request) {
       }
 
       case 'search': {
-        const start = resolveConfined(requireString(body.path, 'path'));
+        // v1.0.15 §30/§30.1 — ROOT CAUSE FIX for "path" must be a non-empty
+        // string (INVALID_PARAMS): the FS Inspector LANDS on the real-FS root,
+        // whose canonical relative path is '' — that is the ROOT, not a
+        // missing value. An empty/missing path therefore means "search from
+        // the current FS root/working directory" ('.') and must NEVER reach
+        // the filesystem APIs as an empty string. §30.2 — an explicitly
+        // invalid value (wrong type / whitespace-only) still gets a structured
+        // validation error instead of a generic low-level throw.
+        if (body.path !== undefined && body.path !== null && typeof body.path !== 'string') {
+          throw new FsInspectorError('INVALID_PARAMS', '"path" must be a string.');
+        }
+        const rawSearchPath = typeof body.path === 'string' ? body.path.trim() : '';
+        const start = resolveConfined(rawSearchPath === '' ? '.' : rawSearchPath);
         const query = requireString(body.query, 'query');
         const depth = typeof body.depth === 'number' && Number.isFinite(body.depth)
           ? Math.max(0, Math.min(SEARCH_MAX_DEPTH, Math.floor(body.depth)))

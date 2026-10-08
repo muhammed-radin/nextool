@@ -444,7 +444,14 @@ export async function POST(req: Request) {
       }
 
       case 'search': {
-        const start = vfs.stat(normalizeVirtualPath(requireString(body.path, 'path'))).path;
+        // v1.0.15 §30/§30.1 — an empty/missing path means "search from the
+        // VFS root" ('/') — never an INVALID_PARAMS from the default landing
+        // state. Explicit wrong types are rejected with a structured error.
+        if (body.path !== undefined && body.path !== null && typeof body.path !== 'string') {
+          throw new VirtualFsError('INVALID_PARAMS', '"path" must be a string.');
+        }
+        const rawSearchPath = typeof body.path === 'string' ? body.path.trim() : '';
+        const start = vfs.stat(normalizeVirtualPath(rawSearchPath === '' ? '/' : rawSearchPath)).path;
         const query = requireString(body.query, 'query');
         const depth = typeof body.depth === 'number' && Number.isFinite(body.depth)
           ? Math.max(0, Math.min(SEARCH_MAX_DEPTH, Math.floor(body.depth)))

@@ -1,29 +1,44 @@
 /**
- * NexTool v1.0.13 §2.5 — FS Inspector OPERATOR TERMINAL (real FS).
+ * NexTool v1.0.15 §37-§43 — FS Inspector REAL TERMINAL (sessions) + the
+ * v1.0.13 one-shot exec (kept for compatibility).
  *
- * POST /api/inspector/terminal  { cwd: string(relative), command: string }
- *   → { stdout, stderr, code, signal, truncated, timedOut, cwd }
+ * GET  /api/inspector/terminal
+ *      → availability probe + live session list (id, pid, cwd, status,
+ *        startedAt, exit code — the process lifecycle, §41).
  *
- * The operator explicitly opened the real-FS inspector (spec §19 — the fs /
- * freedom-node side of the environment model). This route executes the given
- * command through /bin/bash with:
- *  - cwd confined to the runtime working directory (SAME containment contract
- *    as the fs route: NUL refused, resolve()-normalized, realpath-pinned —
- *    symlinks that leave the cwd are refused with FS_ACCESS);
- *  - a minimal environment (PATH/HOME/TERM — no provider or runtime secrets);
- *  - a HARD 30 s timeout (SIGKILL) — a terminal command can never stall the
- *    runtime;
- *  - stdout/stderr capped at 256 KiB each (truncated flag set honestly).
+ * POST /api/inspector/terminal — TWO contracts:
  *
- * stdin is ignored (non-interactive). The MCP environment has NO route to
- * this terminal — MCP tools are confined to the shared VFS (spec §4.3), and
- * the VFS "terminal" in the console maps its commands onto the VFS API.
+ * 1. SESSION OPS (spec §38-§41 — the real interactive terminal):
+ *      { op: 'create',  cwd? }                    → spawn a persistent
+ *        interactive bash (real process, PID, streaming via the SSE stream
+ *        route, stdin, Ctrl+C, cwd tracking).
+ *      { op: 'write',   sessionId, input }        → write a line to the
+ *        process stdin (commands AND input to INTERACTIVE programs — read /
+ *        npm init / confirmation prompts are supported, never one-shot).
+ *      { op: 'interrupt', sessionId }             → REAL Ctrl+C: SIGINT to
+ *        the child process group + \x03 on stdin.
+ *      { op: 'restart', sessionId }               → kill + respawn in place.
+ *      { op: 'clear',   sessionId }               → wipe the replay buffer.
+ *      { op: 'close',   sessionId }               → terminate + remove.
+ *
+ * 2. LEGACY ONE-SHOT (v1.0.13 §2.5 — unchanged behavior):
+ *      { cwd, command } → bash -c with a 30 s hard timeout, 256 KiB output
+ *        caps and cwd containment. Retained for API compatibility.
+ *
+ * The MCP environment has NO route to this terminal — MCP tools are confined
+ * to the shared VFS (spec §4.3); the VFS "terminal" maps its commands onto
+ * the VFS API. This surface is the REAL filesystem — the console labels it
+ * REAL FILESYSTEM (§42).
  */
 import { spawn } from 'node:child_process';
 import nodePath from 'node:path';
 import fsSync from 'node:fs';
 import { fail } from '@/lib/nexool/api-helpers';
 import { FsInspectorError, resolveConfined, fsErrorStatus } from '@/lib/nexool/inspector/fs-containment';
+import {
+  closeSession, createTerminalSession, clearSession, getTerminalSession,
+  interruptSession, listTerminalSessions, restartSession, writeToSession,
+} from '@/lib/nexool/inspector/terminal-sessions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,20 +47,84 @@ const MAX_OUTPUT_BYTES = 256 * 1024;
 const HARD_TIMEOUT_MS = 30_000;
 
 export async function GET() {
-  // Availability probe for the UI (terminal tab badge).
-  return Response.json({ ok: true, data: { available: true, shell: '/bin/bash', cwd: '.', timeoutMs: HARD_TIMEOUT_MS } });
+  return Response.json({
+    ok: true,
+    data: {
+      available: true,
+      shell: '/bin/bash',
+      sessions: listTerminalSessions(),
+      oneShotTimeoutMs: HARD_TIMEOUT_MS,
+    },
+  });
+}
+
+function needSession(sessionId: unknown) {
+  if (typeof sessionId !== 'string' || !sessionId.trim()) {
+    throw new FsInspectorError('INVALID_PARAMS', '"sessionId" must be a non-empty string.');
+  }
+  const session = getTerminalSession(sessionId);
+  if (!session) throw new FsInspectorError('ENOTFOUND', `Terminal session "${sessionId}" not found (it may have been closed).`);
+  return session;
 }
 
 export async function POST(req: Request) {
-  let body: { cwd?: unknown; command?: unknown };
+  let body: Record<string, unknown>;
   try {
-    body = (await req.json()) as { cwd?: unknown; command?: unknown };
+    body = (await req.json()) as Record<string, unknown>;
   } catch {
     return fail('INVALID_PARAMS', 'Request body must be valid JSON.', 400);
   }
 
+  const op = typeof body.op === 'string' ? body.op : undefined;
+
+  // ---------- session ops (v1.0.15 §37-§43) ----------
+  if (op) {
+    try {
+      switch (op) {
+        case 'create': {
+          const session = createTerminalSession(typeof body.cwd === 'string' ? body.cwd : undefined);
+          return Response.json({ ok: true, data: { session } });
+        }
+        case 'write': {
+          const session = needSession(body.sessionId);
+          const input = typeof body.input === 'string' ? body.input : '';
+          const written = writeToSession(session, input);
+          if (!written) return fail('FS_TERMINAL_NOT_RUNNING', 'The session process is not running — restart the session.', 409);
+          return Response.json({ ok: true, data: { written: true } });
+        }
+        case 'interrupt': {
+          const session = needSession(body.sessionId);
+          const ok = interruptSession(session);
+          return Response.json({ ok: true, data: { interrupted: ok } });
+        }
+        case 'restart': {
+          const session = needSession(body.sessionId);
+          const sessionInfo = restartSession(session);
+          return Response.json({ ok: true, data: { session: sessionInfo } });
+        }
+        case 'clear': {
+          const session = needSession(body.sessionId);
+          clearSession(session);
+          return Response.json({ ok: true, data: { cleared: true } });
+        }
+        case 'close': {
+          const session = needSession(body.sessionId);
+          closeSession(session);
+          return Response.json({ ok: true, data: { closed: true } });
+        }
+        default:
+          return fail('INVALID_PARAMS', `Unknown terminal op "${op}".`, 400);
+      }
+    } catch (err) {
+      if (err instanceof FsInspectorError) return fail(err.code, err.message, fsErrorStatus(err.code));
+      const message = err instanceof Error ? err.message : 'terminal op failed';
+      return fail('TERMINAL_CAP', message, 429);
+    }
+  }
+
+  // ---------- legacy one-shot exec (v1.0.13 §2.5, unchanged) ----------
   const command = typeof body.command === 'string' ? body.command.trim() : '';
-  if (!command) return fail('INVALID_PARAMS', '"command" must be a non-empty string.', 400);
+  if (!command) return fail('INVALID_PARAMS', '"command" (or "op") must be provided.', 400);
   const cwdRel = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : '.';
 
   let cwd: string;

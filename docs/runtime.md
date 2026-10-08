@@ -26,8 +26,8 @@ stateDiagram-v2
     running --> stopped: stop requested
     running --> waiting: live mode parks between cycles
     running --> awaiting_approval: tool requires approval (v1.0.6)
-    awaiting_approval --> running: user Allow
-    awaiting_approval --> stopped: Deny-with-stop · 5-min timeout · stop requested
+    awaiting_approval --> running: user Accept — or user Skip (records skipped, continues)
+    awaiting_approval --> stopped: user Reject escalation ladder (#4) · 5-min timeout · stop requested
     running --> paused: POST /pause (v1.0.6)
     waiting --> paused: POST /pause (v1.0.6)
     awaiting_approval --> paused: POST /pause (approval stays unresolved)
@@ -181,3 +181,32 @@ instead of failing.
 - [Tool Runtime](../tools/tool-runtime.md) — execution mechanics in depth.
 - [Scheduler](scheduler.md) — Live Mode wait/wake.
 - [Events](events.md) — the full event catalog.
+
+
+## Tool approval states (v1.0.15 §31-§36)
+
+Approvals are an explicit state machine — never a single boolean:
+
+```
+pending ──→ accepted   (ACCEPT: execute the tool normally, continue the plan)
+pending ──→ skipped    (SKIP: do NOT execute; the execution row records
+                        `skipped`/SKIPPED_BY_USER and the plan continues to
+                        the next logical step — the planner receives
+                        "Tool X was skipped by the user"; the denial ladder
+                        is NOT burned)
+pending ──→ rejected   (REJECT: execution blocked (`tool.execution.blocked`,
+                        cause user_denied); the v1.0.13 escalation ladder
+                        applies — #1 understand → #2 change plan → #3 final
+                        revision → #4 stop; the planner must never repeat the
+                        same rejected action indefinitely)
+pending ──→ cancelled  (task stopped while waiting)
+```
+
+- The console approval card (`approval-card.tsx`) renders [Skip] [Reject]
+  [Accept] with tool name, environment, description, purpose (why), the
+  target command/working directory (the `reason` — for fs.cmd this is the
+  exact command and cwd), params JSON and optional feedback.
+- Every decision is persisted as a HistoryEntry row (`skipped` / `cancelled`
+  + decision metadata) and reaches the planner's `knownFailures` context.
+- Wire API: `POST /api/approvals { approvalId, decision: 'accept' | 'skip' |
+  'reject', feedback? }` (`allow`/`deny` remain accepted for compatibility).

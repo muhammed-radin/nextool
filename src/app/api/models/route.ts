@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { getMetrics } from '@/lib/nexool/eventbus';
 import { CORE_MODULE_NAME, CORE_MODULE_VERSION, APP_VERSION } from '@/lib/nexool/version';
 import { parquetAdapterInfo } from '@/lib/nexool/datasets/parquet';
+import { getActiveTrainedModel } from '@/lib/nexool/training/current-model';
 import * as tf from '@tensorflow/tfjs';
 import type { ActiveEngineInfo, ModelPackageInfo } from '@/lib/nexool/types';
 
@@ -23,7 +24,7 @@ export async function GET() {
     coreCalls: metrics.coreCalls,
     avgLatencyMs: metrics.coreCalls > 0 ? Math.round(metrics.totalCoreLatencyMs / metrics.coreCalls) : 0,
     lastDecisionAt: metrics.lastDecisionAt,
-    notes: `v1.0.2: TensorFlow.js ${tf.version.tfjs ?? ''} is installed (CPU backend) — real training, benchmark inference and native model packaging are available. The LLM CoreModule remains the active decision engine; the heuristic-fallback matcher covers SDK outages.`,
+    notes: `TensorFlow.js ${tf.version.tfjs ?? ''} is installed (CPU backend) — real training, benchmark inference and native model packaging are available. The LLM CoreModule is the active decision engine; since v1.0.15 the CURRENT TRAINED CHECKPOINT (see currentModel) feeds a tool suggestion into every CoreModule decision and serves as the first fallback when the LLM is unavailable; the heuristic-fallback matcher covers outages without an active checkpoint.`,
   };
 
   const rows = await db.modelRecord.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
@@ -46,9 +47,15 @@ export async function GET() {
     };
   });
 
+  // v1.0.15 — the CURRENT TRAINED MODEL (registry status='active'): the
+  // checkpoint the runtime classifier actually serves. Reported separately
+  // from the llm-core decision engine and from the application version.
+  const currentModel = await getActiveTrainedModel();
+
   return ok({
     engine,
     packages,
+    currentModel,
     adapters: { tfjs: true, nextoolManifest: true, parquet: parquet.available },
     appVersion: APP_VERSION,
   });

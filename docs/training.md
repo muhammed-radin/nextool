@@ -259,3 +259,35 @@ model id and metrics (see [CLI](../operations/cli.md#train--train-a-tool-selecti
 - Log history is capped at 400 lines per job; metrics are kept in full.
 - Feedback memory (`feedback_<taskId>` entries) remains a runtime-learning mechanism and
   is **not** training data for this engine — only imported datasets are consumed.
+
+
+## v1.0.15 — the v1.0.4 training release (THE LEARNED MIND)
+
+- **Curriculum**: `config/training/seed-dataset-v1.0.4.json` (851 examples, 46
+  categories) — the full v1.0.3 curriculum plus every v1.0.15 knowledge domain
+  (coding, error understanding, GK, 14 coding languages, creative/AskSelf,
+  complex content, patterns, self-understanding, PCB/electronics/electricity,
+  software/computer engineering, design, intelligent improvement, tool
+  title+body+environment, AskSelf/AskForUser, user events, approval states,
+  terminal environments, planner/recovery, JSON). All 33 registered tools now
+  appear in every split (v1.0.3 only covered 25 — fs.find/copy/move/cmd/
+  download/upload and ask.user were added in v1.0.13/v1.0.14 and had never
+  been trained).
+- **Featurization**: hashed bag-of-words + ADJACENT-TOKEN BIGRAMS
+  (L2-normalized). One `vectorize()` implementation is shared by training and
+  every inference path — train/serve can never drift.
+- **Capacity**: `hiddenUnits` (8-512, default 64) in `TrainingConfig`; CLI
+  flags `--vocab` / `--hidden-units` / `--model-version`.
+- **§53 improvement loop (measured)**: 54% → 51% (harder split) → 57%
+  (bigrams) → 59% (vocab 1024) → 58% (hidden 128, best val 0.6628 — selected
+  as canonical by best-val-accuracy checkpointing). Every pass persisted in
+  the benchmark run history.
+- **Canonical v1.0.4 checkpoint**: 135,457 parameters, 33 classes, vocab 1024,
+  trained with batch 16 / lr 0.004 / early stop 12. Exported to
+  `model-checkpoints/v1.0.4/` (`model.zip` + `model.nextool`) by
+  `bun scripts/release-checkpoint-v104.ts` and validated by real load +
+  real inference (see [Release 1.0.15](release-1.0.15.md)).
+- **Current-model registry**: `training/current-model.ts` — training
+  completion AUTO-MARKS the fresh checkpoint CURRENT; the runtime classifier
+  feeds a hint into every CoreModule decision and is the first fallback when
+  the LLM is unavailable.

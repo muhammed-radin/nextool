@@ -243,6 +243,25 @@ export default function ModelsView() {
             {info.engine.notes ? <p className="mt-3 text-xs italic text-muted-foreground">{info.engine.notes}</p> : null}
           </section>
 
+          {/* v1.0.15 — CURRENT TRAINED MODEL (registry status='active') */}
+          {info.currentModel ? (
+            <section aria-label="Current trained model" className="glass-panel rounded-lg p-4">
+              <SectionTitle title="Current trained model" desc="The checkpoint the runtime classifier serves — it feeds a tool suggestion into every CoreModule decision and is the first fallback when the LLM is unavailable." />
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="font-mono text-xs font-semibold text-foreground">{info.currentModel.name}</span>
+                <Badge variant="outline" className="border-emerald-400/30 font-mono text-[10px] text-emerald-300">v{info.currentModel.version}</Badge>
+                <Badge variant="outline" className="border-amber-400/30 font-mono text-[10px] text-amber-300">CURRENT</Badge>
+                <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">{info.currentModel.classes.length} classes</Badge>
+                {info.currentModel.vocabSize ? <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">vocab {info.currentModel.vocabSize}</Badge> : null}
+                {info.currentModel.parameterCount ? <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">{info.currentModel.parameterCount.toLocaleString()} params</Badge> : null}
+                {info.currentModel.datasetVersion ? <Badge variant="outline" className="border-sky-400/25 font-mono text-[10px] text-sky-300/90">dataset v{info.currentModel.datasetVersion}</Badge> : null}
+              </div>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                trained {info.currentModel.trainedAt ? <TimeAgo iso={info.currentModel.trainedAt} /> : '—'} · checkpoint exported to model-checkpoints/v{info.currentModel.version}/ (model.zip + model.nextool)
+              </p>
+            </section>
+          ) : null}
+
           {/* Adapters — honest status */}
           <section aria-label="Adapter availability" className="glass-panel rounded-lg p-4">
             <SectionTitle title="Adapters" desc="Honest environment capability report — nothing is faked." />

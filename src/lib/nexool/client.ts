@@ -386,6 +386,12 @@ export interface PendingApprovalDTO {
   params: Record<string, unknown>;
   purpose?: string;
   reason?: string;
+  /** v1.0.15 §35 — tool environment (fs, freedom-node, mcp …) on the card. */
+  environment?: string;
+  /** v1.0.15 §35 — tool registry description on the card. */
+  description?: string;
+  /** v1.0.15 §36 — explicit approval state machine (pending on request). */
+  state?: 'pending' | 'accepted' | 'skipped' | 'rejected' | 'cancelled';
   subgoal?: string;
   requestedAt: string;
 }
@@ -393,8 +399,13 @@ export interface PendingApprovalDTO {
 export const listApprovals = (taskId?: string) =>
   apiFetch<{ approvals: PendingApprovalDTO[] }>(`/api/approvals${taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''}`);
 
-export const resolveApprovalRequest = (approvalId: string, decision: 'allow' | 'deny', feedback?: string) =>
-  apiFetch<{ resolved: boolean; decision?: string; reason?: string }>('/api/approvals', body({ approvalId, decision, ...(feedback ? { feedback } : {}) }));
+/**
+ * v1.0.15 §31-§34 — resolve an approval with the THREE operator choices:
+ * 'accept' (execute + continue), 'skip' (record skipped + continue) or
+ * 'reject' (block + escalation ladder). 'allow'/'deny' remain accepted.
+ */
+export const resolveApprovalRequest = (approvalId: string, decision: 'accept' | 'skip' | 'reject' | 'allow' | 'deny', feedback?: string) =>
+  apiFetch<{ resolved: boolean; decision?: string; state?: string; reason?: string }>('/api/approvals', body({ approvalId, decision, ...(feedback ? { feedback } : {}) }));
 
 export interface PendingPromptDTO {
   promptId: string;
@@ -716,9 +727,25 @@ export const listImages = (params: { limit?: number } = {}) =>
 
 // ---------- Models ----------
 
+export interface CurrentTrainedModelInfo {
+  id: string;
+  name: string;
+  version: string;
+  format: string;
+  classes: string[];
+  vocabSize: number | null;
+  parameterCount: number | null;
+  datasetVersion: string | null;
+  finalMetrics: Record<string, unknown> | null;
+  trainedAt: string;
+}
+
 export interface ModelsInfo {
   engine: ActiveEngineInfo;
   packages: ModelPackageInfo[];
+  /** v1.0.15 — the CURRENT TRAINED MODEL (registry status='active'): the
+   *  checkpoint the runtime classifier serves (CoreModule hint + fallback). */
+  currentModel?: CurrentTrainedModelInfo | null;
   adapters: { tfjs: boolean; nextoolManifest: boolean; parquet: boolean };
   /** v1.0.2: application version from the runtime. */
   appVersion?: string;

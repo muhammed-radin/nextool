@@ -21,6 +21,7 @@ import { useConsoleStore } from '../console-store';
 import { useGlobalStream } from '../providers';
 import { ApiClientError, answerChoice, answerConfirmation, answerPrompt, dismissAlert, getLiveState, getTaskDetail, injectEnvEvent, listAlerts, listApprovals, listChoices, listConfirmations, listLimitContinuations, listPrompts, listTasks, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, stopTask } from '@/lib/nexool/client';
 import type { PendingAlertDTO, PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
+import { ApprovalCard } from '@/components/console/approval-card';
 import type { GlobalLiveState, NexToolEvent, TaskSummary } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { ServerCard } from '../server-card';
@@ -63,7 +64,7 @@ function LiveTaskCard({ data, taskEvents, approvals, alerts, prompts, confirmati
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   pauseResumeBusy: boolean;
-  onResolveApproval: (approvalId: string, decision: 'allow' | 'deny', feedback?: string) => void;
+  onResolveApproval: (approvalId: string, decision: 'accept' | 'skip' | 'reject', feedback?: string) => void;
   resolvingApproval: boolean;
   onDismissAlert: (alertId: string) => void;
   onAnswerPrompt: (promptId: string, value: string | null) => void;
@@ -82,7 +83,6 @@ function LiveTaskCard({ data, taskEvents, approvals, alerts, prompts, confirmati
   const interval = detail?.config?.liveIntervalMs;
   const [previewOpen, setPreviewOpen] = useState(false);
   const [asTerminal, setAsTerminal] = useState<boolean | null>(null);
-  const [denyFeedback, setDenyFeedback] = useState<string>('');
   const [promptAnswer, setPromptAnswer] = useState<string>('');
   const paused = summary.status === 'paused';
   // v1.0.14 — the monitor shows the LIVE queue (queued + processing only);
@@ -190,46 +190,12 @@ function LiveTaskCard({ data, taskEvents, approvals, alerts, prompts, confirmati
         </Button>
       </div>
 
-      {/* v1.0.6 §9.6 — approval request: tool, purpose, params, subgoal, Allow/Deny */}
+      {/* v1.0.15 §31-§35 — approval request: [Skip] [Reject] [Accept] with
+          tool description, environment, params, target/reason and subgoal. */}
       {approvals.length > 0 ? (
         <div className="mt-3 space-y-2" role="alert">
           {approvals.map((a) => (
-            <div key={a.approvalId} className="rounded-md border border-amber-400/30 bg-amber-400/[0.06] p-3">
-              <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-amber-300">
-                <ShieldAlert className="size-3.5" aria-hidden /> approval required
-              </p>
-              <p className="mt-1 break-words font-mono text-xs text-foreground">{a.tool}</p>
-              {a.purpose ? <p className="mt-0.5 break-words text-[11px] text-muted-foreground">purpose: {a.purpose}</p> : null}
-              {a.subgoal ? <p className="mt-0.5 break-words text-[11px] text-muted-foreground">subgoal: {a.subgoal}</p> : null}
-              <pre className="glass-inset nextool-scroll mt-1.5 max-h-24 overflow-auto rounded p-2 font-mono text-[10px] text-slate-300">{JSON.stringify(a.params, null, 2)}</pre>
-              <Input
-                value={denyFeedback}
-                onChange={(e) => setDenyFeedback(e.target.value)}
-                placeholder="Optional: why deny? (feedback becomes a runtime event)"
-                className="mt-2 min-h-9 border-white/[0.09] bg-white/[0.04] text-xs"
-                aria-label={`Optional denial feedback for ${a.tool}`}
-              />
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <Button
-                  size="sm"
-                  disabled={resolvingApproval}
-                  onClick={() => onResolveApproval(a.approvalId, 'allow')}
-                  className="min-h-11 border-emerald-400/40 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
-                  aria-label={`Allow ${a.tool}`}
-                >
-                  {resolvingApproval ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Check className="size-3.5" aria-hidden />} Allow
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={resolvingApproval}
-                  onClick={() => onResolveApproval(a.approvalId, 'deny', denyFeedback.trim() || undefined)}
-                  className="min-h-11 border-rose-500/40 text-rose-300 hover:bg-rose-500/10"
-                  aria-label={`Deny ${a.tool}`}
-                >
-                  <X className="size-3.5" aria-hidden /> Deny
-                </Button>
-              </div>
-            </div>
+            <ApprovalCard key={a.approvalId} approval={a} busy={resolvingApproval} onResolve={onResolveApproval} />
           ))}
         </div>
       ) : null}
@@ -653,15 +619,20 @@ export default function LiveMonitorView() {
     }
   };
 
-  // v1.0.6 §9.6 — Allow executes; Deny skips the tool (optional feedback becomes an event).
-  const resolveApprovalById = async (approvalId: string, decision: 'allow' | 'deny', feedback?: string) => {
+  // v1.0.15 §31-§34 — Accept executes; Skip records `skipped` + continues;
+  // Reject blocks (escalation ladder). Optional feedback becomes an event.
+  const resolveApprovalById = async (approvalId: string, decision: 'accept' | 'skip' | 'reject', feedback?: string) => {
     setResolvingApproval(true);
     try {
       const res = await resolveApprovalRequest(approvalId, decision, feedback);
       if (res.resolved) {
-        toast.success(decision === 'allow' ? 'Tool approved' : 'Tool denied', {
-          description: decision === 'allow' ? 'Execution continues.' : 'The tool is skipped and the task plan continues.',
-        });
+        const label = decision === 'accept' ? 'Tool accepted' : decision === 'skip' ? 'Tool skipped' : 'Tool rejected';
+        const desc = decision === 'accept'
+          ? 'Executing; the plan continues.'
+          : decision === 'skip'
+            ? 'Not executed — marked skipped; the plan continues with the next logical step.'
+            : 'Not executed — the planner must revise the plan or stop.';
+        toast.success(label, { description: desc });
       } else {
         toast.info('Approval no longer pending', { description: res.reason ?? 'It may have timed out or been resolved elsewhere.' });
       }
