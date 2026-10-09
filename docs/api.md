@@ -704,7 +704,7 @@ severity, resource, message }] }`. Reports clear errors — never creates replac
 
 ## Documentation
 
-### GET /api/docs — `{ version: APP_VERSION (dynamic — reads src/lib/nexool/version.ts, "1.0.14" at this release), count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: APP_VERSION (dynamic — reads src/lib/nexool/version.ts, "1.0.16" at this release), count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`

@@ -21,7 +21,7 @@ export async function PUT(req: Request, { params }: Params) {
   const parsed = await parseBody(req, connectorCredentialsSchema);
   if (parsed.error) return parsed.error;
   try {
-    const connector = await setCredentials(decodeURIComponent(id), parsed.data);
+    const connector = await setCredentials(decodeURIComponent(id), { ...parsed.data, values: (parsed.data.values ?? {}) as Record<string, unknown> });
     return ok(connector);
   } catch (err) {
     if (err instanceof McpConnectorFailure) {

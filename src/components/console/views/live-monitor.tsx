@@ -22,6 +22,7 @@ import { useGlobalStream } from '../providers';
 import { ApiClientError, answerChoice, answerConfirmation, answerPrompt, dismissAlert, getLiveState, getTaskDetail, injectEnvEvent, listAlerts, listApprovals, listChoices, listConfirmations, listLimitContinuations, listPrompts, listTasks, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, stopTask } from '@/lib/nexool/client';
 import type { PendingAlertDTO, PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
 import { ApprovalCard } from '@/components/console/approval-card';
+import { LimitContinuationCard } from '../limit-continuation-card';
 import type { GlobalLiveState, NexToolEvent, TaskSummary } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { ServerCard } from '../server-card';
@@ -366,38 +367,16 @@ function LiveTaskCard({ data, taskEvents, approvals, alerts, prompts, confirmati
         </div>
       ) : null}
 
-      {/* v1.0.13 — safety-limit continuation: grant extra budget or end the task */}
+      {/* v1.0.16 §2 — safety-limit continuation: shared actionable dialog */}
       {continuations.length > 0 ? (
         <div className="mt-3 space-y-2">
           {continuations.map((lc) => (
-            <div key={lc.continuationId} className="rounded-md border border-amber-400/30 bg-amber-400/[0.05] p-3">
-              <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-amber-300">
-                <Gauge className="size-3.5" aria-hidden /> safety limit · {lc.limitKind}
-              </p>
-              <p className="mt-1 break-words text-xs text-foreground">
-                iterations {lc.iterations}/{lc.maxIterations} · tool calls {lc.toolCalls}/{lc.safetyLimit} — continue with +{lc.extraBudget} more of each?
-              </p>
-              <div className="mt-2 flex gap-2">
-                <Button
-                  size="sm"
-                  disabled={resolvingContinuation}
-                  onClick={() => onResolveContinuation(lc.continuationId, 'continue')}
-                  className="min-h-9 border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20"
-                >
-                  <Check className="size-3.5" aria-hidden /> Continue +{lc.extraBudget}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={resolvingContinuation}
-                  onClick={() => onResolveContinuation(lc.continuationId, 'deny')}
-                  className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10"
-                >
-                  <X className="size-3.5" aria-hidden /> End task
-                </Button>
-              </div>
-              <p className="mt-2 text-[10px] text-muted-foreground">denying ends the task as limit_reached · auto-denied after 5 min</p>
-            </div>
+            <LimitContinuationCard
+              key={lc.continuationId}
+              continuation={lc}
+              busy={resolvingContinuation}
+              onResolve={onResolveContinuation}
+            />
           ))}
         </div>
       ) : null}

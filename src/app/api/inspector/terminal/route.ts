@@ -12,9 +12,12 @@
  *      { op: 'create',  cwd? }                    → spawn a persistent
  *        interactive bash (real process, PID, streaming via the SSE stream
  *        route, stdin, Ctrl+C, cwd tracking).
- *      { op: 'write',   sessionId, input }        → write a line to the
- *        process stdin (commands AND input to INTERACTIVE programs — read /
- *        npm init / confirmation prompts are supported, never one-shot).
+ *      { op: 'write',   sessionId, input, raw? }  → write to the process
+ *        stdin. raw:true passes bytes verbatim (the xterm.js keystroke
+ *        bridge — partial lines, arrows, \x03 Ctrl+C, Tab); raw:false (or
+ *        omitted) is line mode for API compatibility. Input reaches
+ *        INTERACTIVE programs — read / npm init / confirmation prompts are
+ *        supported, never one-shot.
  *      { op: 'interrupt', sessionId }             → REAL Ctrl+C: SIGINT to
  *        the child process group + \x03 on stdin.
  *      { op: 'restart', sessionId }               → kill + respawn in place.
@@ -32,13 +35,17 @@
  */
 import { spawn } from 'node:child_process';
 import nodePath from 'node:path';
-import fsSync from 'node:fs';
+import fsSync, { existsSync } from 'node:fs';
 import { fail } from '@/lib/nexool/api-helpers';
 import { FsInspectorError, resolveConfined, fsErrorStatus } from '@/lib/nexool/inspector/fs-containment';
 import {
   closeSession, createTerminalSession, clearSession, getTerminalSession,
   interruptSession, listTerminalSessions, restartSession, writeToSession,
+  PTY_COLS, PTY_ROWS,
 } from '@/lib/nexool/inspector/terminal-sessions';
+
+/** util-linux script availability (mirrors the session manager probe). */
+const SCRIPT_BIN = existsSync('/usr/bin/script') ? '/usr/bin/script' : existsSync('/bin/script') ? '/bin/script' : null;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,6 +59,8 @@ export async function GET() {
     data: {
       available: true,
       shell: '/bin/bash',
+      transport: SCRIPT_BIN ? 'pty' : 'pipes',
+      pty: { cols: PTY_COLS, rows: PTY_ROWS },
       sessions: listTerminalSessions(),
       oneShotTimeoutMs: HARD_TIMEOUT_MS,
     },
@@ -88,7 +97,8 @@ export async function POST(req: Request) {
         case 'write': {
           const session = needSession(body.sessionId);
           const input = typeof body.input === 'string' ? body.input : '';
-          const written = writeToSession(session, input);
+          const raw = body.raw === true;
+          const written = writeToSession(session, input, raw);
           if (!written) return fail('FS_TERMINAL_NOT_RUNNING', 'The session process is not running — restart the session.', 409);
           return Response.json({ ok: true, data: { written: true } });
         }
@@ -154,6 +164,7 @@ export async function POST(req: Request) {
           HOME: cwd,
           TERM: 'dumb',
           LANG: 'C.UTF-8',
+          NODE_ENV: process.env.NODE_ENV,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

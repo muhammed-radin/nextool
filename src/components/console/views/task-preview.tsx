@@ -9,12 +9,13 @@
  * lg+ keeps the rich multi-column layout.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ApprovalCard } from '@/components/console/approval-card';
+import { LimitContinuationCard } from '../limit-continuation-card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -27,7 +28,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { useNexoolStream } from '@/hooks/use-nexool-stream';
 import { useConsoleStore } from '../console-store';
-import { ApiClientError, answerChoice, answerConfirmation, answerFileRequest, answerPrompt, dismissAlert, getTaskContext, getTaskDetail, getTaskEvents, getTaskExecutions, listAlerts, listApprovals, listChoices, listConfirmations, listFileRequests, listLimitContinuations, listPrompts, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
+import { ApiClientError, answerChoice, answerConfirmation, answerFileRequest, answerPrompt, dismissAlert, getTaskContext, getTaskDetail, getTaskEventsPage, getTaskExecutionsPage, listAlerts, listApprovals, listChoices, listConfirmations, listFileRequests, listLimitContinuations, listPrompts, listVerifications, pauseTask, resolveApprovalRequest, resolveLimitContinuationRequest, resolveVerificationRequest, resumeTask, sendTaskEvent, sendTaskFeedback, stopTask } from '@/lib/nexool/client';
 import type { PendingAlertDTO, PendingApprovalDTO, PendingChoiceDTO, PendingConfirmationDTO, PendingFileRequestDTO, PendingLimitContinuationDTO, PendingPromptDTO, PendingVerificationDTO } from '@/lib/nexool/client';
 import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '@/lib/nexool/types';
 import type { TaskDetail } from '@/lib/nexool/api-contract';
@@ -56,7 +57,7 @@ const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'stopped'
 /** Events that should refresh task detail/plan/executions immediately (v1.0.3 §2 + v1.0.6 §16 + v1.0.10 §21 + v1.0.11 §13). */
 const REFRESH_EVENT_RE = /^(tool\.(completed|failed|timeout|cancelled)|tool\.(approval|user_prompt|user_alert|confirm|auto_execution)|task\.(completed|failed|cancelled|started|paused|resumed|waiting)|planner\.(plan|parallel_batch|partial_failure|mode_selected|one_by_one_step_planned|one_by_one_step_completed|one_by_one_replanned|one_by_one_goal_reached|recovery_started|recovery_plan_built|recovery_attempt|recovery_succeeded|recovery_failed|recovery_exhausted|main_plan_resumed|main_plan_aborted)|subgoal\.created|live\.event\.|event\.(received|admitted|queued|processing|completed|rejected|ignored|failed|cancelled)|observer\.(event_wake|scheduled_tick|observed|feedback_applied)|core\.decision|user\.(message|feedback))/;
 
-function ExecutionCard({ ex }: { ex: ToolExecution }) {
+const ExecutionCard = memo(function ExecutionCard({ ex }: { ex: ToolExecution }) {
   // v1.0.9 §15.1/§15.3-§15.6 — the status comes from the execution record via
   // the ONE reusable badge (Pending/Running/Completed/Failed/Timed out/
   // Cancelled/Stopped). The "running…" duration placeholder renders ONLY for
@@ -89,7 +90,43 @@ function ExecutionCard({ ex }: { ex: ToolExecution }) {
       </Accordion>
     </div>
   );
-}
+});
+
+/**
+ * v1.0.16 §4.3 — timeline row: memoized, with the JSON payload rendered LAZILY
+ * (only when the row is expanded). Hundreds of rows no longer instantiate a
+ * JSON tree each — the historic per-event payload rendering was the main
+ * large-task degradation source.
+ */
+const TimelineRow = memo(function TimelineRow({ ev }: { ev: NexToolEvent }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="relative">
+      <span
+        aria-hidden
+        className={cn('absolute -left-[21px] top-1.5 size-2 rounded-full ring-2 ring-card', SOURCE_COLORS[ev.source] ?? 'bg-slate-600')}
+      />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="font-mono text-[10px] text-muted-foreground">[{fmtClock(ev.createdAt)}]</span>
+        <span className="rounded border border-white/[0.09] px-1 font-mono text-[9px] uppercase text-slate-300">{ev.source}</span>
+        <span className="rounded border border-white/[0.09] px-1 font-mono text-[9px] text-cyan-300/90">{ev.type}</span>
+        <span className="min-w-0 flex-1 truncate text-xs text-foreground/85">{ev.message}</span>
+        {ev.data ? (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            className="min-h-8 rounded border border-white/[0.09] px-1.5 font-mono text-[9px] text-slate-400 hover:text-sky-300"
+            aria-expanded={open}
+            aria-label={`Toggle payload for ${ev.type}`}
+          >
+            {open ? 'hide payload' : 'payload'}
+          </button>
+        ) : null}
+      </div>
+      {open && ev.data ? <JsonBlock value={ev.data} maxHeight="max-h-32" className="mt-1" /> : null}
+    </li>
+  );
+});
 
 function ExecutionsPanel({ executions }: { executions: ToolExecution[] | null }) {
   if (executions === null) {
@@ -157,6 +194,17 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const [executions, setExecutions] = useState<ToolExecution[] | null>(null);
   const [context, setContext] = useState<ContextComposition | null>(null);
   const [backfill, setBackfill] = useState<NexToolEvent[]>([]);
+  // v1.0.16 §4 — incremental 40-item loading state for the big collections.
+  const EVENTS_PAGE_SIZE = 40;
+  const EXECUTIONS_PAGE_SIZE = 40;
+  const [eventsCursor, setEventsCursor] = useState<string | null>(null);
+  const [eventsHasMore, setEventsHasMore] = useState(false);
+  const [eventsTotal, setEventsTotal] = useState<number | null>(null);
+  const [loadingOlderEvents, setLoadingOlderEvents] = useState(false);
+  const [execCursor, setExecCursor] = useState<string | null>(null);
+  const [execHasMore, setExecHasMore] = useState(false);
+  const [execTotal, setExecTotal] = useState<number | null>(null);
+  const [loadingOlderExec, setLoadingOlderExec] = useState(false);
 
   const [stopOpen, setStopOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -207,12 +255,20 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
     }
   };
 
-  // Backfill historical events from REST, then merge with live SSE (dedupe by id).
+  // v1.0.16 §4.1 — initial load: the MOST RECENT 40 events (paginated page),
+  // then merge with live SSE (dedupe by id). Older history loads on demand in
+  // 40-item batches — never the whole collection up front.
   useEffect(() => {
     let alive = true;
-    getTaskEvents(taskId, { limit: 200 })
-      .then((d) => {
-        if (alive) setBackfill(d);
+    setBackfill([]);
+    setEventsCursor(null);
+    getTaskEventsPage(taskId, { limit: EVENTS_PAGE_SIZE })
+      .then((page) => {
+        if (!alive) return;
+        setBackfill(page.items);
+        setEventsCursor(page.nextCursor);
+        setEventsHasMore(page.hasMore);
+        setEventsTotal(page.totalCount);
       })
       .catch(() => {
         /* honest: timeline will simply show live events only */
@@ -221,6 +277,26 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
       alive = false;
     };
   }, [taskId]);
+
+  const loadOlderEvents = useCallback(async () => {
+    if (!eventsCursor || loadingOlderEvents) return;
+    setLoadingOlderEvents(true);
+    try {
+      const page = await getTaskEventsPage(taskId, { limit: EVENTS_PAGE_SIZE, before: eventsCursor });
+      setBackfill((prev) => {
+        const seen = new Set(prev.map((e) => e.id));
+        const older = page.items.filter((e) => !seen.has(e.id));
+        return [...older, ...prev]; // prepend the older batch
+      });
+      setEventsCursor(page.nextCursor);
+      setEventsHasMore(page.hasMore);
+      setEventsTotal(page.totalCount);
+    } catch {
+      toast.error('Could not load older events');
+    } finally {
+      setLoadingOlderEvents(false);
+    }
+  }, [taskId, eventsCursor, loadingOlderEvents]);
 
   const taskEvents = useMemo(() => {
     const byId = new Map<string, NexToolEvent>();
@@ -242,15 +318,49 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   }, [taskId]);
 
   const loadSide = useCallback(async () => {
-    const [ex, ctx] = await Promise.allSettled([getTaskExecutions(taskId), getTaskContext(taskId)]);
+    // v1.0.16 §4.4 — the poll refreshes the NEWEST 40 executions (statuses
+    // change at the tail) and reconciles them into the loaded window; older
+    // pages are only fetched when the operator scrolls back. Context is a
+    // small object and refreshes as before.
+    const [ex, ctx] = await Promise.allSettled([getTaskExecutionsPage(taskId, { limit: EXECUTIONS_PAGE_SIZE }), getTaskContext(taskId)]);
     // v1.0.9 §15.9 — fold each fetched snapshot through the reconciler so a
     // stale running status can never overwrite a newer terminal one
     // (SSE-triggered refreshes and the 2.5s poll may interleave).
     if (ex.status === 'fulfilled') {
-      setExecutions((prev) => (prev ? reconcileExecutions(prev, ex.value) : ex.value));
+      const page = ex.value;
+      setExecutions((prev) => {
+        const merged = reconcileExecutions(prev ?? [], page.items);
+        return merged;
+      });
+      setExecHasMore(page.hasMore);
+      setExecTotal(page.totalCount);
+      // the cursor only follows the deepest LOADED page — polls never pull it
+      // back up to the newest window
+      setExecCursor((cur) => cur ?? page.nextCursor);
     }
     if (ctx.status === 'fulfilled') setContext(ctx.value);
   }, [taskId]);
+
+  /** v1.0.16 §4.1 — load the next-OLDER 40 executions on demand. */
+  const loadOlderExecutions = useCallback(async () => {
+    if (!execCursor || loadingOlderExec) return;
+    setLoadingOlderExec(true);
+    try {
+      const page = await getTaskExecutionsPage(taskId, { limit: EXECUTIONS_PAGE_SIZE, before: execCursor });
+      setExecutions((prev) => {
+        const seen = new Set((prev ?? []).map((e) => e.executionId));
+        const older = page.items.filter((e) => !seen.has(e.executionId));
+        return reconcileExecutions([...older, ...(prev ?? [])], []);
+      });
+      setExecCursor(page.nextCursor);
+      setExecHasMore(page.hasMore);
+      setExecTotal(page.totalCount);
+    } catch {
+      toast.error('Could not load older executions');
+    } finally {
+      setLoadingOlderExec(false);
+    }
+  }, [taskId, execCursor, loadingOlderExec]);
 
   // v1.0.6 §16 — pending approvals + prompts for THIS task (real approvalIds).
   // v1.0.8 §1.5 — plus pending confirmations.
@@ -782,7 +892,21 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
   const toolsSection = (
     <section aria-label="Tool calls" className="glass-panel rounded-lg p-4">
-      <SectionTitle icon={<Wrench className="size-4 text-sky-300" aria-hidden />} title="Tool calls" desc="Executions with params and results." />
+      <SectionTitle
+        icon={<Wrench className="size-4 text-sky-300" aria-hidden />}
+        title="Tool calls"
+        desc={execTotal !== null && execTotal > (executions?.length ?? 0)
+          ? `showing ${executions?.length ?? 0} of ${execTotal} — older executions load in 40-item batches`
+          : 'Executions with params and results.'}
+      />
+      {execHasMore ? (
+        <div className="mt-2">
+          <Button type="button" variant="outline" size="sm" className="min-h-9 w-full text-xs sm:w-auto" onClick={() => void loadOlderExecutions()} disabled={loadingOlderExec}>
+            {loadingOlderExec ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
+            Load 40 older executions
+          </Button>
+        </div>
+      ) : null}
       <div className="mt-3"><ExecutionsPanel executions={executions} /></div>
     </section>
   );
@@ -815,26 +939,28 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
   const timelineSection = (
     <section aria-label="Event timeline" className="glass-panel rounded-lg p-4">
-      <SectionTitle icon={<Radio className="size-4 text-sky-300" aria-hidden />} title="Events timeline" desc="This task's events — REST backfill + live stream (newest last)." />
+      <SectionTitle
+        icon={<Radio className="size-4 text-sky-300" aria-hidden />}
+        title="Events timeline"
+        desc={eventsTotal !== null && eventsTotal > taskEvents.length
+          ? `showing ${taskEvents.length} of ${eventsTotal} — older history loads in 40-item batches`
+          : 'This task\u2019s events — REST backfill + live stream (newest last).'}
+      />
+      {eventsHasMore ? (
+        <div className="mt-2">
+          <Button type="button" variant="outline" size="sm" className="min-h-9 w-full text-xs sm:w-auto" onClick={() => void loadOlderEvents()} disabled={loadingOlderEvents}>
+            {loadingOlderEvents ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <ChevronDown className="size-3.5" aria-hidden />}
+            Load 40 older events
+          </Button>
+        </div>
+      ) : null}
       <div className="mt-3">
         {taskEvents.length === 0 ? (
           <EmptyState title="No events for this task yet" hint="Runtime events appear here as the task executes." />
         ) : (
           <ol className="nextool-scroll relative max-h-96 space-y-2 overflow-y-auto border-l border-white/[0.08] pl-4 pr-1">
             {taskEvents.map((ev) => (
-              <li key={ev.id} className="relative">
-                <span
-                  aria-hidden
-                  className={cn('absolute -left-[21px] top-1.5 size-2 rounded-full ring-2 ring-card', SOURCE_COLORS[ev.source] ?? 'bg-slate-600')}
-                />
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-[10px] text-muted-foreground">[{fmtClock(ev.createdAt)}]</span>
-                  <span className="rounded border border-white/[0.09] px-1 font-mono text-[9px] uppercase text-slate-300">{ev.source}</span>
-                  <span className="rounded border border-white/[0.09] px-1 font-mono text-[9px] text-cyan-300/90">{ev.type}</span>
-                  <span className="min-w-0 flex-1 truncate text-xs text-foreground/85">{ev.message}</span>
-                </div>
-                {ev.data ? <JsonBlock value={ev.data} maxHeight="max-h-32" className="mt-1" /> : null}
-              </li>
+              <TimelineRow key={ev.id} ev={ev} />
             ))}
           </ol>
         )}
@@ -1305,27 +1431,18 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
           </div>
         ) : null}
 
-        {/* v1.0.13 — safety-limit continuation: grant extra budget or end the task */}
+        {/* v1.0.16 §2 — safety-limit continuation: actionable dialog with the
+            real numbers (current limit, usage, additional, new total) and a
+            backend-enforced 60-second response window. */}
         {continuations.length > 0 ? (
           <div className="mt-3 space-y-2">
             {continuations.map((lc) => (
-              <div key={lc.continuationId} className="rounded-md border border-amber-400/30 bg-amber-400/[0.05] p-3">
-                <p className="flex items-center gap-1.5 font-tech text-[10px] uppercase tracking-wider text-amber-300">
-                  <Gauge className="size-3.5" aria-hidden /> safety limit · {lc.limitKind}
-                </p>
-                <p className="mt-1 break-words text-xs text-foreground">
-                  iterations {lc.iterations}/{lc.maxIterations} · tool calls {lc.toolCalls}/{lc.safetyLimit} — continue with +{lc.extraBudget} more of each?
-                </p>
-                <div className="mt-2 flex gap-2">
-                  <Button size="sm" disabled={continuationBusy} onClick={() => void doResolveContinuation(lc.continuationId, 'continue')} className="min-h-9 border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20">
-                    <Check className="size-3.5" aria-hidden /> Continue +{lc.extraBudget}
-                  </Button>
-                  <Button size="sm" variant="outline" disabled={continuationBusy} onClick={() => void doResolveContinuation(lc.continuationId, 'deny')} className="min-h-9 border-rose-400/30 text-rose-300 hover:bg-rose-400/10">
-                    <X className="size-3.5" aria-hidden /> End task
-                  </Button>
-                </div>
-                <p className="mt-2 text-[10px] text-muted-foreground">denying ends the task as limit_reached · auto-denied after 5 min</p>
-              </div>
+              <LimitContinuationCard
+                key={lc.continuationId}
+                continuation={lc}
+                busy={continuationBusy}
+                onResolve={doResolveContinuation}
+              />
             ))}
           </div>
         ) : null}

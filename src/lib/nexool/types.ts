@@ -240,9 +240,21 @@ export interface CoreModuleOutput {
   reason: string; // concise operational explanation (NO chain-of-thought)
   missing?: string[]; // missing required params when clarification_required
   candidates?: CoreModuleCandidate[];
-  /** which engine produced the decision: llm-core | heuristic-fallback */
-  engine: 'llm-core' | 'heuristic-fallback';
+  /** which engine produced the decision: llm-core | heuristic-fallback |
+   *  trained-classifier:v<version> (v1.0.16 — the trained checkpoint is a
+   *  first-class fallback ladder step, so its engine tag is reported). */
+  engine: 'llm-core' | 'heuristic-fallback' | `trained-classifier:v${string}`;
   latencyMs: number;
+  /** v1.0.16 §7.3/§7.4 — WHY a fallback was used (only when engine !==
+   *  'llm-core'): provider failure, invalid structured output, unknown tool,
+   *  parameter validation failure, timeout. A valid no_tool from llm-core is
+   *  NOT a fallback and carries no reason. */
+  fallbackReason?: string;
+  /** v1.0.16 §7.4 — the engine the task asked for ('llm-core'), kept beside
+   *  `engine` so diagnostics can distinguish requested vs actual. */
+  requestedEngine?: 'llm-core';
+  /** v1.0.16 §7.4 — how many enabled tools were visible to the decision. */
+  toolCandidateCount?: number;
 }
 
 // ---------- Planning / State ----------
@@ -301,6 +313,10 @@ export interface MainState {
    *  optional reason the user supplied. */
   userDenialCount?: number;
   lastDenialReason?: string;
+  /** v1.0.16 §2 — extra TIME (ms) granted through approved timeout
+   *  continuations. Persisted so reloads/polling can never reset the
+   *  extension; the effective deadline is task start + original budget + this. */
+  grantedExtraTimeMs?: number;
 }
 
 /** v1.0.11 — recovery of a FAILED pre-plan step. The main plan is frozen

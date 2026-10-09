@@ -104,7 +104,19 @@ export interface ExportResult {
  * format=nextool → package.json (NexTool manifest) + model/ topology+shard + metadata.json
  */
 export async function exportModel(modelId: string, format: ExportFormat): Promise<ExportResult> {
-  const row = await db.modelRecord.findUnique({ where: { id: modelId } });
+  // v1.0.16 §8.1/§8.4 — 'current' resolves to the ACTIVE model record in ONE
+  // place so the Models UI, the export API and the CLI all agree. When no
+  // current model exists the caller gets a useful error instead of an
+  // unrelated model or a silent failure.
+  let row = await db.modelRecord.findUnique({ where: { id: modelId } });
+  if (!row && modelId === 'current') {
+    row = await db.modelRecord.findFirst({ where: { status: 'active' }, orderBy: { createdAt: 'desc' } });
+    if (!row) throw new Error('No current model is registered (no active checkpoint). Train a model first — the Training page or "nextool train".');
+  }
+  if (!row) {
+    const byName = await db.modelRecord.findMany({ where: { name: modelId }, orderBy: { createdAt: 'desc' }, take: 1 });
+    row = byName[0];
+  }
   if (!row) throw new Error(`Model not found: ${modelId}`);
 
   const manifest = JSON.parse(row.manifest) as Record<string, unknown>;

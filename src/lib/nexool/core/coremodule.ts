@@ -67,8 +67,16 @@ function buildSystemPrompt(): string {
   ].join('\n');
 }
 
-function buildUserMessage(input: DecideInput): string {
-  const tools = input.toolDefs.map((t) => ({
+/**
+ * v1.0.16 §6.3 — the TOOLS block only depends on the toolDefs array identity
+ * (static during a task run): cache the serialized JSON per reference instead
+ * of re-serializing every schema on every decision.
+ */
+const toolsBlockCache = new WeakMap<ToolDefinition[], string>();
+function serializeToolsBlock(toolDefs: ToolDefinition[]): string {
+  const hit = toolsBlockCache.get(toolDefs);
+  if (hit) return hit;
+  const tools = toolDefs.map((t) => ({
     name: t.name,
     description: t.description,
     purpose: t.purpose,
@@ -85,26 +93,23 @@ function buildUserMessage(input: DecideInput): string {
       })),
     },
   }));
+  const block = JSON.stringify(tools);
+  toolsBlockCache.set(toolDefs, block);
+  return block;
+}
+
+function buildUserMessage(input: DecideInput): string {
+  const toolsBlock = serializeToolsBlock(input.toolDefs);
 
   const ctx = input.contextBundle ?? {};
-  const payload = JSON.stringify({
-    objective: input.objective,
-    request: input.request,
-    goal: input.goal,
-    subgoal: input.activeSubgoal?.title,
-    TOOLS: tools,
-    CONTEXT: {
-      memory: (ctx.memory ?? []).slice(0, 5),
-      history: (ctx.history ?? []).slice(-5),
-      state: ctx.stateSummary,
-      lastObservation: ctx.lastObservation,
-      // v1.0.14 §14 — the Live trigger (interval vs full event body).
-      trigger: ctx.trigger,
-      // v1.0.15 — the trained v1.0.4 classifier's read of the request.
-      ...(input.classifierHint ? { classifierHint: input.classifierHint } : {}),
-    },
-    reasoningLevel: input.reasoningLevel,
-  });
+  const payload = `{"objective":${JSON.stringify(input.objective)},"request":${JSON.stringify(input.request)},"goal":${JSON.stringify(input.goal)},"subgoal":${JSON.stringify(input.activeSubgoal?.title)},"TOOLS":${toolsBlock},"CONTEXT":${JSON.stringify({
+    memory: (ctx.memory ?? []).slice(0, 5),
+    history: (ctx.history ?? []).slice(-5),
+    state: ctx.stateSummary,
+    lastObservation: ctx.lastObservation,
+    // v1.0.14 §14 — the Live trigger (interval vs full event body).
+    trigger: ctx.trigger,
+  })},"reasoningLevel":${JSON.stringify(input.reasoningLevel)}}`;
 
   // v1.0.12 Phase 7 — custom task instructions travel BELOW the fixed system
   // prompt (which stays FIRST) as a delimited user section. Exported pure for
@@ -153,16 +158,69 @@ export async function getZai(): Promise<Awaited<ReturnType<typeof ZAI.create>>> 
   return creating;
 }
 
+/**
+ * v1.0.16 §7.3 — safe parse/repair for the LLM's structured output.
+ * Handles: markdown fences, leading/trailing commentary, and (better than
+ * first-{…last-}) finds the first BALANCED {...} block so trailing prose with
+ * braces cannot corrupt the slice. A minor recoverable formatting issue must
+ * not silently discard a useful decision (that was a top fallback trigger).
+ */
 function extractJson(text: string): Record<string, unknown> | null {
   const cleaned = text.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
   const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        const candidate = cleaned.slice(start, i + 1);
+        try {
+          return JSON.parse(candidate) as Record<string, unknown>;
+        } catch {
+          try {
+            // one repair pass: trailing commas before } or ]
+            return JSON.parse(candidate.replace(/,\s*([}\]])/g, '$1')) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        }
+      }
+    }
   }
+  return null;
+}
+
+/**
+ * v1.0.16 §7.2/§7.3 — tool-identifier repair. The LLM occasionally returns
+ * near-miss identifiers (display names, underscores/spaces instead of dots,
+ * casing drift). A SAFE normalization (lowercase + separators → dots + a
+ * unique prefix/substring match against the ACTUAL toolDefs) recovers the
+ * decision instead of dropping it to the heuristic fallback. Returns the
+ * matched definition or null (never guesses between ambiguous candidates).
+ */
+export function repairToolName(rawTool: string, toolDefs: ToolDefinition[]): ToolDefinition | null {
+  const normalize = (s: string) => s.toLowerCase().replace(/[\\s_\-.]+/g, '.').replace(/^\.|\.$/g, '');
+  const wanted = normalize(rawTool);
+  if (!wanted) return null;
+  const exact = toolDefs.find((t) => normalize(t.name) === wanted);
+  if (exact) return exact;
+  const candidates = toolDefs.filter((t) => {
+    const n = normalize(t.name);
+    return n === wanted || n.endsWith(`.${wanted}`) || wanted.endsWith(`.${n}`) || n.replace(/\./g, '') === wanted.replace(/\./g, '');
+  });
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 const VALID_STATUSES = new Set(['tool_call', 'no_tool', 'clarification_required', 'cannot_execute', 'stop']);
@@ -185,13 +243,14 @@ function validateOutput(raw: Record<string, unknown>, input: DecideInput): CoreM
   };
 
   if (status === 'tool_call') {
-    const tool = String(raw.tool ?? '');
-    const def = input.toolDefs.find((t) => t.name === tool);
+    const rawTool = String(raw.tool ?? '');
+    // v1.0.16 §7.3 — repair near-miss tool identifiers before giving up.
+    const def = input.toolDefs.find((t) => t.name === rawTool) ?? repairToolName(rawTool, input.toolDefs);
     if (!def) return null;
     const params = (raw.params && typeof raw.params === 'object' && !Array.isArray(raw.params))
       ? raw.params as Record<string, unknown>
       : {};
-    out.tool = tool;
+    out.tool = def.name;
     out.params = coerceParams(params, def.schema);
   }
   return out;
@@ -201,23 +260,31 @@ function validateOutput(raw: Record<string, unknown>, input: DecideInput): CoreM
 export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
   const started = Date.now();
   let output: CoreModuleOutput | null = null;
+  const toolCandidateCount = input.toolDefs.length;
 
-  // v1.0.15 — ask the ACTIVE TRAINED CHECKPOINT (v1.0.4) what it thinks
-  // BEFORE the LLM call. Never throws; null when no model is active.
-  let classifierHint: { tool: string; confidence: number; modelVersion: string } | null = null;
-  try {
-    const suggestion = await suggestToolFromTrainedModel(`${input.objective}\n${input.request}`);
-    if (suggestion && input.toolDefs.some((t) => t.name === suggestion.tool)) {
-      classifierHint = { tool: suggestion.tool, confidence: suggestion.confidence, modelVersion: suggestion.modelVersion };
-    }
-  } catch { /* classifier hint is advisory only */ }
-  const hinted = { ...input, classifierHint };
+  // v1.0.16 §6.3/§7.1 — the trained-checkpoint hint now runs CONCURRENTLY
+  // with the LLM call instead of blocking every decision before it (the old
+  // serial await added its full latency to the happy path). The hint is
+  // consumed ONLY on the fallback path (by then it has long resolved).
+  const hintPromise = (async () => {
+    try {
+      const suggestion = await suggestToolFromTrainedModel(`${input.objective}\n${input.request}`);
+      if (suggestion && input.toolDefs.some((t) => t.name === suggestion.tool)) {
+        return { tool: suggestion.tool, confidence: suggestion.confidence, modelVersion: suggestion.modelVersion };
+      }
+    } catch { /* classifier hint is advisory only */ }
+    return null;
+  })();
 
+  let failureStage = 'unknown';
   try {
     const zai = await getZai();
+    // v1.0.16 — the hint no longer travels inside the prompt payload (it was
+    // advisory noise for the primary decider); the LLM decides from the
+    // request + full tool metadata, the checkpoint covers failures.
     const messages = [
       { role: 'assistant' as const, content: getSystemPrompt() },
-      { role: 'user' as const, content: buildUserMessage(hinted) },
+      { role: 'user' as const, content: buildUserMessage(input) },
     ];
 
     let content: string | undefined;
@@ -234,20 +301,29 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
     content = await callOnce();
     let raw = content ? extractJson(content) : null;
     if (!raw) {
+      failureStage = 'invalid structured output (first pass)';
       // one retry with a stricter instruction
       content = await callOnce().catch(() => undefined);
       const retryContent = content ? `${content}\nReturn ONLY the JSON object.` : '';
       raw = extractJson(retryContent);
+      if (!raw) failureStage = 'invalid structured output (strict retry too)';
+      else failureStage = 'unknown';
     }
-    if (raw) output = validateOutput(raw, input);
+    if (raw) {
+      output = validateOutput(raw, input);
+      if (!output) failureStage = 'validation rejected the structured result';
+    }
   } catch (err) {
-    console.error('[coremodule] LLM decision failed, using heuristic fallback:', err);
+    failureStage = err instanceof Error && err.message.includes('timed out') ? 'provider timeout' : 'provider failure';
+    console.error('[coremodule] LLM decision failed, using fallback ladder:', err);
   }
 
   if (!output) {
-    // v1.0.15 fallback ladder: the LLM failed → 1) the trained v1.0.4
-    // classifier's suggestion (when it is reasonably confident), then
-    // 2) the deterministic heuristic matcher.
+    // v1.0.15→v1.0.16 fallback ladder: the LLM failed → 1) the trained
+    // v1.0.5 classifier's suggestion (when it is reasonably confident), then
+    // 2) the deterministic heuristic matcher. Every fallback records WHY
+    // (§7.4 observability) — a valid no_tool from llm-core is NOT a fallback.
+    const classifierHint = await hintPromise;
     if (classifierHint && classifierHint.confidence >= 0.45) {
       const def = input.toolDefs.find((t) => t.name === classifierHint.tool);
       if (def) {
@@ -259,6 +335,9 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
           reason: `Trained classifier v${classifierHint.modelVersion} selected ${def.name} (LLM unavailable) — parameters follow the schema defaults.`,
           engine: `trained-classifier:v${classifierHint.modelVersion}`,
           latencyMs: Date.now() - started,
+          fallbackReason: `llm-core unavailable: ${failureStage}`,
+          requestedEngine: 'llm-core',
+          toolCandidateCount,
         };
       }
     }
@@ -286,10 +365,20 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
           : `Selected tool ${chosenTool} is disabled or excluded by the task configuration.`,
         engine: output.engine,
         latencyMs: Date.now() - started,
+        fallbackReason: output.fallbackReason,
+        requestedEngine: 'llm-core',
+        toolCandidateCount,
       };
     }
   }
 
+  // §7.4 — annotate every NON-llm-core decision with the diagnostics fields
+  // (the heuristic path reaches here without them).
+  if (output.engine !== 'llm-core') {
+    output.fallbackReason ??= `llm-core unavailable: ${failureStage}`;
+    output.requestedEngine ??= 'llm-core';
+  }
+  output.toolCandidateCount ??= toolCandidateCount;
   output.latencyMs = Date.now() - started;
   recordCoreDecision(output.latencyMs);
   return output;

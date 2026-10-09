@@ -13,7 +13,7 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 
 | | |
 | --- | --- |
-| **Application version** | **1.0.15** — release name: *"THE LEARNED MIND — v1.0.4 trained classifier generation on the expanded curriculum (851 examples: coding, errors, GK, languages, creative, complex/pattern content, self-understanding, PCB/electronics/electricity, software/computer engineering, design, improvement, JSON, tool-title+body, AskSelf/AskForUser, user events, approvals, terminal environments), current-model registry + runtime integration, checkpoint exported to model-checkpoints/v1.0.4 (TFJS model.zip + model.nextool), three-way tool approval (Accept/Skip/Reject) with the explicit approval state machine, real interactive FS terminal (persistent bash, stdin, streaming, Ctrl+C, cwd tracking, multi-session), real-FS search path fix, verified user-event delivery."* — see [What's new in v1.0.15](#whats-new-in-v1015) and the [v1.0.15 release page](release-1.0.15.md) |
+| **Application version** | **1.0.16** — release name: *"FAST HANDS, SHARP MIND — v1.0.5 trained classifier generation on the expanded coding curriculum (HTML, CSS, JavaScript, TypeScript, JSX/TSX, Python, Markdown, JSON, C, C++, SQL, Shell/Bash) plus error/stack-trace interpretation, debugging and recovery, exported to model-checkpoints/v1.0.5 (TFJS model.zip + model.nextool), approval-based task safety-limit continuation with a backend-enforced 60-second response window and resumable budget extension (timeout, iterations, tool calls, subtool calls), genuine interactive xterm.js real-FS terminal over PTY-backed sessions with deterministic lifecycle and mobile layout, Task Preview incremental 40-item loading with cursor pagination, faster pre-plan/one-by-one planning with cached tool metadata and concurrent classifier hints, reduced avoidable heuristic-fallback with recorded fallback reasons, a fixed current-model export path (UI + API + CLI) and the portable SKILL.md Skills system with progressive loading and the built-in web-search skill."* — see [What's new in v1.0.16](#whats-new-in-v1016) and the [v1.0.16 release page](release-1.0.16.md) |
 | **Model version** | **CURRENT TRAINED CHECKPOINT: v1.0.4** (v1.0.15 — 851-example expanded curriculum, bigram featurization, 33/33 tool classes, exported to `model-checkpoints/v1.0.4/` as `model.zip` + `model.nextool`, marked CURRENT in the model registry and served by the runtime classifier as a CoreModule hint + first fallback). llm-core stays **1.0.0** (provider-served, NOT retrained). Historical checkpoints 1.0.3 (v1.0.12), 1.0.2 (v1.0.11), 1.0.1 (v1.0.10) keep their versions. The UI always reads versions dynamically — never hard-coded. |
 | **Realtime transport** | SSE (`/api/stream`) |
 | **Honest unavailability** | WebSocket transport: not installed · Training pause/resume: not supported (the Parquet adapter **is installed** since v1.0.3 — `@dsnp/parquetjs` 1.8.9, see [Datasets](datasets.md)) |
@@ -60,12 +60,41 @@ verified against goals — once (Goal Mode) or continuously (Live Mode).
 | Operations | [Testing](testing.md) | `bun test` unit suite (371 tests across 11 files) + lint + manual verification workflows. |
 | Operations | [Troubleshooting](troubleshooting.md) | Symptom → cause → fix tables. |
 | Reference | README (this page) | Index, version banner, release notes. |
-| Reference | [Release 1.0.15](release-1.0.15.md) | THE LEARNED MIND (current release page): v1.0.4 trained checkpoint (model.zip + model.nextool) exported + validated, current-model registry + CoreModule integration, [Skip]/[Reject]/[Accept] approval state machine, REAL interactive FS terminal, real-FS search fix, user-event delivery verification. |
+| Reference | [Release 1.0.16](release-1.0.16.md) | FAST HANDS, SHARP MIND (current release page): safety-limit continuation (60 s backend window), xterm.js PTY terminal, 40-item Task Preview pagination, model v1.0.5 (49%→59%), Skills system, fixed current-model export. |
+| Reference | [Skills (SKILL.md)](skills.md) | The v1.0.16 Skills system: SKILL.md format + frontmatter validation, progressive loading (metadata → selection → full instructions), management API + UI, built-in web-search/code-review/debugging, security rules. |
+| Reference | [Terminal (real FS)](terminal.md) | The v1.0.16 real FS terminal: xterm.js + util-linux PTY architecture, deterministic session lifecycle (never stuck in `starting`), raw stdin bridge, boundaries and API. |
+| Reference | [Release 1.0.15](release-1.0.15.md) | THE LEARNED MIND (previous release page): v1.0.4 trained checkpoint (model.zip + model.nextool) exported + validated, current-model registry + CoreModule integration, [Skip]/[Reject]/[Accept] approval state machine, REAL interactive FS terminal, real-FS search fix, user-event delivery verification. |
 | Reference | [Release 1.0.14](release-1.0.14.md) | THE LIVELY AI (current release page): event-driven Live Mode, per-task Read & Act All Events queue + event lifecycle, AskSelf/AskForUser, Limitations page + presets, interactive Tool Editor test runtime, Assistant chat, real-directory VFS/. |
 | Reference | [Release 1.0.13](release-1.0.13.md) | THE OPERATOR CONSOLE (historical v1.0.13 page): single-user product model, environment rules, FS Inspector file manager, MCP customizable auth/OAuth, denial escalation, continuation, tool runtime interactivity. |
 
 Pages are also readable inside the console under **Documentation** (served by
 `/api/docs`), and as plain markdown files in `docs/`.
+
+## What's new in v1.0.16
+
+**One-line summary:** FAST HANDS, SHARP MIND — the v1.0.5 trained classifier generation
+on the expanded coding curriculum (+10pts tool-selection accuracy over the v1.0.4
+baseline), approval-based **task safety-limit continuation** (backend-enforced 60-second
+window, resumable budget extension for timeout/iterations/tool-calls), a **genuine
+xterm.js real-FS terminal** over PTY-backed sessions with a deterministic lifecycle that
+can never stick in `starting`, **Task Preview 40-item incremental loading**, faster
+planning with recorded fallback diagnostics, a fixed current-model export path and the
+portable **SKILL.md Skills system** with progressive loading, a management UI and the
+built-in web-search skill.
+
+| Area | What changed |
+| --- | --- |
+| Safety-limit continuation (§2) | Timeout/iteration/tool-call limits now ASK the operator (Task Preview + Live Monitor dialog with the real numbers and a 60-second countdown). Continue extends the affected task-level budget (time doubling policy: 120s → 240s total; iteration/tool-call budgets grow by the configured extra) and RESUMES from saved state; Stop/Reject/no-response stops the task. Deadline = start + original budget + granted extras (elapsed clock never resets, extension persisted in task state). |
+| Real FS terminal (§3) | xterm.js emulator + util-linux `script` PTY (TERM=xterm-256color, colored prompt, readline, history, Tab completion). Session lifecycle `starting → running\|failed` with a 1.5s startup handshake — never stuck in `starting`. Raw keystroke bridge (batched 25ms) reaches running processes; Ctrl+C via PTY. Aceternity-style chrome, session tabs, mobile layout. |
+| Task Preview (§4) | Events + executions load in 40-item cursor-paginated batches (newest first, "Load 40 older"); payloads render lazily only when a row is expanded; memoized rows; the 2.5s poll refreshes only the newest window. |
+| AI / model v1.0.5 (§5, §7) | Seed curriculum grew to 932 examples (81 new coding examples across 12 language/task batches). Benchmark: 49% → 59% tool-selection accuracy on the held-out test split. CoreModule: concurrent classifier hint (no serial pre-LLM latency), balanced-block JSON extraction, tool-name repair, and `fallbackReason`/`requestedEngine`/`toolCandidateCount` diagnostics on every non-llm-core decision. |
+| Planner (§6) | Tool-schema serialization cached per run; duplicate goal verification skipped when no state changed; decision latency reduced. |
+| Model export (§8) | `current` resolves to the active checkpoint in ONE place (UI + API + CLI); the Models page export uses a real fetch flow with busy state, correct filename and useful errors. |
+| Checkpoints (§9, §17) | `model-checkpoints/v1.0.5/{model.zip, model.nextool}` — both load through the real paths and pass 5/5 real-inference probes. v1.0.3/v1.0.4 preserved untouched. |
+| Skills (§10) | New Skills system: `SKILL.md` folders under `skills/`, YAML frontmatter validation, progressive loading (metadata → per-task selection → full instructions), Skills management UI (create/edit/import ZIP/export ZIP/enable/disable/reload), deterministic selection, built-in `web-search`/`code-review`/`debugging` skills, auto-generated `skills.md` catalog. Skill content is untrusted instructions — it can never bypass approvals or environment boundaries and `scripts/` are never auto-run. |
+
+See the [v1.0.16 release page](release-1.0.16.md) for the full changelog and the
+[Skills](skills.md) / [Terminal](terminal.md) pages for the new subsystem docs.
 
 ## What's new in v1.0.15
 

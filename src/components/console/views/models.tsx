@@ -138,13 +138,44 @@ export default function ModelsView() {
     }
   };
 
-  /** v1.0.2 §44-45: trigger a real zip download of the current/selected model. */
-  const exportPackage = (id: string, format: 'tfjs' | 'nextool') => {
-    window.location.href = modelExportUrl(id, format);
+  /**
+   * v1.0.16 §8.3 — REAL export flow with a busy state, a correct filename
+   * from the Content-Disposition header, and a USEFUL error (never a silent
+   * failure or a permanent loading state). 'current' resolves server-side to
+   * the active checkpoint.
+   */
+  const [exportBusy, setExportBusy] = useState<string | null>(null);
+  const exportPackage = async (id: string, format: 'tfjs' | 'nextool') => {
+    const key = `${id}:${format}`;
+    setExportBusy(key);
+    try {
+      const res = await fetch(modelExportUrl(id, format));
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+        throw new Error(body?.error?.message ?? `Export failed (HTTP ${res.status})`);
+      }
+      const disposition = res.headers.get('Content-Disposition') ?? '';
+      const fileName = /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? (format === 'tfjs' ? 'model.zip' : 'model.nextool');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('Model exported', { description: `${fileName} (${Math.round(blob.size / 1024)} KiB) downloaded.` });
+    } catch (e) {
+      toast.error('Export failed', { description: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setExportBusy(null);
+    }
   };
 
   const isExportable = (p: { format: string }) => p.format === 'tfjs-trained-classifier' || p.format === 'tfjs-native-import';
-  const hasExportable = (info?.packages ?? []).some(isExportable);
+  // v1.0.16 §8 — the active checkpoint ('current') is always exportable.
+  const hasExportable = (info?.packages ?? []).some(isExportable) || Boolean(info?.currentModel);
 
   const engineStatus = info?.engine.status ?? 'active';
 
@@ -173,13 +204,27 @@ export default function ModelsView() {
             <DropdownMenuContent align="end" className="glass-strong min-w-64">
               <DropdownMenuLabel className="font-tech text-[9px] uppercase tracking-widest text-sky-300/70">export current model</DropdownMenuLabel>
               <DropdownMenuSeparator />
+              {/* v1.0.16 §8.3 — the ACTIVE checkpoint is always exportable via
+                  the server-resolved 'current' alias (UI + API + CLI agree). */}
+              <div className="px-1 py-0.5">
+                <p className="px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  current (active checkpoint){info?.currentModel ? ` — v${info.currentModel.version}` : ''}
+                </p>
+                <DropdownMenuItem disabled={exportBusy !== null} onClick={() => void exportPackage('current', 'tfjs')}>
+                  {exportBusy === 'current:tfjs' ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Download className="size-3.5" aria-hidden />} native TFJS (model.zip)
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={exportBusy !== null} onClick={() => void exportPackage('current', 'nextool')}>
+                  {exportBusy === 'current:nextool' ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : <Download className="size-3.5" aria-hidden />} .nextool package
+                </DropdownMenuItem>
+              </div>
+              <DropdownMenuSeparator />
               {(info?.packages ?? []).filter(isExportable).map((p) => (
                 <div key={p.id} className="px-1 py-0.5">
                   <p className="px-2 py-0.5 font-mono text-[10px] text-muted-foreground">{p.name} v{p.version}</p>
-                  <DropdownMenuItem onClick={() => exportPackage(p.id, 'tfjs')}>
+                  <DropdownMenuItem disabled={exportBusy !== null} onClick={() => void exportPackage(p.id, 'tfjs')}>
                     <Download className="size-3.5" aria-hidden /> native TFJS (model.json + .bin zip)
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => exportPackage(p.id, 'nextool')}>
+                  <DropdownMenuItem disabled={exportBusy !== null} onClick={() => void exportPackage(p.id, 'nextool')}>
                     <Download className="size-3.5" aria-hidden /> .nextool package
                   </DropdownMenuItem>
                 </div>

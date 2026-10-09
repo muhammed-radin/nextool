@@ -1114,8 +1114,9 @@ export default function ConnectorsView() {
               onClick={(e) => {
                 e.preventDefault();
                 if (oauthConfirm) {
+                  const target = oauthConfirm;
                   setOauthBusy(true);
-                  startOAuth(oauthConfirm).finally(() => {
+                  startOAuth(target).finally(() => {
                     setOauthBusy(false);
                     setOauthConfirm(null);
                   });

@@ -181,15 +181,21 @@ export function resetBusRuntimeState(): void {
 export async function queryEvents(opts: {
   taskId?: string;
   since?: string;
+  /** v1.0.16 §4.2 — cursor pagination: return only events with id < before
+   *  (ids are `evt_<time36>_<rand>`, so id order IS chronological order).
+   *  Combined with order:'desc' this yields the NEXT OLDER page. */
+  before?: string;
   limit?: number;
+  order?: 'asc' | 'desc';
 }): Promise<NexToolEvent[]> {
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
   const where: Record<string, unknown> = {};
   if (opts.taskId) where.taskId = opts.taskId;
   if (opts.since) where.createdAt = { gt: new Date(opts.since) };
+  if (opts.before) where.id = { lt: opts.before };
   const rows = await db.taskEvent.findMany({
     where,
-    orderBy: { createdAt: 'asc' },
+    orderBy: { id: opts.order === 'desc' ? 'desc' : 'asc' },
     take: limit,
   });
   return rows.map((r) => ({
@@ -202,6 +208,36 @@ export async function queryEvents(opts: {
     priority: r.priority,
     createdAt: r.createdAt.toISOString(),
   }));
+}
+
+/**
+ * v1.0.16 §4.2 — paginated task-event fetch for the Task Preview timeline.
+ * Returns the page OLDER than `before` (cursor = the last id of the previous
+ * page), newest-first collection semantics: the FIRST page (no cursor) holds
+ * the MOST RECENT `limit` events. Stable ordering (id = time36 + rand),
+ * stable cursor keys, no repeated full-collection reads.
+ */
+export async function queryEventsPage(opts: {
+  taskId: string;
+  before?: string;
+  limit?: number;
+}): Promise<{ items: NexToolEvent[]; nextCursor: string | null; hasMore: boolean; totalCount: number }> {
+  const limit = Math.min(Math.max(opts.limit ?? 40, 1), 200);
+  const [rows, totalCount] = await Promise.all([
+    queryEvents({ taskId: opts.taskId, before: opts.before, limit: limit + 1, order: 'desc' }),
+    db.taskEvent.count({ where: { taskId: opts.taskId } }),
+  ]);
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  // chronological order inside the page (the UI renders ascending)
+  const items = [...page].reverse();
+  const last = page[page.length - 1];
+  return {
+    items,
+    nextCursor: hasMore && last ? last.id : null,
+    hasMore,
+    totalCount,
+  };
 }
 
 // ---------- SSE registry ----------

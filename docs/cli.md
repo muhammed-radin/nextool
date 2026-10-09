@@ -60,7 +60,7 @@ checkpoint as a `ModelRecord`.
 | `--early-stop <n>` | patience on `val_loss` (0 = off) | 0 |
 | `--vocab <n>` | hashed bag-of-words + bigram vocabulary size (16-1024) | 128 |
 | `--hidden-units <n>` | hidden layer width (8-512) | 64 |
-| `--model-version <version>` | semantic version stamped on the trained checkpoint | shipped `TRAINED_MODEL_VERSION` (1.0.4) |
+| `--model-version <version>` | semantic version stamped on the trained checkpoint | shipped `TRAINED_MODEL_VERSION` (1.0.5) |
 
 ```bash
 nextool train -d tool-selection -e 20 --early-stop 5

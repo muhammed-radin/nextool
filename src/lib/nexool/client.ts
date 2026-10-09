@@ -129,16 +129,41 @@ export const sendTaskFeedback = (id: string, payload: { message: string; correct
 export interface TaskEventsParams {
   since?: string;
   limit?: number;
+  /** v1.0.16 §4.2 — paginated mode: true → { items, nextCursor, hasMore, totalCount }. */
+  page?: boolean;
+  /** cursor for the next-OLDER 40-item page (the previous page's nextCursor). */
+  before?: string;
+}
+
+export interface TaskEventsPage {
+  items: NexToolEvent[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  totalCount: number;
 }
 
 export const getTaskEvents = (id: string, params: TaskEventsParams = {}) =>
-  apiFetch<NexToolEvent[]>(`/api/tasks/${encodeURIComponent(id)}/events${qs(params)}`);
+  apiFetch<TaskEventsPage | NexToolEvent[]>(`/api/tasks/${encodeURIComponent(id)}/events${qs(params)}`);
+
+export const getTaskEventsPage = (id: string, params: { before?: string; limit?: number } = {}) =>
+  apiFetch<TaskEventsPage>(`/api/tasks/${encodeURIComponent(id)}/events${qs({ ...params, page: 1 })}`);
 
 export const getTaskContext = (id: string) =>
   apiFetch<ContextComposition>(`/api/tasks/${encodeURIComponent(id)}/context`);
 
 export const getTaskExecutions = (id: string) =>
   apiFetch<ToolExecution[]>(`/api/tasks/${encodeURIComponent(id)}/executions`);
+
+/** v1.0.16 §4.2 — paginated executions (40-item pages, newest first page). */
+export const getTaskExecutionsPage = (id: string, params: { before?: string; limit?: number } = {}) =>
+  apiFetch<TaskExecutionsPage>(`/api/tasks/${encodeURIComponent(id)}/executions${qs({ ...params, page: 1 })}`);
+
+export interface TaskExecutionsPage {
+  items: ToolExecution[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  totalCount: number;
+}
 
 // ---------- Tools ----------
 
@@ -513,12 +538,18 @@ export const resolveVerificationRequest = (verificationId: string, accepted: boo
 export interface PendingLimitContinuationDTO {
   continuationId: string;
   taskId?: string;
-  limitKind: 'maxIterations' | 'safetyLimit' | 'both';
+  limitKind: 'maxIterations' | 'safetyLimit' | 'both' | 'taskTimeout';
   iterations: number;
   toolCalls: number;
   maxIterations: number;
   safetyLimit: number;
   extraBudget: number;
+  originalTimeBudgetMs?: number;
+  elapsedMs?: number;
+  additionalMs?: number;
+  newTotalBudgetMs?: number;
+  newMaxIterations?: number;
+  newSafetyLimit?: number;
   requestedAt: string;
 }
 

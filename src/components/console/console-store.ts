@@ -17,6 +17,7 @@ export type ConsoleView =
   | 'history'
   | 'models'
   | 'datasets'
+  | 'skills'
   | 'training'
   | 'benchmark'
   | 'docs'

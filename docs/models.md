@@ -65,9 +65,9 @@ NexTool keeps three version concepts deliberately separate (`src/lib/nexool/vers
 
 | Version | Current value | Meaning |
 | --- | --- | --- |
-| **Application** (`APP_VERSION`) | **1.0.15** (release: *"THE LEARNED MIND — v1.0.4 trained checkpoint generation, current-model registry, three-way tool approval, real interactive FS terminal"*) | The application release; bumped per release, read by the UI badges, `/api/system` and the CLI. |
+| **Application** (`APP_VERSION`) | **1.0.16** (release: *"FAST HANDS, SHARP MIND — v1.0.5 trained classifier generation, safety-limit continuation, xterm.js PTY terminal, Skills system"*) | The application release; bumped per release, read by the UI badges, `/api/system` and the CLI. |
 | **CoreModule model** (`CORE_MODULE_VERSION`) | **1.0.0** | The llm-core decision unit. Provider-served through `z-ai-web-dev-sdk`; **never retrained locally** — v1.0.11 explicitly does NOT change it (inference latency is dominated by the provider round-trip; the v1.0.11 ZAI-client caching + prompt memoization only remove per-call init overhead). |
-| **Trained classifier generation** (`TRAINED_MODEL_VERSION`, since v1.0.10) | **1.0.4** (v1.0.15 — 851-example expanded curriculum, bigram featurization, 33/33 tool classes; checkpoint exported to `model-checkpoints/v1.0.4/` as `model.zip` + `model.nextool`, marked CURRENT and served by the runtime classifier) | The semantic version LOCALLY TRAINED tool-selection checkpoints register under — **1.0.3 in this release** (v1.0.12 curriculum: MCP, shared global VFS, NexTool identity, categorization/coding/GK/technology; 447 examples); 1.0.2 was the v1.0.11 generation, 1.0.1 the v1.0.10 generation. Historical checkpoints (1.0.0, 1.0.1, 1.0.2) keep their original versions; nothing is re-versioned in place. |
+| **Trained classifier generation** (`TRAINED_MODEL_VERSION`, since v1.0.10) | **1.0.5** (v1.0.16 — 932-example curriculum adding the coding languages HTML/CSS/JavaScript/TypeScript/JSX/TSX/Python/Markdown/JSON/C/C++/SQL/Shell + error/stack-trace debugging; 59% held-out tool-selection accuracy vs the 49% v1.0.4 baseline; checkpoint exported to `model-checkpoints/v1.0.5/` as `model.zip` + `model.nextool`, marked CURRENT and served by the runtime classifier as first fallback) | The semantic version LOCALLY TRAINED tool-selection checkpoints register under — 1.0.4 was the v1.0.15 generation (851 examples), 1.0.3 the v1.0.12 generation (447 examples); 1.0.2 was the v1.0.11 generation, 1.0.1 the v1.0.10 generation. Historical checkpoints (1.0.0, 1.0.1, 1.0.2, 1.0.3, 1.0.4) keep their original versions; nothing is re-versioned in place. |
 
 A completed training job therefore records BOTH identifiers: the manifest's
 `modelSemanticVersion` (the generation, default `'1.0.2'` for jobs created in
@@ -206,7 +206,8 @@ clear errors — nothing is silently recreated.
   checkpoint (cached by model id) and serves two roles: the
   `CONTEXT.classifierHint` inside every CoreModule LLM prompt, and the FIRST
   fallback when the LLM call fails (before the heuristic matcher).
-- Release checkpoints: `model-checkpoints/v1.0.4/model.zip` (TFJS native) +
-  `model-checkpoints/v1.0.4/model.nextool` (NexTool package), both produced
+- Release checkpoints: `model-checkpoints/v1.0.5/model.zip` (TFJS native) +
+  `model-checkpoints/v1.0.5/model.nextool` (NexTool package; v1.0.4 and older
+  versions remain on disk untouched), both produced
   by the real packaging service and validated by load + inference — see
   [Release 1.0.15](release-1.0.15.md).

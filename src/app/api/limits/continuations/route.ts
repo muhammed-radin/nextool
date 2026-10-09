@@ -11,9 +11,12 @@
  *          'deny'     → the task ends exactly as before (limit_reached /
  *                       failed, SAFETY_LIMIT) — the honest operator stop.
  *
- * After the 5-minute window an unanswered question resolves as a timeout and
- * the task ends as before — the runtime NEVER grows its own budget
- * unattended. Task stop resolves the question as cancelled.
+ * v1.0.16: the response window is 60 SECONDS (backend-enforced timer). After
+ * it expires an unanswered question resolves as a timeout and the task stops —
+ * the runtime NEVER grows its own budget unattended. Resolution is
+ * idempotent-safe (the registry entry is removed first), so duplicate clicks
+ * or duplicate API requests cannot extend the same budget twice. Task stop
+ * resolves the question as cancelled.
  */
 import { ok, parseBody } from '@/lib/nexool/api-helpers';
 import { listPendingLimitContinuations, resolveLimitContinuation } from '@/lib/nexool/limit-continuation';

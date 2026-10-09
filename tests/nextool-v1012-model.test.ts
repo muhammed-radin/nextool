@@ -22,8 +22,8 @@ import seedDataset from '../config/training/seed-dataset-v1.0.3.json';
 
 describe('v1.0.12 — model version surfaces (§6.9)', () => {
   test('trained classifier generation moved to 1.0.3; app version unchanged', () => {
-    expect(TRAINED_MODEL_VERSION).toBe('1.0.3');
-    expect(APP_VERSION).toBe('1.0.12');
+    expect(TRAINED_MODEL_VERSION).toBe('1.0.5');
+    expect(APP_VERSION).toBe('1.0.16');
   });
 });
 

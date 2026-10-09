@@ -19,6 +19,9 @@ import { runPrePlanRecovery } from './recovery';
 import { listServers } from '../environment';
 import { resolveAutoExecution, requestApproval, FORCE_APPROVAL_TOOLS } from '../approval';
 import { requestLimitContinuation } from '../limit-continuation';
+// v1.0.16 §10 — Skills: progressive loading (metadata discovery → selection →
+// full instructions on demand). Untrusted content stays a user-level block.
+import { listSkillSummaries, loadSkillInstructions, selectSkillsForTask, renderSkillsBlock } from '../skills/registry';
 import { clampToLimit, getResolvedLimits } from '../config-limits';
 // v1.0.12 Phase 7 — custom task instructions (sanitize when loading from DB).
 import { sanitizeInstructionsSource, MAX_COMBINED_INSTRUCTIONS_CHARS } from '../instructions';
@@ -263,6 +266,15 @@ interface RunContext {
   /** v1.0.13 — safety-limit continuations GRANTED so far (bounded by
    *  config.limitContinuations; each grants +limitContinuationExtra budget). */
   limitContinuationsUsed: number;
+  /** v1.0.16 §2 — EXTRA TIME granted through timeout continuations (ms).
+   *  Added to the ALLOWED TOTAL ELAPSED RUNTIME: the deadline is
+   *  startedAtMs + taskTimeoutMs + grantedExtraTimeMs. The elapsed clock is
+   *  never reset; mirrors state.grantedExtraTimeMs (persisted). */
+  grantedExtraTimeMs: number;
+  /** v1.0.16 §6.3 — the last observation already fed to the goal verifier
+   *  (result: not complete). Repeated verification with UNCHANGED state is
+   *  skipped — the same input cannot produce a different verdict. */
+  lastVerifiedObservation?: string;
 }
 
 // ---------- pause (v1.0.6 §11) ----------
@@ -796,7 +808,16 @@ async function proposeNextSubgoal(
 // ---------- goal completion check ----------
 
 async function verifyGoal(ctx: RunContext): Promise<boolean> {
-  const check = await checkGoalComplete(ctx.goal, ctx.state.lastObservation ?? 'No observation yet.', ctx.config.reasoningLevel, ctx.taskId, ctx.instructions);
+  const observation = ctx.state.lastObservation ?? 'No observation yet.';
+  // v1.0.16 §6.3 — repeated verification when NO relevant state changed is
+  // avoided: the verifier is deterministic per (goal, observation) pair, so
+  // an unchanged observation since the last NOT-complete verdict cannot
+  // suddenly verify. Removes a duplicate LLM call per planning cycle.
+  if (ctx.lastVerifiedObservation === observation && observation !== 'No observation yet.') {
+    return false;
+  }
+  const check = await checkGoalComplete(ctx.goal, observation, ctx.config.reasoningLevel, ctx.taskId, ctx.instructions);
+  ctx.lastVerifiedObservation = observation;
   if (check.complete) {
     void emitEvent({
       taskId: ctx.taskId,
@@ -990,6 +1011,60 @@ async function requestLimitContinuationIfNeeded(ctx: RunContext): Promise<'grant
 }
 
 /**
+ * v1.0.16 §2 — TIMEOUT CONTINUATION: when the task's TOTAL time budget is
+ * exhausted, ASK the operator instead of failing silently. The proposal is a
+ * DOUBLING policy: additional = ORIGINAL time budget (120 s → 240 s total).
+ * The grant extends the ALLOWED TOTAL ELAPSED RUNTIME
+ * (startedAtMs + taskTimeoutMs + grantedExtraTimeMs) — the elapsed clock is
+ * NEVER reset and the expired deadline is never left unchanged. The granted
+ * extra time is mirrored into the persisted state
+ * (state.grantedExtraTimeMs) so polling/reloads can never reset it. While the
+ * question pends the task parks in `awaiting_approval` and no tools run.
+ */
+async function requestTimeoutContinuationIfNeeded(ctx: RunContext): Promise<'granted' | 'refused' | 'stopped'> {
+  const { config } = ctx;
+  if (!config.limitContinuationEnabled || config.taskTimeoutMs <= 0) return 'refused';
+  if (ctx.limitContinuationsUsed >= config.limitContinuations) return 'refused';
+
+  const pausedWhileWaiting = ctx.handle.pauseFlag.paused;
+  await persistTask(ctx.taskId, {
+    status: pausedWhileWaiting ? 'paused' : 'awaiting_approval',
+    statusDetail: pausedWhileWaiting
+      ? 'Paused — task-timeout continuation question pending.'
+      : 'Task timeout reached — waiting for the operator\u2019s continuation decision.',
+  });
+
+  const elapsedMs = Date.now() - ctx.startedAtMs;
+  const outcome = await requestLimitContinuation({
+    taskId: ctx.taskId,
+    limitKind: 'taskTimeout',
+    iterations: ctx.state.iterationCount,
+    toolCalls: ctx.state.toolCallCount,
+    maxIterations: config.maxIterations,
+    safetyLimit: config.safetyLimit,
+    extraBudget: config.limitContinuationExtra,
+    originalTimeBudgetMs: config.taskTimeoutMs,
+    elapsedMs,
+    additionalMs: config.taskTimeoutMs,
+  });
+
+  if (outcome === 'continued') {
+    ctx.limitContinuationsUsed += 1;
+    ctx.grantedExtraTimeMs += config.taskTimeoutMs;
+    ctx.state.grantedExtraTimeMs = ctx.grantedExtraTimeMs;
+    await persistState(ctx);
+    await persistTask(ctx.taskId, {
+      status: ctx.handle.pauseFlag.paused ? 'paused' : 'running',
+      statusDetail: null,
+    });
+    return 'granted';
+  }
+  if (outcome === 'cancelled') return 'stopped';
+  // denied | timeout → the documented terminal exit (TIMEOUT).
+  return 'refused';
+}
+
+/**
  * v1.0.15 §44-§49 — GOAL MODE processes injected events too. Live tasks wake
  * immediately on admission; goal mode has no wait to interrupt, so the inbox
  * is drained at every safe iteration boundary: user messages/corrections
@@ -1040,11 +1115,22 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
     if (blockedTop) {
       return { finalStatus: 'stopped', taskStatus: 'stopped', statusDetail: blockedTop, summary: ctx.state.lastObservation ?? blockedTop };
     }
-    if (Date.now() - startedAt > config.taskTimeoutMs) {
+    // v1.0.16 §2 — the deadline is the ORIGINAL budget + every operator-granted
+    // time extension; the elapsed clock (ctx.startedAtMs) is never reset.
+    if (Date.now() - ctx.startedAtMs > config.taskTimeoutMs + ctx.grantedExtraTimeMs) {
+      const timeoutContinuation = await requestTimeoutContinuationIfNeeded(ctx);
+      if (timeoutContinuation === 'granted') continue;
+      if (timeoutContinuation === 'stopped') {
+        return {
+          finalStatus: 'stopped', taskStatus: 'stopped',
+          statusDetail: 'Stopped while awaiting the task-timeout continuation decision.',
+          summary: ctx.state.lastObservation ?? 'Task stopped.',
+        };
+      }
       return {
         finalStatus: 'limit_reached', taskStatus: 'failed', statusDetail: 'Task timeout reached.',
         summary: 'Task exceeded the configured timeout.',
-        errorState: { code: 'TIMEOUT', message: `Task timeout (${config.taskTimeoutMs}ms) reached.`, stage: 'goal_loop' },
+        errorState: { code: 'TIMEOUT', message: `Task timeout (${config.taskTimeoutMs}ms budget + ${ctx.grantedExtraTimeMs}ms granted) reached.`, stage: 'goal_loop' },
       };
     }
     if (ctx.state.iterationCount >= config.maxIterations || ctx.state.toolCallCount >= config.safetyLimit) {
@@ -2045,8 +2131,8 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
     instructions: sanitizeInstructionsSource(row.instructions, MAX_COMBINED_INSTRUCTIONS_CHARS) || undefined,
     failureLog: [], oneByOneSubgoalByStep: new Map(), identicalFailureStreak: 0, recoveryAttemptsByStep: new Map(),
     limitContinuationsUsed: 0,
+    grantedExtraTimeMs: 0,
   };
-
   // v1.0.14 §2.2 — publish the resolved queueing policy onto the handle so
   // injectEvent can reject (observably) extra events while one is pending.
   handle.queueingDisabled = !config.allowMultipleEvents;
@@ -2054,6 +2140,26 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
   // v1.0.6 §11.9 — resume support: a task re-created as paused waits at the
   // first safe point; paused flag is mirrored into the persisted state.
   if (handle.pauseFlag.paused) state.paused = true;
+
+  // v1.0.16 §10.3 — SKILLS, progressive loading: discover → metadata only →
+  // select relevant skills for THIS request → load FULL instructions for the
+  // selection only. The block travels as a delimited USER section (same
+  // hierarchy as task instructions — it can never override system
+  // constraints, environment boundaries or approval rules, §10.6).
+  const skillSummaries = listSkillSummaries();
+  if (skillSummaries.length > 0) {
+    const selected = selectSkillsForTask(request, skillSummaries);
+    const loaded = loadSkillInstructions(selected);
+    if (loaded.length > 0) {
+      ctx.instructions = [ctx.instructions, renderSkillsBlock(loaded)].filter(Boolean).join('\n\n');
+      void emitEvent({
+        taskId, type: 'skills.selected', source: 'runtime',
+        message: `Skills selected for this task: ${loaded.map((s) => s.name).join(', ')} (${skillSummaries.length} installed, metadata-only discovery).`,
+        data: { selected: loaded.map((s) => s.name), installed: skillSummaries.map((s) => s.name) },
+        priority: 6,
+      });
+    }
+  }
 
   await persistTask(taskId, { status: 'running', startedAt: new Date(), config: JSON.stringify(config) });
   void emitEvent({

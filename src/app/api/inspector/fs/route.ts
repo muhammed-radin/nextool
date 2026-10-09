@@ -251,7 +251,7 @@ export async function GET(req: Request) {
         throw new FsInspectorError('FS_NOT_FILE', `"${display}" is not a downloadable file.`);
       }
       const nodeStream = fsSync.createReadStream(real);
-      const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+      const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
       return new Response(webStream, {
         status: 200,
         headers: {

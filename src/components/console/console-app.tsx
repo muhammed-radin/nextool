@@ -42,6 +42,7 @@ import EventsView from './views/events';
 import HistoryView from './views/history';
 import InspectorView from './views/inspector';
 import ModelsView from './views/models';
+import SkillsView from './views/skills';
 import DatasetsView from './views/datasets';
 import SettingsView from './views/settings';
 import LimitationsView from './views/limitations';
@@ -69,7 +70,7 @@ import {
   SlidersHorizontal,
   TerminalSquare,
   Wrench,
-} from 'lucide-react';
+  Sparkles,} from 'lucide-react';
 
 const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -85,6 +86,7 @@ const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'events', label: 'Events', icon: ListFilter },
   { view: 'history', label: 'History', icon: History },
   { view: 'models', label: 'Models', icon: Box },
+  { view: 'skills', label: 'Skills', icon: Sparkles },
   { view: 'datasets', label: 'Datasets', icon: FileJson },
   { view: 'docs', label: 'Documentation', icon: BookOpen },
   { view: 'limitations', label: 'Limitations', icon: Gauge },
@@ -529,6 +531,8 @@ function ViewRouter() {
         return <HistoryView />;
       case 'models':
         return <ModelsView />;
+      case 'skills':
+        return <SkillsView />;
       case 'datasets':
         return <DatasetsView />;
       case 'docs':

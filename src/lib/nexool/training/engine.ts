@@ -435,7 +435,7 @@ export async function runTrainingJob(input: {
       modelSemanticVersion: config.modelVersion ?? TRAINED_MODEL_VERSION,
       format: 'tfjs-trained-classifier',
       architecture: `dense-${config.hiddenUnits ?? 64}-relu → dropout-0.1 → dense-softmax`,
-      featurization: 'hashed bag-of-words + bigrams, L2-normalized (v1.0.15)',
+      featurization: 'hashed bag-of-words + bigrams, L2-normalized (v1.0.16)',
       parameterCount,
       classes: bundle.classes,
       vocabSize: config.vocabSize,

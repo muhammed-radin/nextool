@@ -1,19 +1,20 @@
 {
   "version": 1,
   "$meta": {
-    "name": "NexTool Q1 configuration limits",
+    "name": "NexTool Q1 configuration limits — COMPLETE UNRESTRICTED (warning)",
     "description": "Single authoritative source for every configurable NexTool limit. A self-hosted administrator can customize the allowed range, default, type, unit and nullability of each setting by editing THIS file — no source-code modification or rebuild is required. The application validates min <= default <= max for every numeric property at startup and fails clearly when the file is invalid. Changing a limit requires no rebuild: new values are picked up after a reload/restart (see docs/configuration.md).",
     "notes": [
       "null means 'no explicit limit' ONLY for properties explicitly marked nullable — each nullable property documents exactly what null does. null is never interpreted as unlimited automatically.",
       "The security boundaries (virtual filesystem isolation, network host policy, sandbox escapes) are NOT controlled by this file and can never be weakened by raising a limit.",
-      "Timeouts are intentionally separate properties: execution.timeoutMs governs the whole tool execution; network.timeoutMs governs one network request; childProcess.timeoutMs is the per-command default ceiling (the effective tool execution timeout raises it); task.toolTimeoutMs is the global tool default; task.taskTimeoutMs governs the whole task. Tool approval (300000 ms) and interactive prompts (120000 ms) are fixed runtime semantics, not configurable here."
+      "Timeouts are intentionally separate properties: execution.timeoutMs governs the whole tool execution; network.timeoutMs governs one network request; childProcess.timeoutMs is the per-command default ceiling (the effective tool execution timeout raises it); task.toolTimeoutMs is the global tool default; task.taskTimeoutMs governs the whole task. Tool approval (300000 ms) and interactive prompts (120000 ms) are fixed runtime semantics, not configurable here.",
+      "COMPLETE UNRESTRICTED preset (v1.0.14): every numeric limit is at its shipped maximum and capability booleans are fully open. This removes runtime safety margins — use ONLY intentionally in a trusted self-hosted environment."
     ]
   },
   "network": {
     "timeoutMs": {
       "type": "integer",
       "nullable": false,
-      "default": 60000,
+      "default": 3600000,
       "min": 1000,
       "max": 3600000,
       "unit": "ms",
@@ -23,7 +24,7 @@
     "maxResponseBytes": {
       "type": "integer",
       "nullable": false,
-      "default": 5242880,
+      "default": 734003200,
       "min": 1024,
       "max": 734003200,
       "unit": "bytes",
@@ -69,7 +70,7 @@
     "maxFileBytes": {
       "type": "integer",
       "nullable": false,
-      "default": 2097152,
+      "default": 734003200,
       "min": 1024,
       "max": 734003200,
       "unit": "bytes",
@@ -89,7 +90,7 @@
     "maxEntries": {
       "type": "integer",
       "nullable": false,
-      "default": 4000,
+      "default": 50000,
       "min": 8,
       "max": 50000,
       "unit": "count",
@@ -99,7 +100,7 @@
     "maxDepth": {
       "type": "integer",
       "nullable": false,
-      "default": 56,
+      "default": 128,
       "min": 1,
       "max": 128,
       "unit": "levels",
@@ -109,7 +110,7 @@
     "maxPathLength": {
       "type": "integer",
       "nullable": false,
-      "default": 512,
+      "default": 4096,
       "min": 64,
       "max": 4096,
       "unit": "chars",
@@ -121,7 +122,7 @@
     "timeoutMs": {
       "type": "integer",
       "nullable": false,
-      "default": 10000,
+      "default": 3600000,
       "min": 250,
       "max": 3600000,
       "unit": "ms",
@@ -131,7 +132,7 @@
     "syncTimeoutMs": {
       "type": "integer",
       "nullable": false,
-      "default": 4000,
+      "default": 1800000,
       "min": 100,
       "max": 1800000,
       "unit": "ms",
@@ -141,7 +142,7 @@
     "heapSentinelBytes": {
       "type": "integer",
       "nullable": false,
-      "default": 268435456,
+      "default": 763363328,
       "min": 16777216,
       "max": 763363328,
       "unit": "bytes",
@@ -151,7 +152,7 @@
     "maxSourceChars": {
       "type": "integer",
       "nullable": false,
-      "default": 64000,
+      "default": 200000,
       "min": 1000,
       "max": 200000,
       "unit": "chars",
@@ -161,7 +162,7 @@
     "maxResultBytes": {
       "type": "integer",
       "nullable": false,
-      "default": 65536,
+      "default": 1048576,
       "min": 1024,
       "max": 1048576,
       "unit": "bytes",
@@ -171,7 +172,7 @@
     "maxLogs": {
       "type": "integer",
       "nullable": false,
-      "default": 100,
+      "default": 1000,
       "min": 10,
       "max": 1000,
       "unit": "lines",
@@ -181,7 +182,7 @@
     "maxLogLineChars": {
       "type": "integer",
       "nullable": false,
-      "default": 2000,
+      "default": 8000,
       "min": 200,
       "max": 8000,
       "unit": "chars",
@@ -193,7 +194,7 @@
     "timeoutMs": {
       "type": "integer",
       "nullable": false,
-      "default": 8000,
+      "default": 3600000,
       "min": 1000,
       "max": 3600000,
       "unit": "ms",
@@ -203,7 +204,7 @@
     "maxOutputBytes": {
       "type": "integer",
       "nullable": false,
-      "default": 65536,
+      "default": 1048576,
       "min": 1024,
       "max": 1048576,
       "unit": "bytes",
@@ -213,7 +214,7 @@
     "maxProcessesPerExecution": {
       "type": "integer",
       "nullable": false,
-      "default": 64,
+      "default": 512,
       "min": 1,
       "max": 512,
       "unit": "count",
@@ -223,7 +224,7 @@
     "maxPipeStages": {
       "type": "integer",
       "nullable": false,
-      "default": 3,
+      "default": 16,
       "min": 1,
       "max": 16,
       "unit": "count",
@@ -233,7 +234,7 @@
     "maxArgs": {
       "type": "integer",
       "nullable": false,
-      "default": 32,
+      "default": 512,
       "min": 4,
       "max": 512,
       "unit": "count",
@@ -243,7 +244,7 @@
     "npmMaxPackages": {
       "type": "integer",
       "nullable": false,
-      "default": 25,
+      "default": 200,
       "min": 1,
       "max": 200,
       "unit": "count",
@@ -255,7 +256,7 @@
     "maxIterations": {
       "type": "integer",
       "nullable": false,
-      "default": 30,
+      "default": 200,
       "min": 1,
       "max": 200,
       "unit": "count",
@@ -265,7 +266,7 @@
     "maxSubtoolCalls": {
       "type": "integer",
       "nullable": false,
-      "default": 20,
+      "default": 200,
       "min": 1,
       "max": 200,
       "unit": "count",
@@ -275,7 +276,7 @@
     "safetyLimit": {
       "type": "integer",
       "nullable": false,
-      "default": 100,
+      "default": 500,
       "min": 1,
       "max": 500,
       "unit": "count",
@@ -285,7 +286,7 @@
     "taskTimeoutMs": {
       "type": "integer",
       "nullable": false,
-      "default": 120000,
+      "default": 3600000,
       "min": 5000,
       "max": 3600000,
       "unit": "ms",
@@ -295,7 +296,7 @@
     "toolTimeoutMs": {
       "type": "integer",
       "nullable": false,
-      "default": 10000,
+      "default": 3600000,
       "min": 1000,
       "max": 3600000,
       "unit": "ms",
@@ -305,7 +306,7 @@
     "liveIntervalMs": {
       "type": "integer",
       "nullable": false,
-      "default": 60000,
+      "default": 3600000,
       "min": 1000,
       "max": 3600000,
       "unit": "ms",
@@ -315,7 +316,7 @@
     "maxParallelToolCalls": {
       "type": "integer",
       "nullable": false,
-      "default": 4,
+      "default": 8,
       "min": 1,
       "max": 8,
       "unit": "count",
@@ -325,7 +326,7 @@
     "eventQueueCap": {
       "type": "integer",
       "nullable": false,
-      "default": 50,
+      "default": 500,
       "min": 1,
       "max": 500,
       "unit": "count",
@@ -335,7 +336,7 @@
     "prePlanMaxSteps": {
       "type": "integer",
       "nullable": false,
-      "default": 10,
+      "default": 122,
       "min": 1,
       "max": 122,
       "unit": "count",
@@ -355,7 +356,7 @@
     "limitContinuations": {
       "type": "integer",
       "nullable": false,
-      "default": 1,
+      "default": 5,
       "min": 0,
       "max": 5,
       "unit": "count",
@@ -365,7 +366,7 @@
     "limitContinuationExtra": {
       "type": "integer",
       "nullable": false,
-      "default": 25,
+      "default": 500,
       "min": 1,
       "max": 500,
       "unit": "count",
