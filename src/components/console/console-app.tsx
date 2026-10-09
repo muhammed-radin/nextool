@@ -47,8 +47,10 @@ import DatasetsView from './views/datasets';
 import SettingsView from './views/settings';
 import LimitationsView from './views/limitations';
 import AssistantView from './views/assistant';
+import ProductsView from './views/products';
 import DocsView from './views/docs';
 import {
+  Rocket,
   Activity,
   Bell,
   BookOpen,
@@ -92,6 +94,7 @@ const NAV_ITEMS: { view: ConsoleView; label: string; icon: typeof Wrench }[] = [
   { view: 'limitations', label: 'Limitations', icon: Gauge },
   { view: 'settings', label: 'Settings', icon: SlidersHorizontal },
   { view: 'assistant', label: 'Assistant', icon: Bot },
+  { view: 'products', label: 'Our Products', icon: Rocket },
 ];
 
 /** Mobile bottom-nav primary destinations (everything else lives in "More"). */
@@ -543,6 +546,8 @@ function ViewRouter() {
         return <LimitationsView />;
       case 'assistant':
         return <AssistantView />;
+      case 'products':
+        return <ProductsView />;
       case 'task-preview':
         return selectedTaskId ? <TaskPreviewView key={selectedTaskId} taskId={selectedTaskId} /> : <DashboardView />;
       default:

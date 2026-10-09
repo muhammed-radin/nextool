@@ -24,6 +24,7 @@ export type ConsoleView =
   | 'settings'
   | 'limitations'
   | 'assistant'
+  | 'products'
   | 'task-preview';
 
 export interface ToolEditorRequest {

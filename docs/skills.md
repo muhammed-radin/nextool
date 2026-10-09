@@ -66,8 +66,10 @@ Instructions for performing research...
 2. **Metadata only**: name + description — no bodies in discovery results.
 3. **Select**: the runtime scores the task request against name+description
    (token overlap + stem-aware name matching) and picks the top ≤3 skills.
-4. **Load**: FULL `SKILL.md` bodies load ONLY for selected skills (≤4, 6 KB
-   cap each) and travel as a delimited USER block — the same hierarchy as task
+4. **Load**: FULL `SKILL.md` bodies load ONLY for selected skills (≤
+   `skills.maxLoadedPerTask`, default 4 — v1.1.0 central limit, 0 disables loading;
+   `skills.maxInstructionChars` default 6 000 chars per body) and travel as a delimited
+   USER block — the same hierarchy as task
    instructions (system constraints always win).
 5. **Resources** (`references/…`) are read only when the workflow needs them,
    via the confined resource endpoint.
@@ -76,6 +78,33 @@ Instructions for performing research...
 
 Selection is deterministic and observable — the same request always selects
 the same skills for the same registry state.
+
+## Selection modes (v1.1.0)
+
+Since v1.1.0 a task decides HOW skills are chosen via `config.skillsMode` +
+`config.skills` (≤ 12 names; the zod schema rejects longer arrays):
+
+| Mode | Behavior |
+| --- | --- |
+| `auto` (default) | The deterministic selection above — unchanged v1.0.16 behavior. |
+| `manual` | EXACTLY the operator's selection (Task Console checkboxes) reaches the task. |
+| `auto+manual` | The deduplicated union of both (still capped by `skills.maxLoadedPerTask`). |
+
+- **Validation with explanations**: manual names are checked against the registry at
+  run time — a disabled, invalid or unknown skill is EXCLUDED and the persisted
+  `skills.selected` event says so: its `data` carries `{ selected, installed, mode,
+  manual, excluded }` and the message names what was excluded. Nothing silently
+  disappears.
+- **Manual selections actually reach the runtime** (they replace the auto-only path
+  when `manual` is chosen) — this was the v1.0.16 gap the mode system closes.
+- **Continuations inherit skills**: a task created with `continuationOfTaskId` /
+  `forkedFromTaskId` and no skill selection of its own inherits the source task's
+  persisted `skills.selected` selection as MANUAL skills (the operator can still
+  change them in the dialog/console).
+- **Limits** (all central, Limitations page): `skills.maxLoadedPerTask` (default 4,
+  0 disables loading entirely), `skills.maxInstructionChars` (default 6 000),
+  `skills.maxResourceBytes` (default 256 KiB — the confined per-resource read cap)
+  and `skills.maxZipBytes` (default 8 MiB — the import ZIP cap).
 
 ## Management (Skills view)
 
@@ -98,7 +127,8 @@ the same skills for the same registry state.
 - `scripts/` shipped with a skill are NEVER auto-executed; scripts require the
   existing tool/runtime permission and approval paths like everything else.
 - Resource reads are confined to the skill's own directory (`..` escapes and
-  absolute paths are refused; 256 KB per-resource cap).
+  absolute paths are refused; `skills.maxResourceBytes` per-resource cap, default
+  256 KB).
 - ZIP import validates the folder shape, refuses zip-slip entries and rejects
   name collisions.
 - Disabling a skill removes it from selection immediately.

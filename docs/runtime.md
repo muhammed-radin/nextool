@@ -115,18 +115,38 @@ curl -X POST http://localhost:3000/api/tasks/task_1a2b3c4d/pause
 curl -X POST http://localhost:3000/api/tasks/task_1a2b3c4d/resume
 ```
 
-## Cancellation
+## Cancellation and force-stop (v1.1.0)
 
 `POST /api/tasks/{id}/stop` → `stopTask`:
 
 1. `stopFlag.stopped = true` — checked before every iteration, after every wake, and
    before each recovery pass.
-2. `abortController.abort()` — the executor races every tool handler against the abort
-   signal; the in-flight execution resolves as `cancelled` (code `CANCELLED`) instead of
-   leaking.
-3. Synthetic `task.stop` wake (priority 1) — a waiting live task exits its wait
-   immediately and finalizes `stopped`.
-4. `task.stop_requested` event (priority 1) is persisted/streamed.
+2. `abortController.abort()` — **v1.1.0: the signal reaches EVERY in-flight provider
+   call** (CoreModule decisions, planner plans, one-by-one steps, goal verification,
+   recovery assessment, subgoal proposals) through the shared `callLlm` layer, so a
+   stopped task unblocks immediately instead of waiting for its configured deadline;
+   the executor still races every tool handler against the signal (in-flight execution
+   resolves as `cancelled`, code `CANCELLED`). The loop re-checks the flag after every
+   decision, so a decision that resolved during stop never executes.
+3. **Task-owned child processes are terminated** — the per-task registry
+   (`main/task-processes.ts`) tracks every REAL host process spawned on the task's
+   behalf (today: `fs.cmd` bash children); force-stop sends SIGTERM to all, waits
+   1.5 s, then SIGKILL to stragglers (group kills for detached children) and emits
+   "Force-stop terminated N task-owned child process(es)." The standalone FS Inspector
+   terminal is NOT task-owned and is never killed by a task stop.
+4. Synthetic `task.stop` wake (priority 1) — a waiting live task exits its wait
+   immediately and finalizes `stopped`; queued inbox events are drained observably
+   (`event.cancelled`), in-flight Live Output records are cancelled, and every pending
+   interactive resource resolves (approvals `cancelled`, prompts `null`, confirmations
+   `false`, choices `null`, limit-continuations cancelled).
+5. `task.stop_requested` event (priority 1) is persisted/streamed.
+6. **Idempotent + finalizing** — repeated stops reuse the same cancellation state.
+   When NO live run handle exists (crashed runner, server restart), the stop request
+   itself finalizes stuck `running`/`queued`/`waiting`/`awaiting_approval` rows as
+   honestly `stopped` ("no live runner was attached (force-stop finalization)"); a row
+   that is already terminal is left untouched, and `persistTask` drops status fields
+   from late writes so a parallel-batch completion after a force-stop can never flip
+   the task back.
 
 Final result for a stop: `{ status: 'stopped', result: { summary: <last observation> } }`
 with statusDetail `Stopped by user.` (or `Live task stopped by user.`).
@@ -141,11 +161,51 @@ with statusDetail `Stopped by user.` (or `Live task stopped by user.`).
   execute → Observer verify), bounded by `task.recoveryMaxAttempts` (2–4, default 4).
   One-by-one tasks keep their no-blind-retry replan (`planner.one_by_one_replanned`).
   See [Planner → Pre-plan failure recovery](planner.md#pre-plan-failure-recovery-v1011).
-- **LLM call budgets**: CoreModule 25 s (plus one stricter re-ask), Planner 25 s,
-  Observer verify 6 s, subgoal proposal / feedback revision 10 s each.
+- **LLM call budgets (v1.1.0 — configurable, no more hidden caps)**:
+  CoreModule `coreModule.llmTimeoutMs` (default 5 min, `null` = unlimited, plus one
+  stricter re-ask on unparseable output), Planner `planner.llmTimeoutMs` (default
+  60 s — also shared by dynamic subgoal proposals, which previously had their own
+  10 s race), Observer verify `planner.verifyTimeoutMs` (default 6 s — expiry falls
+  back to the deterministic heuristic, never aborts the task).
 - **Live Mode**: no retry machine — failed cycles just log and the next tick tries again;
   the wait loop keeps the task alive until stopped. Environment-driven repair passes are
   unchanged by v1.0.11 recovery (recovery applies to pre-plan goal tasks only).
+
+## Task continuity, skill modes and execute-all (v1.1.0)
+
+### Continuation and fork (§2/§3)
+
+A task created with `config.continuationOfTaskId` (Continue Task, from Task Preview) or
+`config.forkedFromTaskId` (fork-from-recent, from Task Console) starts with a bounded
+prior-task context block built by `buildPriorContext` (`main/task-continuity.ts`) from
+the SOURCE task: final result + last observations, plan steps with real statuses,
+recent tool-execution summaries (explicitly marked "do NOT re-run these
+automatically"), relevant memory and the source's skill selection — selected per
+`config.contextOptions` and capped by the `continuity.*` limits (12 000 chars /
+12 execution rows / 8 observations by default). The block is prepended to the task's
+instructions and announced via `task.context_seeded`. The source task is never
+mutated, its history is never dumped wholesale, and old tool calls are never replayed
+automatically. When the new task specifies no skills, the source selection is
+inherited as manual skills.
+
+### Skill selection modes (§8)
+
+`config.skillsMode` (default `auto`) + `config.skills` (≤ 12 names) decide which
+skills load: **auto** keeps the v1.0.16 deterministic selection; **manual** loads
+exactly the operator's selection (validated against the registry — disabled/invalid/
+unknown names are excluded WITH an explanation in the `skills.selected` event data);
+**auto+manual** loads the deduplicated union. Loading stays bounded by
+`skills.maxLoadedPerTask` (0 disables loading entirely).
+
+### executeAllPlannedSteps (§10)
+
+Pre-plan only (default false). Enabled: the shared `resolveGoalVerification` gate
+keeps the loop running after the goal verifies — the remaining planned steps execute
+in order (`planner.execute_all_continue` is emitted once) and the task completes when
+the plan reaches its terminal outcomes, with the statusDetail noting the execute-all
+completion. Decision-level terminal outcomes (clarification, cannot_execute, no_tool,
+stop, approval timeout) are unaffected, and stop/approvals/safety limits remain fully
+enforced — the flag never bypasses a gate.
 
 ## Error surface (errorState codes)
 

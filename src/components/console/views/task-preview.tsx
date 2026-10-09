@@ -34,10 +34,14 @@ import type { ContextComposition, NexToolEvent, PlanStep, ToolExecution } from '
 import type { TaskDetail } from '@/lib/nexool/api-contract';
 import { RuntimeTerminal } from '../terminal';
 import { ChecklistItems, TaskChecklist } from '../task-checklist';
+// v1.1.0 §1 — CoreModule Live Output (real provider streaming over SSE).
+import { CoreLiveOutput } from '../core-live-output';
+// v1.1.0 §2 — Continue Task (new linked follow-up task with prior context).
+import { ContinueTaskDialog } from '../continue-task-dialog';
 import { EmptyState, ErrorCard, ExecutionStatusBadge, JsonBlock, SectionTitle, StatusChip, TechLabel, TimeAgo, SOURCE_COLORS, deriveTaskRuntime, deriveChecklist, fmtClock, fmtMs } from '../ui-bits';
 import { reconcileExecutions, isTerminalExecutionStatus } from '@/lib/nexool/execution-merge';
 import {
-  Ban, BellRing, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Gauge, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Upload, Wrench, X, Zap,
+  Ban, BellRing, Braces, Check, CheckCircle2, ChevronDown, Circle, CirclePause, CirclePlay, CornerDownRight, FileText, Flag, Gauge, GitBranch, Layers, LifeBuoy, ListChecks, Loader2, MessageSquareQuote, MessageSquareWarning, Play, Radio, Send, ShieldAlert, ShieldCheck, Square, TerminalSquare, Upload, Wrench, X, Zap,
 } from 'lucide-react';
 
 const PREVIEW_AS_TERMINAL_KEY = 'nextool.previewAsTerminal';
@@ -188,6 +192,7 @@ function ContextPanel({ title, value, count }: { title: string; value: unknown; 
 
 export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const setActiveView = useConsoleStore((s) => s.setActiveView);
+  const openTaskPreview = useConsoleStore((s) => s.openTaskPreview); // v1.1.0 — lineage links
 
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -212,6 +217,8 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
   const [eventType, setEventType] = useState('user.message');
   const [eventPayload, setEventPayload] = useState('{}');
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  // v1.1.0 §2 — Continue Task dialog
+  const [continueOpen, setContinueOpen] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState('Incorrect decision.');
   const [feedbackAction, setFeedbackAction] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1117,6 +1124,29 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
                 <Badge variant="outline" className="border-sky-400/25 bg-sky-400/[0.06] font-mono text-[10px] text-sky-300">multi-event</Badge>
               ) : null}
               <Badge variant="outline" className="border-white/[0.09] font-mono text-[10px] text-muted-foreground">L{detail.reasoningLevel}</Badge>
+              {/* v1.1.0 §2.3/§3.2 — visible lineage: continuation / fork links */}
+              {detail.config?.continuationOfTaskId ? (
+                <button
+                  type="button"
+                  onClick={() => openTaskPreview(detail.config!.continuationOfTaskId!)}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md border border-sky-400/30 bg-sky-400/[0.06] px-2 font-mono text-[10px] text-sky-300 hover:bg-sky-400/15"
+                  aria-label={`Open the original task ${detail.config.continuationOfTaskId}`}
+                  title="Open the original task"
+                >
+                  <CornerDownRight className="size-3" aria-hidden /> continuation of {detail.config.continuationOfTaskId.slice(0, 12)}…
+                </button>
+              ) : null}
+              {detail.config?.forkedFromTaskId ? (
+                <button
+                  type="button"
+                  onClick={() => openTaskPreview(detail.config!.forkedFromTaskId!)}
+                  className="inline-flex min-h-8 items-center gap-1 rounded-md border border-violet-400/30 bg-violet-400/[0.06] px-2 font-mono text-[10px] text-violet-300 hover:bg-violet-400/15"
+                  aria-label={`Open the fork source task ${detail.config.forkedFromTaskId}`}
+                  title="Open the fork source task"
+                >
+                  <GitBranch className="size-3" aria-hidden /> forked from {detail.config.forkedFromTaskId.slice(0, 12)}…
+                </button>
+              ) : null}
               {detail.sessionId ? <span className="font-mono text-[10px] text-muted-foreground">session {detail.sessionId.slice(0, 12)}</span> : null}
               <span className="font-mono text-[10px] text-muted-foreground">#{detail.id.slice(0, 8)}</span>
             </div>
@@ -1197,6 +1227,17 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
                 onClick={() => setStopOpen(true)}
               >
                 <Square className="size-3.5" aria-hidden /> Stop task
+              </Button>
+            ) : null}
+            {/* v1.1.0 §2 — Continue Task for TERMINAL tasks (completed/stopped/failed) */}
+            {['completed', 'stopped', 'failed'].includes(detail.status) ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="col-span-2 min-h-11 justify-center border-sky-400/30 text-sky-300 hover:bg-sky-400/10 sm:col-span-1"
+                onClick={() => setContinueOpen(true)}
+              >
+                <CornerDownRight className="size-3.5" aria-hidden /> Continue Task
               </Button>
             ) : null}
           </div>
@@ -1502,6 +1543,8 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
           <TabsContent value="overview" className="mt-3 space-y-4 outline-none">
             {goalCard}
             {subgoalCard}
+            {/* v1.1.0 §1 — CoreModule Live Output (dedicated collapsible section) */}
+            <CoreLiveOutput taskId={taskId} active={isActive} />
             {isTerminal ? finalOutputSection : livePreview}
             {planSection}
             {recoverySection}
@@ -1534,6 +1577,9 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
 
         {isTerminal ? finalOutputSection : livePreview}
 
+        {/* v1.1.0 §1 — CoreModule Live Output (dedicated section, desktop) */}
+        <CoreLiveOutput taskId={taskId} active={isActive} />
+
         <div className="grid gap-4 lg:grid-cols-2">
           {toolsSection}
           {stateSection}
@@ -1561,6 +1607,11 @@ export default function TaskPreviewView({ taskId }: { taskId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* v1.1.0 §2 — Continue Task dialog (terminal tasks only) */}
+      {detail ? (
+        <ContinueTaskDialog task={detail} open={continueOpen} onOpenChange={setContinueOpen} />
+      ) : null}
 
       {/* Send event dialog */}
       <Dialog open={eventOpen} onOpenChange={setEventOpen}>

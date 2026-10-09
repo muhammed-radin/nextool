@@ -5,6 +5,8 @@
  * Goal Mode is the default; Live Mode requires explicit opt-in confirmation.
  * v1.0.1: glass panel form, blue brand accents, works at 320px (full-width
  * controls, wrapping quick-fill chips, prominent full-width submit on mobile).
+ * v1.1.0: fork-from-recent with context reuse (§3), skills selector (§8),
+ * execute-all-planned-steps toggle for pre-plan (§10).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -20,12 +22,12 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { useConsoleStore } from '../console-store';
-import { ApiClientError, createTask, getConfigurationLimits, getSettings, listTasks, listTools } from '@/lib/nexool/client';
+import { apiFetch, ApiClientError, createTask, getConfigurationLimits, getSettings, listTasks, listTools } from '@/lib/nexool/client';
 import type { LimitPropertyDTO } from '@/lib/nexool/client';
 import type { ToolEntry } from '@/lib/nexool/api-contract';
 import type { TaskSummary } from '@/lib/nexool/types';
 import { EmptyState, ErrorCard, SectionTitle, StatusChip, TechLabel, TimeAgo } from '../ui-bits';
-import { AlertTriangle, ChevronDown, FileText, ListPlus, Loader2, Send, ShieldCheck, Sparkles, TerminalSquare, Trash2, Upload, Wrench, Zap } from 'lucide-react';
+import { AlertTriangle, ChevronDown, FileText, History, ListPlus, Loader2, Send, ShieldCheck, Sparkles, TerminalSquare, Trash2, Upload, Wrench, Zap } from 'lucide-react';
 // v1.0.12 Phase 7 — shared deterministic instructions logic (pure module,
 // same combine rules the server applies — frontend/backend always agree).
 import {
@@ -72,6 +74,40 @@ const LIMIT_PROPERTY_BY_FIELD: Record<keyof typeof DEFAULTS, { section: string; 
   liveIntervalMs: { section: 'task', key: 'liveIntervalMs' },
   maxParallelToolCalls: { section: 'task', key: 'maxParallelToolCalls' },
 };
+
+// ---------- v1.1.0 §3/§8 — fork-from-recent + skills selector constants ----------
+
+/** v1.1.0 §3 — only FINISHED executions can serve as a fork source. */
+const FORKABLE_STATUSES: ReadonlySet<TaskSummary['status']> = new Set(['completed', 'stopped', 'failed']);
+
+type ForkContextKey = 'result' | 'plan' | 'executions' | 'memory' | 'skills';
+
+/** v1.1.0 §3 — every context class defaults to CHECKED when a source is picked. */
+const FORK_CONTEXT_DEFAULT: Record<ForkContextKey, boolean> = { result: true, plan: true, executions: true, memory: true, skills: true };
+
+const FORK_CONTEXT_ITEMS: { key: ForkContextKey; label: string; hint: string }[] = [
+  { key: 'result', label: 'Previous result and observations', hint: 'Attach the final result the source task produced.' },
+  { key: 'plan', label: 'Relevant plan steps', hint: 'Attach the plan the source task generated.' },
+  { key: 'executions', label: 'Tool execution results', hint: 'Attach observations from the source tool calls.' },
+  { key: 'memory', label: 'Relevant memory/context', hint: 'Attach memory entries written by the source task.' },
+  { key: 'skills', label: 'Selected skills', hint: 'Attach the skills the source task selected.' },
+];
+
+/** v1.1.0 §3 — display label for a fork candidate: name or truncated request. */
+const forkTaskLabel = (t: TaskSummary, max = 60): string =>
+  t.name || (t.request.length > max ? `${t.request.slice(0, max)}…` : t.request);
+
+/** v1.1.0 §8 — client cap mirrors taskConfigSchema (skills max 12). */
+const MAX_MANUAL_SKILLS = 12;
+
+/** v1.1.0 §8 — lightweight skill metadata from GET /api/skills (subset used here). */
+interface ConsoleSkillMeta {
+  name: string;
+  description: string;
+  enabled: boolean;
+  valid: boolean;
+  builtIn: boolean;
+}
 
 export default function TaskConsoleView() {
   const openTaskPreview = useConsoleStore((s) => s.openTaskPreview);
@@ -122,6 +158,22 @@ export default function TaskConsoleView() {
   // tasks (click → preview) or a meaningful empty state instead of blank space.
   const [recentTasks, setRecentTasks] = useState<TaskSummary[] | null>(null);
   const [recentError, setRecentError] = useState<string | null>(null);
+  // v1.1.0 §3 — fork-from-recent: source task + which context classes to reuse.
+  const [forkOpen, setForkOpen] = useState(false);
+  const [forkTasks, setForkTasks] = useState<TaskSummary[] | null>(null);
+  const [forkError, setForkError] = useState<string | null>(null);
+  const [forkSourceId, setForkSourceId] = useState<string | null>(null);
+  const [forkFilter, setForkFilter] = useState('');
+  const [forkContext, setForkContext] = useState<Record<ForkContextKey, boolean>>({ ...FORK_CONTEXT_DEFAULT });
+  // v1.1.0 §8 — skills: mode + manual selection from the real registry.
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [skillsMode, setSkillsMode] = useState<'auto' | 'manual' | 'auto+manual'>('auto');
+  const [availableSkills, setAvailableSkills] = useState<ConsoleSkillMeta[] | null>(null);
+  const [skillsError, setSkillsError] = useState<string | null>(null);
+  const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
+  // v1.1.0 §10 — pre-plan only: keep executing the remaining planned steps
+  // after the goal is verified (never sent for one-by-one planning).
+  const [executeAllPlannedSteps, setExecuteAllPlannedSteps] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -167,6 +219,43 @@ export default function TaskConsoleView() {
     void loadRecent();
   }, [loadRecent]);
 
+  // v1.1.0 §3 — forkable sources: the 20 most recent tasks, filtered
+  // client-side to finished executions (completed / stopped / failed).
+  const loadForkTasks = useCallback(async () => {
+    try {
+      const data = await listTasks({ limit: 20 });
+      setForkTasks(data.filter((t) => FORKABLE_STATUSES.has(t.status)));
+      setForkError(null);
+    } catch (e) {
+      setForkError(e instanceof ApiClientError ? e.message : 'Task history unavailable');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadForkTasks();
+  }, [loadForkTasks]);
+
+  // v1.1.0 §8 — REAL skill registry metadata (GET /api/skills). Only
+  // enabled+valid skills are offered; disabled/invalid ones are excluded here
+  // (the backend excludes them at selection time anyway).
+  const loadSkills = useCallback(async () => {
+    try {
+      const res = await apiFetch<{ skills: ConsoleSkillMeta[] }>('/api/skills');
+      setAvailableSkills(
+        res.skills
+          .filter((s) => s.enabled && s.valid)
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      setSkillsError(null);
+    } catch (e) {
+      setSkillsError(e instanceof ApiClientError ? e.message : 'Failed to load skills');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSkills();
+  }, [loadSkills]);
+
   const toolGroups = useMemo(() => {
     const groups = new Map<string, ToolEntry[]>();
     for (const t of tools ?? []) {
@@ -206,6 +295,35 @@ export default function TaskConsoleView() {
       const next = new Set(prev);
       if (open) next.add(category);
       else next.delete(category);
+      return next;
+    });
+  };
+
+  // ---------- v1.1.0 §3/§8 — fork-from-recent + skills ----------
+
+  const forkSource = useMemo(
+    () => (forkTasks ?? []).find((t) => t.id === forkSourceId) ?? null,
+    [forkTasks, forkSourceId],
+  );
+
+  const forkCandidates = useMemo(() => {
+    const q = forkFilter.trim().toLowerCase();
+    const all = forkTasks ?? [];
+    if (!q) return all;
+    return all.filter((t) => (t.name ?? '').toLowerCase().includes(q) || t.request.toLowerCase().includes(q));
+  }, [forkTasks, forkFilter]);
+
+  /** Selecting a fork source (re)sets the context checkboxes to ALL CHECKED. */
+  const selectForkSource = (id: string) => {
+    setForkSourceId(id);
+    setForkContext({ ...FORK_CONTEXT_DEFAULT });
+  };
+
+  const toggleSkill = (name: string, checked: boolean) => {
+    setSelectedSkills((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(name);
+      else next.delete(name);
       return next;
     });
   };
@@ -289,6 +407,10 @@ export default function TaskConsoleView() {
     if (instructionsFile && instructionsFile.content.length > MAX_UPLOADED_INSTRUCTIONS_CHARS) {
       return `Markdown file "${instructionsFile.name}" is too large (limit ${MAX_UPLOADED_INSTRUCTIONS_CHARS.toLocaleString()} chars).`;
     }
+    // v1.1.0 §8 — defensive client cap (the checkboxes already enforce it).
+    if (selectedSkills.size > MAX_MANUAL_SKILLS) {
+      return `At most ${MAX_MANUAL_SKILLS} skills can be selected for one task.`;
+    }
     return null;
   };
 
@@ -333,6 +455,27 @@ export default function TaskConsoleView() {
           // v1.0.13 — the continuation cap always travels in the task config.
           limitContinuations,
           ...(mode === 'live' ? { liveIntervalMs: limits.liveIntervalMs } : {}),
+          // v1.1.0 §3 — fork-from-recent: only when a source task is selected;
+          // only the CHOSEN context classes travel as booleans (spec §3.2).
+          // The new task is independent — nothing else is replayed.
+          ...(forkSource
+            ? {
+                forkedFromTaskId: forkSource.id,
+                contextOptions: {
+                  ...(forkContext.result ? { result: true } : {}),
+                  ...(forkContext.plan ? { plan: true } : {}),
+                  ...(forkContext.executions ? { executions: true } : {}),
+                  ...(forkContext.memory ? { memory: true } : {}),
+                  ...(forkContext.skills ? { skills: true } : {}),
+                },
+              }
+            : {}),
+          // v1.1.0 §8 — skills: nothing is sent in Automatic mode (the runtime
+          // auto-selects); manual picks only travel when non-empty.
+          ...(skillsMode !== 'auto' ? { skillsMode } : {}),
+          ...(skillsMode !== 'auto' && selectedSkills.size > 0 ? { skills: [...selectedSkills] } : {}),
+          // v1.1.0 §10 — pre-plan only (one-by-one has no step list to exhaust).
+          ...(plannerType === 'pre-plan' && executeAllPlannedSteps ? { executeAllPlannedSteps: true } : {}),
         },
         // v1.0.12 Phase 7 — BOTH instruction sources travel to the server,
         // which combines them deterministically (file section first, then
@@ -352,6 +495,11 @@ export default function TaskConsoleView() {
       setLiveConfirmed(false);
       setInstructionsText('');
       setInstructionsFile(null);
+      // v1.1.0 §3 — the fork selection is cleared after a successful submit.
+      setForkSourceId(null);
+      setForkContext({ ...FORK_CONTEXT_DEFAULT });
+      setForkFilter('');
+      void loadForkTasks();
       void loadRecent();
     } catch (e) {
       const msg = e instanceof ApiClientError ? e.message : 'Task submission failed';
@@ -486,6 +634,21 @@ export default function TaskConsoleView() {
             </div>
           )}
         </div>
+
+        {/* v1.1.0 §10 — pre-plan only: keep executing the remaining planned
+            steps after the goal is verified. Hidden (and not sent) for
+            one-by-one planning, which has no pre-generated step list. */}
+        {plannerType === 'pre-plan' ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 py-2.5">
+            <div className="min-w-0">
+              <Label htmlFor="task-exec-all-steps" className="text-sm">Execute every planned step, even after the goal is achieved</Label>
+              <p className="text-[11px] text-muted-foreground">
+                Pre-plan only: the runtime keeps executing the remaining planned steps after the goal is verified; Stop, approvals and safety limits still apply.
+              </p>
+            </div>
+            <Switch id="task-exec-all-steps" checked={executeAllPlannedSteps} onCheckedChange={setExecuteAllPlannedSteps} aria-label="Execute every planned step, even after the goal is achieved" />
+          </div>
+        ) : null}
 
         {/* v1.0.13 — per-task safety-limit continuation cap. */}
         <div className="space-y-1.5">
@@ -650,6 +813,127 @@ export default function TaskConsoleView() {
             </Collapsible>
           ) : null}
         </div>
+
+        {/* v1.1.0 §3 — Start from a recent task (fork): pick a FINISHED task
+            (completed / stopped / failed) and choose which context classes are
+            reused. The new task is INDEPENDENT — no tool call of the source is
+            ever replayed; only forkedFromTaskId + the checked contextOptions
+            travel in the config. */}
+        <Collapsible open={forkOpen} onOpenChange={setForkOpen}>
+          <CollapsibleTrigger className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 text-left text-sm text-foreground/90 hover:bg-white/[0.06]">
+            <span className="flex items-center gap-2">
+              <History className="size-3.5 text-sky-300" aria-hidden /> Start from a recent task <span className="font-normal text-muted-foreground">(optional)</span>
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="hidden max-w-48 truncate text-[11px] text-muted-foreground sm:inline">
+                {forkSource ? forkTaskLabel(forkSource) : 'reuse result · plan · executions · memory · skills'}
+              </span>
+              <ChevronDown className={cn('size-4 text-sky-300/70 transition-transform', forkOpen && 'rotate-180')} aria-hidden />
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="mt-2 space-y-3 rounded-lg border border-white/[0.07] bg-white/[0.03] p-3">
+              {forkError ? (
+                <ErrorCard title="Task history unavailable" message={forkError} onRetry={() => void loadForkTasks()} />
+              ) : forkTasks === null ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+                </div>
+              ) : (
+                <>
+                  {/* Small client-side filter only when the list is long. */}
+                  {forkTasks.length > 8 ? (
+                    <Input
+                      value={forkFilter}
+                      onChange={(e) => setForkFilter(e.target.value)}
+                      placeholder="Filter recent tasks by name or request…"
+                      className="min-h-9 border-white/[0.09] bg-white/[0.04] text-sm"
+                      aria-label="Filter fork source tasks"
+                    />
+                  ) : null}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="task-fork-source">Continue from recent task</Label>
+                    <Select
+                      value={forkSourceId ?? 'none'}
+                      onValueChange={(v) => {
+                        if (v === 'none') setForkSourceId(null);
+                        else selectForkSource(v);
+                      }}
+                    >
+                      <SelectTrigger id="task-fork-source" className="min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm" aria-label="Continue from a recent task">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="glass-strong">
+                        <SelectItem value="none">None — start from scratch</SelectItem>
+                        {forkCandidates.map((t) => (
+                          <SelectItem key={t.id} value={t.id} textValue={forkTaskLabel(t)} className="min-h-9">
+                            <span className="flex min-w-0 items-center gap-2">
+                              <span className="min-w-0 flex-1 truncate">{forkTaskLabel(t)}</span>
+                              <StatusChip status={t.status} className="shrink-0" />
+                              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{t.completedAt ? new Date(t.completedAt).toLocaleDateString() : '—'}</span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {forkCandidates.length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        {forkTasks.length === 0
+                          ? 'No completed, stopped or failed tasks yet — run a task first to fork from it here.'
+                          : 'No recent tasks match the filter.'}
+                      </p>
+                    ) : null}
+                  </div>
+                  {forkSource ? (
+                    <>
+                      {/* Selected source — status, completion time and tool-execution
+                          count straight from the TaskSummary (no extra API call). */}
+                      <div className="rounded-md border border-white/[0.09] bg-white/[0.02] px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                          <StatusChip status={forkSource.status} />
+                          <span>
+                            completed <TimeAgo iso={forkSource.completedAt} className="font-mono" />
+                          </span>
+                          <span className="font-mono">{forkSource.toolCalls} tool executions</span>
+                        </div>
+                        <p className="mt-1 truncate text-[11px] text-slate-300">{forkSource.request}</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs text-muted-foreground">Context to reuse</Label>
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          {FORK_CONTEXT_ITEMS.map((item) => (
+                            <label
+                              key={item.key}
+                              className="flex min-h-11 cursor-pointer items-start gap-2 rounded-md border border-white/[0.07] px-2.5 py-2 text-xs text-slate-300 transition-colors hover:bg-white/[0.06]"
+                            >
+                              <Checkbox
+                                checked={forkContext[item.key]}
+                                onCheckedChange={(v) => setForkContext((prev) => ({ ...prev, [item.key]: v === true }))}
+                                className="mt-0.5"
+                                aria-label={item.label}
+                              />
+                              <span className="min-w-0">
+                                <span className="block leading-tight">{item.label}</span>
+                                <span className="block text-[10px] text-muted-foreground">{item.hint}</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                        <p className="font-mono text-[10px] text-muted-foreground/70">
+                          The new task is independent — old tool calls are never replayed; only the checked context is attached.
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground">
+                      Select a finished task to reuse its result, plan, tool executions, memory or skills as context for this task.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
@@ -896,6 +1180,114 @@ export default function TaskConsoleView() {
             </div>
           )}
         </div>
+
+        {/* v1.1.0 §8 — Skills: selection mode + manual picks from the REAL
+            registry (GET /api/skills). Disabled/invalid skills are never
+            listed and nothing is hard-coded. In Automatic mode no skills
+            config is sent at all — the runtime decides. */}
+        <Collapsible open={skillsOpen} onOpenChange={setSkillsOpen}>
+          <CollapsibleTrigger className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-white/[0.09] bg-white/[0.04] px-3 text-left text-sm text-foreground/90 hover:bg-white/[0.06]">
+            <span className="flex items-center gap-2">
+              <Sparkles className="size-3.5 text-sky-300" aria-hidden /> Skills
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="hidden text-[11px] text-muted-foreground sm:inline">
+                {skillsMode === 'auto'
+                  ? 'automatic selection'
+                  : `${selectedSkills.size}/${MAX_MANUAL_SKILLS} selected · ${skillsMode === 'manual' ? 'manual' : 'auto + selected'}`}
+              </span>
+              <ChevronDown className={cn('size-4 text-sky-300/70 transition-transform', skillsOpen && 'rotate-180')} aria-hidden />
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="mt-2 space-y-3 rounded-lg border border-white/[0.07] bg-white/[0.03] p-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="task-skills-mode">Selection mode</Label>
+                <Select value={skillsMode} onValueChange={(v) => setSkillsMode(v as 'auto' | 'manual' | 'auto+manual')}>
+                  <SelectTrigger id="task-skills-mode" className="min-h-11 w-full border-white/[0.09] bg-white/[0.04] font-mono text-sm" aria-label="Skill selection mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="glass-strong">
+                    <SelectItem value="auto">Automatic — the runtime picks relevant skills</SelectItem>
+                    <SelectItem value="manual">Manual — only the selected skills</SelectItem>
+                    <SelectItem value="auto+manual">Auto + selected — automatic plus your picks</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  {skillsMode === 'auto'
+                    ? 'The runtime matches enabled skills to this task automatically — nothing to pick.'
+                    : skillsMode === 'manual'
+                      ? 'Only the checked skills are available to this task.'
+                      : 'The runtime auto-selects relevant skills and always includes your picks.'}
+                </p>
+              </div>
+
+              {skillsMode !== 'auto' ? (
+                skillsError ? (
+                  <ErrorCard title="Skill registry unavailable" message={skillsError} onRetry={() => void loadSkills()} />
+                ) : availableSkills === null ? (
+                  <div className="space-y-2">
+                    {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+                  </div>
+                ) : availableSkills.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">No enabled skills — enable at least one in the Skills view first.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label className="text-xs text-muted-foreground">Available skills (enabled &amp; valid only)</Label>
+                      <span className={cn('font-mono text-[11px]', selectedSkills.size >= MAX_MANUAL_SKILLS ? 'text-amber-300' : 'text-muted-foreground')}>
+                        {selectedSkills.size}/{MAX_MANUAL_SKILLS} selected{selectedSkills.size >= MAX_MANUAL_SKILLS ? ' — limit reached' : ''}
+                      </span>
+                    </div>
+                    <div className="nextool-scroll relative max-h-56 overflow-y-auto rounded-md border border-white/[0.07] bg-white/[0.02] p-2">
+                      <div className="grid gap-1.5 sm:grid-cols-2">
+                        {availableSkills.map((skill) => {
+                          const checked = selectedSkills.has(skill.name);
+                          const capped = !checked && selectedSkills.size >= MAX_MANUAL_SKILLS;
+                          return (
+                            <label
+                              key={skill.name}
+                              className={cn(
+                                'flex min-h-11 items-start gap-2 rounded-md border px-2.5 py-2 text-xs transition-colors',
+                                capped ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+                                checked
+                                  ? 'border-sky-400/30 bg-primary-gradient-soft text-sky-100'
+                                  : 'border-white/[0.07] text-slate-300 hover:bg-white/[0.06]',
+                              )}
+                            >
+                              <Checkbox
+                                checked={checked}
+                                disabled={capped}
+                                onCheckedChange={(v) => toggleSkill(skill.name, v === true)}
+                                className="mt-0.5"
+                                aria-label={`Select skill ${skill.name}`}
+                              />
+                              <span className="min-w-0">
+                                <span className="block truncate font-mono leading-tight">{skill.name}</span>
+                                <span className="block truncate text-[10px] text-muted-foreground">{skill.description}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {selectedSkills.size > 0 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="min-h-9 text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => setSelectedSkills(new Set())}
+                      >
+                        Clear skill selection
+                      </Button>
+                    ) : null}
+                  </div>
+                )
+              ) : null}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
 
         {validation ? (
           <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-3 py-2 text-xs text-rose-300">

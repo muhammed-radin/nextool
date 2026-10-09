@@ -140,6 +140,41 @@ interval triggers are message-less)
   (`event.cancelled`); nothing runs after the stop. Failed event cycles never deadlock
   the queue (§32 — failure recorded, next event proceeds).
 
+## v1.1.0 additions at a glance
+
+Four architectural changes in v1.1.0 (full detail in the
+[v1.1.0 release page](release-1.1.0.md)):
+
+- **CoreModule Live Output channel** — `core/llm-call.ts` is now the ONE shared
+  provider-call layer for every LLM path (CoreModule, Planner, Observer, subgoals),
+  owning the configurable timeout (`null` = unlimited), the task AbortSignal and REAL
+  `stream: true` streaming. Provider deltas flow into the bounded in-memory Live Output
+  registry (`core/live-output.ts`) and out through the dedicated SSE channel
+  `GET /api/core/stream` (`core.started/chunk/completed/failed/cancelled`, dedup by
+  `(requestId, seq)`, bounded snapshot replay). The channel is observability-only:
+  only the `core.output.started/completed/failed` lifecycle events are persisted —
+  token chunks are not — and the final decision still flows through the normal
+  parse/validate pipeline.
+- **Task continuity layer** — `main/task-continuity.ts` (`buildPriorContext`) builds a
+  bounded prior-task context block (`continuity.*` limits) for tasks created with
+  `config.continuationOfTaskId` (Continue Task) or `config.forkedFromTaskId`
+  (fork-from-recent); `runTask` prepends the block, emits `task.context_seeded` and
+  inherits the source skill selection when the new task specifies none. The source
+  task is never mutated and old tool calls are never replayed.
+- **Force-stop layer** — `main/task-processes.ts` is a per-task registry of REAL host
+  processes (fs.cmd children); `stopTask` now aborts every in-flight provider call
+  (the signal is threaded through all LLM call sites), terminates task-owned children
+  SIGTERM → SIGKILL, drains queued events observably, finalizes stuck non-terminal rows
+  as `stopped` when no runner is attached, and `persistTask` drops status fields from
+  late writes so a terminal row can never be overwritten.
+- **Terminal architecture change** — the real-FS terminal no longer runs a persistent
+  PTY shell. `inspector/terminal-sessions.ts` spawns one `/bin/bash -c` child per
+  command (detached process group, wrapper cwd marker on stderr, real exit codes);
+  sessions are containers (`idle | running | failed`) and cannot get stuck in
+  `starting`. The VFS terminal moved server-side too (`inspector/vfs-shell.ts`,
+  `/api/inspector/vfs/shell`) with the allowed-command list enforced from
+  `vfsTerminal.allowedCommands`. One shared xterm.js shell component renders both.
+
 ## Data flow, end to end
 
 1. **Create** — the console (or any client) posts to `POST /api/tasks`. `nexool.createTask`

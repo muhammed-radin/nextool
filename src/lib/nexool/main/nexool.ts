@@ -13,6 +13,9 @@ import { cancelPendingApprovalsForTask, listPendingApprovals } from '../approval
 import { cancelPendingAlertsForTask, cancelPendingChoicesForTask, cancelPendingConfirmationsForTask, cancelPendingPromptsForTask } from '../tools/sandbox-interactive';
 import { cancelPendingVerificationsForTask } from '../verification';
 import { cancelPendingLimitContinuationsForTask } from '../limit-continuation';
+// v1.1.0 §9 — force-stop: task-owned child-process registry + CoreModule Live Output cancellation.
+import { terminateTaskProcesses } from './task-processes';
+import { cancelCoreOutputsForTask } from '../core/live-output';
 import type {
   TaskConfig, TaskSummary, MainState, PlanStep, FinalResult, NexToolEvent, EventSource,
 } from '../types';
@@ -158,13 +161,27 @@ export async function createTask(
   return detail;
 }
 
-/** Stop a task (goal or live). Wakes live waiting, aborts active tool execution,
- *  and flushes pending approvals/prompts so nothing stays blocked. */
+/**
+ * Stop a task (goal or live) — v1.1.0 §9 FORCE-STOP semantics:
+ *  1. persist an observable stop request,
+ *  2. signal the task's cancellation controller (stopFlag + AbortSignal →
+ *     in-flight provider calls unblock),
+ *  3. cancel queued task/event actions (inbox drained observably),
+ *  4. terminate task-owned child processes (registry; SIGTERM → SIGKILL),
+ *  5. resolve pending interactive prompts/approvals,
+ *  6. finalize the task status as `stopped` when no live handle exists
+ *     (crashed runner, server restart, or an already-terminal row is left
+ *     untouched) — a stopped task never remains `running`/`queued`/
+ *     `waiting`/`awaiting_approval` forever.
+ * Idempotent: repeated stop requests reuse the same cancellation state and
+ * never spawn duplicate cleanup or corrupt state.
+ */
 export async function stopTask(taskId: string): Promise<TaskDetail | null> {
   const handle = runtimeState().handles.get(taskId);
   if (handle) {
+    // idempotent signaling: setting both again is harmless
     handle.stopFlag.stopped = true;
-    handle.abortController.abort();
+    if (!handle.abortController.signal.aborted) handle.abortController.abort();
     // v1.0.14 §31 — a stopping task never keeps pending events: every inbox
     // event is CANCELLED observably, then the in-memory queue is dropped.
     for (const pending of handle.inbox) {
@@ -188,6 +205,24 @@ export async function stopTask(taskId: string): Promise<TaskDetail | null> {
     };
     handle.wake?.(event);
   }
+  // v1.1.0 §9.3 — terminate task-owned child processes (fs.cmd etc.).
+  // The standalone FS Inspector terminal is NOT task-owned and is untouched.
+  void terminateTaskProcesses(taskId)
+    .then((n) => {
+      if (n > 0) {
+        void emitEvent({
+          taskId,
+          type: 'task.stop_requested',
+          source: 'runtime',
+          message: `Force-stop terminated ${n} task-owned child process${n === 1 ? '' : 'es'}.`,
+          priority: 4,
+        });
+      }
+    })
+    .catch(() => { /* never blocks the stop path */ });
+  // v1.1.0 §9 — in-flight CoreModule Live Output requests are cancelled so
+  // late chunks are ignored by the renderer (§12.1 no cross-task chunks).
+  cancelCoreOutputsForTask(taskId);
   // v1.0.6 — a stopping task never keeps interactive resources pending.
   // v1.0.8 §1.4 — pending confirmations resolve FALSE (never true).
   cancelPendingApprovalsForTask(taskId);
@@ -210,6 +245,37 @@ export async function stopTask(taskId: string): Promise<TaskDetail | null> {
     message: 'Stop requested by user.',
     priority: 1,
   });
+
+  // v1.1.0 §9.1/§9.4 — when no live handle exists (the runner crashed, the
+  // server restarted, or the row was left non-terminal by a restart) the
+  // stop request itself must finalize the task: stuck `running`/`queued`/
+  // `waiting`/`awaiting_approval` rows become honestly `stopped`. A row that
+  // is already terminal is left untouched (a stop after completion must not
+  // rewrite history), and a live handle means the loop will finalize.
+  try {
+    const row = await db.task.findUnique({ where: { id: taskId }, select: { status: true } });
+    const TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled']);
+    if (row && !TERMINAL.has(row.status) && !handle) {
+      await db.task.update({
+        where: { id: taskId },
+        data: {
+          status: 'stopped',
+          statusDetail: 'Stopped by user — no live runner was attached (force-stop finalization).',
+          completedAt: new Date(),
+        },
+      });
+      void emitEvent({
+        taskId,
+        type: 'task.stop',
+        source: 'runtime',
+        message: 'Task finalized as stopped (force-stop: no live runner).',
+        priority: 2,
+      });
+    }
+  } catch {
+    /* getTaskDetail below still returns the current row */
+  }
+
   return getTaskDetail(taskId);
 }
 

@@ -6,7 +6,8 @@ order: 1
 
 # API Reference
 
-Every HTTP endpoint in NexTool Q1 v1.0.11. All routes are Next.js route handlers
+Every HTTP endpoint in NexTool Q1 (v1.1.0 at this release — the endpoint list below
+covers everything through v1.0.11 plus the v1.1.0 additions marked as such). All routes are Next.js route handlers
 (`runtime = 'nodejs'`, `dynamic = 'force-dynamic'`) under `src/app/api/`. JSON in/out,
 except the SSE stream, the model export download (zip), the dataset Parquet export
 (binary), the icons upload (multipart) and the multipart dataset import variant.
@@ -78,8 +79,24 @@ from 8 000 in v1.0.11 so large Markdown task descriptions are never truncated),
 the v1.0.3 parallel policy fields `parallelToolCalls` (boolean) and
 `maxParallelToolCalls` (int 1–8), the v1.0.6 fields `autoExecuteTools` (boolean)
 and `allowMultipleEvents` (boolean), the **v1.0.10 planner fields
-`plannerType` (`'pre-plan' | 'one-by-one'`) and `prePlanMaxSteps` (int 1–122)**, and
-the **v1.0.11 `recoveryMaxAttempts` (int 2–4)** field.
+`plannerType` (`'pre-plan' | 'one-by-one'`) and `prePlanMaxSteps` (int 1–122)**, the
+**v1.0.11 `recoveryMaxAttempts` (int 2–4)** field, and the **v1.1.0 task-continuity /
+skills / pre-plan fields** (all optional):
+
+- `continuationOfTaskId` / `forkedFromTaskId` — string matching `^task_[a-z0-9]+$`; the
+  source task for a **Continue Task** / **fork-from-recent** creation (see
+  [Release 1.1.0 → task continuity](release-1.1.0.md)). The runtime builds a bounded
+  prior-context block from the source (per `contextOptions`), emits `task.context_seeded`, and NEVER mutates or re-executes the source.
+- `contextOptions` — `{ result?, plan?, executions?, memory?, skills? }` booleans
+  selecting which context classes travel into the new task (result/executions/skills
+  default on; plan/memory opt-in).
+- `skills` — array of skill names, **max 12** (zod rejects longer arrays with
+  `INVALID_REQUEST`); `skillsMode` — `'auto' | 'manual' | 'auto+manual'` (default
+  `auto`). Manual selections are validated against the registry at run time;
+  disabled/invalid names are excluded WITH an explanation in the `skills.selected`
+  event.
+- `executeAllPlannedSteps` — boolean (default false): when the goal verifies under the
+  pre-plan planner, the remaining planned steps still execute (`planner.execute_all_continue`).
 The server validates the bounded fields: an invalid `plannerType`, an out-of-range
 `prePlanMaxSteps` (e.g. `123`) or an out-of-range `recoveryMaxAttempts` (outside 2–4)
 is rejected with 400 `INVALID_REQUEST`
@@ -97,7 +114,7 @@ always sends `config.enabledTools: [...]`. Response: 201 `TaskDetail`
 (summary + config, state, plan, finalResult, error, sessionId).
 Errors: `INVALID_REQUEST` (empty request, empty `enabledTools` array, invalid
 `plannerType` / out-of-range `prePlanMaxSteps` / out-of-range `recoveryMaxAttempts`,
-request longer than 32 000 chars),
+more than 12 `skills`, request longer than 32 000 chars),
 `TOOLS_REQUIRED` (missing/empty tool selection), `TASK_CREATE_FAILED` (validation).
 
 ```bash
@@ -110,8 +127,14 @@ Full `TaskDetail`. Errors: `NOT_FOUND`.
 
 ### POST /api/tasks/{id}/stop
 Cancel a goal/live task + abort the in-flight execution. Returns the (still mutating)
-`TaskDetail`; errors: `NOT_FOUND`. Stopping also flushes any pending approvals
-(resolved `cancelled`) and pending tool prompts (resolved `null`).
+`TaskDetail`; errors: `NOT_FOUND`. **v1.1.0 force-stop semantics**: the AbortSignal
+unblocks in-flight provider calls immediately, task-owned child processes (e.g. `fs.cmd`)
+are terminated SIGTERM → SIGKILL via the per-task registry, queued events drain
+observably (`event.cancelled`), pending interactive resources resolve (approvals
+`cancelled`, prompts `null`), and a non-terminal row with NO live runner is finalized
+as `stopped` ("no live runner was attached (force-stop finalization)"). Idempotent —
+repeated stops reuse the same cancellation state; already-terminal rows are never
+rewritten and late results cannot flip a terminal row back.
 
 ### POST /api/tasks/{id}/pause (v1.0.6)
 Suspend a running/waiting/awaiting-approval task: status → `paused`, `task.paused`
@@ -221,7 +244,15 @@ The Configuration Registry API over `config/configuration-limits.json`:
 - **GET ?preset=unrestricted** — the ⚠ Complete Unrestricted preset: every numeric at
   its max, capability booleans open, `fs.restricted: false` (the UI warns + confirms
   before applying it; security boundaries are not configurable). Unknown values → 400
-  `UNKNOWN_PRESET`.
+  `UNKNOWN_PRESET`. **v1.1.0: nullable numerics (`coreModule.llmTimeoutMs`,
+  `planner.llmTimeoutMs`, `planner.verifyTimeoutMs`, `terminal.execTimeoutMs`) and the
+  nullable array (`vfsTerminal.allowedCommands`) are set to `null` = genuinely
+  unlimited.**
+- **v1.1.0 sections** — the resolved metadata now also carries the new
+  `coreModule` / `planner` / `terminal` / `vfsTerminal` / `skills` / `events` /
+  `continuity` sections, including the new `'array'` property type (with `items`)
+  and nullable values (`null` default requires `nullable: true` — startup validation
+  fails otherwise). See [Configuration → Central configuration limits](configuration.md).
 - **PUT** (v1.0.14, the Limitations page Save/Import) — replaces the limits file with
   the request body AFTER full validation (structure, required fields, types,
   min/max relationships): valid → atomic temp-file + rename write, loader cache
@@ -273,6 +304,25 @@ card. Errors: none beyond empty array for unknown ids (returns `[]`).
 SSE. Frames: `hello` `{ ok:true, since, taskId }` → replayed `event` frames → live
 `event` frames; `:keepalive` comment every 15 s. `since` accepts ISO or epoch ms.
 Headers include `X-Accel-Buffering: no`. See [Realtime](../realtime/realtime.md).
+
+```bash
+curl -N "http://localhost:3000/api/stream?since=0" --max-time 5
+```
+
+### GET /api/core/stream?taskId=&requestId= (v1.1.0)
+The dedicated **CoreModule Live Output** SSE channel (observability only — frames are
+never executed). On connect: `hello` `{ ok, taskId, requestId, at }` → `core.snapshot`
+frames replaying the task's recent CoreModule LLM requests (bounded buffer) → live
+`core.started` / `core.chunk` / `core.completed` / `core.failed` / `core.cancelled`
+frames. Every chunk carries `{ requestId, taskId?, seq, delta, textLen, truncated }` —
+clients dedup by `(requestId, seq)`, so reconnects replay safely. `:keepalive` every
+15 s; `X-Accel-Buffering: no`. Only the lifecycle events (`core.output.started/completed/
+failed`) are persisted as task events; chunks live in the bounded in-memory registry
+(`coreModule.liveOutputBufferBytes`). No credentials ever enter this channel.
+
+```bash
+curl -N "http://localhost:3000/api/core/stream" --max-time 5
+```
 
 ```bash
 curl -N "http://localhost:3000/api/stream?since=0" --max-time 5
@@ -704,7 +754,7 @@ severity, resource, message }] }`. Reports clear errors — never creates replac
 
 ## Documentation
 
-### GET /api/docs — `{ version: APP_VERSION (dynamic — reads src/lib/nexool/version.ts, "1.0.16" at this release), count: n, docs: DocMetaDTO[] }` (slug, title,
+### GET /api/docs — `{ version: APP_VERSION (dynamic — reads src/lib/nexool/version.ts, "1.1.0" at this release), count: n, docs: DocMetaDTO[] }` (slug, title,
 category, order, excerpt), grouped by category then order.
 ### GET /api/docs/{slug}
 `DocPage` = meta + `content` (markdown body, front-matter stripped) + `updatedAt`
@@ -761,6 +811,17 @@ dismisses observably via `tool.user_alert.dismissed`).
   `task.limit.continuation_required/.continued/.continuation_denied/.continuation_timeout`.
   See [Goal mode](goal-mode.md).
 
+### GET /api/products (v1.1.0)
+The **Our Products** registry: reads `config/products.json` (operator-maintained,
+mtime+size cache), validates every entry (`id`/`name` required; `status` one of
+`live | demo | in-development`; `demoView` must name a console view; `url` must be an
+absolute http(s) URL; ≤ 12 technologies) and returns
+`{ products: ProductEntry[], meta, error? }` — invalid entries are reported in
+`error`, never silently shown. `PUT /api/products` → 405 `READ_ONLY`: the registry is
+deliberately file-maintained (edit `config/products.json` on the host; the `$meta`
+block documents the fields). Entries are showcased VERBATIM — the API never invents
+URLs or statuses.
+
 ### GET /api/inspector/vfs — FS Inspector: Virtual FS (read-only)
 
 `?path=/&op=list\|read\|stat` over the ONE shared VFS
@@ -777,6 +838,45 @@ with 403 `FS_ACCESS`). `list` entries carry `kind: file|dir|link` + lstat
 metadata; `read` is utf8, regular files only, 64 KiB preview cap (files >
 2 MiB → 400 `FS_TOO_LARGE`). Single-user self-hosted: full visibility INSIDE
 the runtime directory, nothing outside it.
+
+### GET/POST /api/inspector/terminal (+ `/stream`) — real-FS terminal (v1.1.0 rebuild)
+
+- **GET** → the probe: `{ available: true, shell: '/bin/bash', transport:
+  'child-process', sessions: [...], limits: { maxSessions, execTimeoutMs,
+  maxOutputBytes, historyLimit } }` — the ACTIVE central limits, no PTY fields
+  (the `script` dependency is gone).
+- **POST** session ops (`{ op, ... }`):
+
+| Op | Body | Effect |
+| --- | --- | --- |
+| `create` | `{ cwd? }` | new session container (status `idle`); errors: 429 `TERMINAL_CAP` when `terminal.maxSessions` is reached |
+| `exec` | `{ sessionId, command, timeoutMs? }` | spawn a REAL child (`/bin/bash -c`): stdout/stderr stream separately over the SSE route, the real exit code + duration + cwd tracking are reported. A per-request `timeoutMs` may only shorten `terminal.execTimeoutMs`. Errors: 409 `FS_TERMINAL_BUSY` when a command is already running (interrupt first), `ENOTFOUND` for unknown sessions |
+| `interrupt` | `{ sessionId }` | Ctrl+C: SIGTERM → SIGKILL to the whole detached process group |
+| `restart` | `{ sessionId }` | reset the container in place (history/cwd reset) |
+| `clear` | `{ sessionId }` | wipe the replay buffer |
+| `close` | `{ sessionId }` | drop the session (kills a running command) |
+
+  The v1.0.16 raw-keystroke `write` op and the legacy v1.0.13 one-shot exec are
+  REMOVED (caps now live exclusively in the central configuration).
+- **GET `/api/inspector/terminal/stream?sessionId=`** — SSE: buffered replay first,
+  then `chunk` (`in` echoed command / `out` stdout / `err` stderr / `meta` status lines,
+  seq-numbered), `cwd`, `status` and `exit` (`{ code, signal, durationMs, timedOut,
+  truncated }`) events + 15 s heartbeat.
+
+### GET/POST /api/inspector/vfs/shell (+ `/stream`) — server-side VFS shell (v1.1.0)
+
+- **GET** → `{ available, transport: 'vfs-shell', root: '/ (VFS)',
+  implementedCommands, allowedCommands (string[] | null), sessions }`.
+- **POST** `{ op: 'create' }` / `{ op: 'exec', sessionId, command }` /
+  `{ op: 'clear' \| 'close', sessionId }` — the same interaction protocol as the real
+  terminal, executed SERVER-SIDE inside the VFS (never a host shell). The permitted
+  command list comes from `vfsTerminal.allowedCommands` and is enforced on every exec:
+  a disallowed command returns exit code **126** with a message naming the
+  configuration; unknown commands exit **127**; chaining/piping metacharacters are
+  rejected with exit **2** (`echo x > file` / `>> file` redirection IS supported).
+  The `/stream` route mirrors the terminal SSE shapes. The VFS root boundary stays
+  code-enforced (normalization + symlink refusal — escape attempts surface the
+  documented `VFS_ACCESS` error).
 
 ---
 
@@ -805,6 +905,12 @@ the runtime directory, nothing outside it.
 | `prePlanMaxSteps` | 1–122 | v1.0.10 — max steps for the pre-plan planner (default 10); `123` → 400 `INVALID_REQUEST` (`"expected number to be <=122"`); persisted with the task config at creation |
 | `recoveryMaxAttempts` | 2–4 | v1.0.11 — recovery attempt budget per failed pre-plan step (default 4, central limit `task.recoveryMaxAttempts`); values outside 2–4 → 400 `INVALID_REQUEST`; persisted with the task config at creation |
 | `limitContinuations` | 0–5 | v1.0.13 — how often the operator may grant extra budget when THIS task trips `maxIterations`/`safetyLimit` (default 1, central limit `task.limitContinuations`); **0 disables the continuation question** (fail at the limit as before); persisted with the task config at creation |
+| `continuationOfTaskId` | `task_*` | **v1.1.0** — Continue Task: the new task is seeded with a bounded context block from the source (per `contextOptions`) and emits `task.context_seeded`; the source is never mutated |
+| `forkedFromTaskId` | `task_*` | **v1.1.0** — fork-from-recent: same seeding mechanism from the Task Console; old tool calls are never replayed automatically |
+| `contextOptions` | `{ result?, plan?, executions?, memory?, skills? }` | **v1.1.0** — which context classes the prior-task block includes (result/executions/skills default on; plan/memory opt-in) |
+| `skills` | string[] (≤ 12) | **v1.1.0** — manual skill selection; validated against the registry at run time, exclusions reported in `skills.selected` |
+| `skillsMode` | `'auto' \| 'manual' \| 'auto+manual'` | **v1.1.0** — skill selection mode (default `auto`) |
+| `executeAllPlannedSteps` | boolean | **v1.1.0** — pre-plan only (default false): after goal verification the remaining planned steps still execute (`planner.execute_all_continue`); stop/approvals/safety limits stay enforced |
 | `sessionId`, `context` | free-form | |
 
 For payload/response schemas of the domain objects (`TaskDetail`, `NexToolEvent`,

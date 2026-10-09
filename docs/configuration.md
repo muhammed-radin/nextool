@@ -218,6 +218,12 @@ provided** — it defaults to `settings.defaultMode` but is never auto-switched 
 | `plannerType` | `'pre-plan' \| 'one-by-one'` | `settings.defaultPlannerType` (then `'pre-plan'`) | **v1.0.10**: planner strategy override for this task. Resolved AND persisted in the stored config JSON at creation — later Settings changes never switch an existing task. |
 | `prePlanMaxSteps` | number | `settings.prePlanMaxSteps` (default 10) | **v1.0.10**: max steps for the pre-plan planner (1–122, central limit `task.prePlanMaxSteps`); governs the pre-plan strategy only. Persisted with the task config at creation. |
 | `recoveryMaxAttempts` | number | `settings.recoveryMaxAttempts` (default 4) | **v1.0.11**: recovery attempt budget per failed pre-plan step (2–4, central limit `task.recoveryMaxAttempts`; out-of-range values rejected with 400). Pre-plan tasks only. |
+| `continuationOfTaskId` | `task_*` | — | **v1.1.0**: Continue Task — the new task starts with a bounded prior-context block built from the source task (per `contextOptions`); emits `task.context_seeded`; the source is never mutated. Persisted with the task config. |
+| `forkedFromTaskId` | `task_*` | — | **v1.1.0**: fork-from-recent — the same seeding mechanism, chosen in the Task Console; old tool calls are never replayed automatically. |
+| `contextOptions` | `{result?, plan?, executions?, memory?, skills?}` | result/executions/skills on, plan/memory off | **v1.1.0**: which context classes the prior-task block includes (booleans default on unless explicitly `false` for result/executions/skills; plan and memory are opt-in). |
+| `skills` | string[] (≤ 12) | — | **v1.1.0**: manual skill selection — validated against the registry at run time; disabled/invalid names are excluded with an explanation in `skills.selected`. More than 12 names → 400. |
+| `skillsMode` | `'auto' \| 'manual' \| 'auto+manual'` | `auto` | **v1.1.0**: skill selection mode. |
+| `executeAllPlannedSteps` | boolean | `false` | **v1.1.0**: pre-plan only — after goal verification the remaining planned steps still execute (`planner.execute_all_continue`); stop/approvals/safety limits stay enforced. |
 | `sessionId` | string? | — | Free-form session correlation. |
 | `context` | object? | — | Arbitrary initial context. |
 
@@ -348,6 +354,39 @@ These bound both the Settings defaults and per-task configuration values —
 `updateSettings` clamps with them, the zod schemas validate with them and
 `loop.ts` merges task config with them.
 
+### v1.1.0 sections — coreModule · planner · terminal · vfsTerminal · skills · events · continuity
+
+v1.1.0 centralizes the remaining application caps (previously hard-coded or missing):
+
+| Property | Default | Range | Nullable (`null` =) |
+| --- | --- | --- | --- |
+| `coreModule.llmTimeoutMs` | 300 000 ms (5 min) | 1 000–3 600 000 | **unlimited** — no application-level CoreModule deadline (replaces the removed 25 s `CORE_TIMEOUT_MS`) |
+| `coreModule.liveOutputBufferBytes` | 65 536 | 4 096–1 048 576 | — (Live Output replay-window cap) |
+| `planner.llmTimeoutMs` | 60 000 ms | 1 000–3 600 000 | unlimited (replaces the removed 25 s `PLANNER_TIMEOUT_MS`) |
+| `planner.verifyTimeoutMs` | 6 000 ms | 500–3 600 000 | unlimited (replaces the removed 6 s `VERIFY_TIMEOUT_MS`; expiry falls back to the deterministic heuristic) |
+| `planner.recoveryMaxPlanSteps` | 4 | 1–16 | — (recovery pre-plan step cap) |
+| `terminal.maxSessions` | 4 | 1–16 | — |
+| `terminal.execTimeoutMs` | 300 000 ms | 1 000–3 600 000 | commands run until they exit or are interrupted |
+| `terminal.maxOutputBytes` | 1 048 576 | 65 536–33 554 432 | — |
+| `terminal.historyLimit` | 100 | 10–1 000 | — |
+| `vfsTerminal.allowedCommands` | the 13 implemented commands | array of strings | **every IMPLEMENTED VFS-shell command is permitted** (enforced SERVER-SIDE; an array = exactly those commands — it is a cap for the shell UX, never a path out of the VFS) |
+| `skills.maxLoadedPerTask` | 4 | 0–12 (0 disables loading) | — |
+| `skills.maxInstructionChars` | 6 000 | 500–100 000 | — |
+| `skills.maxResourceBytes` | 262 144 | 1 024–10 485 760 | — |
+| `skills.maxZipBytes` | 8 388 608 | 10 240–52 428 800 | — |
+| `events.recentRingSize` | 500 | 50–5 000 | — |
+| `events.maxDataBytes` | 16 384 | 1 024–1 048 576 | — |
+| `continuity.maxContextChars` | 12 000 | 2 000–200 000 | — (prior-task context block cap) |
+| `continuity.maxExecutionRows` | 12 | 0–100 | — |
+| `continuity.maxObservations` | 8 | 0–50 | — |
+
+Loader notes: `config-limits.ts` gained the `'array'` property type (with `items`),
+nullable numeric validation and a string-array resolver — **a `null` default requires
+`nullable: true`**, otherwise startup validation fails with a
+`ConfigurationLimitsError` naming the property. Nullable numerics and the nullable
+array are the ONLY values the ⚠ Complete Unrestricted preset sets to `null`
+(genuinely unlimited); non-nullable values go to their shipped maximums.
+
 ### Which timeout governs which operation (§14 — intentionally separate)
 
 | Timeout | Property | Governs |
@@ -356,6 +395,10 @@ These bound both the Settings defaults and per-task configuration values —
 | Task | `task.taskTimeoutMs` | The whole task. |
 | Network request | `network.timeoutMs` | ONE network request (fetch/XHR/http(s)/URL import/npm). |
 | Child command | `childProcess.timeoutMs` | ONE virtual command; raised by the effective tool execution timeout. |
+| CoreModule decision | `coreModule.llmTimeoutMs` (**v1.1.0**; nullable = unlimited) | ONE CoreModule LLM decision call (plus one stricter re-ask); reported in the `coreTimeoutMs` diagnostics. |
+| Planner call | `planner.llmTimeoutMs` (**v1.1.0**; nullable = unlimited) | ONE Planner LLM call (pre-plan, one-by-one step, subgoal proposal) — separate from the CoreModule deadline on purpose. |
+| Goal verification | `planner.verifyTimeoutMs` (**v1.1.0**; nullable = unlimited) | The verification LLM call (`checkGoalComplete`, `assessRecovery`); expiry falls back to the deterministic heuristic. |
+| Terminal command | `terminal.execTimeoutMs` (**v1.1.0**; nullable = unlimited) | ONE real-FS terminal command (SIGTERM → SIGKILL on expiry). |
 | Approval | fixed 300000 ms (v1.0.6 §9) | User approval of a tool call — intentionally NOT configurable here. |
 | Prompt / confirm | fixed 120000 ms | Interactive prompt()/confirm() windows; confirm resolves **false** on expiry. |
 
@@ -388,8 +431,11 @@ Since v1.0.14 the limits file is no longer host-edit-only: the console ships a
 - **Full metadata rendering** — the page loads the complete configuration-limits JSON
   (`GET /api/config/limits`) and renders EVERY property with its
   `type / min / max / default / unit / enum / nullable` metadata — structured editors
-  per section (network · vfs · fs · execution · childProcess · task), never a hand-built
-  subset.
+  per section (network · vfs · fs · execution · childProcess · task · **and the v1.1.0
+  sections coreModule · planner · terminal · vfsTerminal · skills · events ·
+  continuity**), never a hand-built subset. **v1.1.0 editor additions**: array
+  properties (`vfsTerminal.allowedCommands`) get a dedicated array editor, and
+  nullable numerics get an "unlimited (null)" checkbox that sends a real `null`.
 - **Raw JSON editor mode** — a toggle switches the page to the raw JSON text of the
   whole limits file (with the same validate-before-save pipeline).
 - **Save (§17.2/§18.1)** — writes via **`PUT /api/config/limits`**: the payload is
@@ -406,7 +452,10 @@ Since v1.0.14 the limits file is no longer host-edit-only: the console ships a
   configuration (`GET /api/config/limits?preset=standard`, generated programmatically
   from the real file). Applying it restores every default.
 - **⚠ Complete Unrestricted preset** — `?preset=unrestricted`: every numeric property at
-  its maximum, capability booleans open, `fs.restricted: false`. The UI renders a
+  its maximum, capability booleans open, `fs.restricted: false`, and — since v1.1.0 —
+  nullable numerics (`coreModule.llmTimeoutMs`, `planner.llmTimeoutMs`,
+  `planner.verifyTimeoutMs`, `terminal.execTimeoutMs`) and the nullable array
+  (`vfsTerminal.allowedCommands`) set to `null` = genuinely unlimited. The UI renders a
   persistent warning banner AND a confirmation dialog before applying. Even this preset
   cannot weaken the security boundaries (§7.10): it changes CONFIGURED LIMITS only —
   never host filesystem, host process or sandbox-escape privileges (the sandbox

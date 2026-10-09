@@ -1,17 +1,16 @@
 /**
- * NexTool v1.0.15 §38 — REAL terminal output STREAMING (SSE).
+ * NexTool v1.1.0 §6 — REAL terminal output STREAMING (SSE).
  *
  * GET /api/inspector/terminal/stream?sessionId=…
  *
  * Server-Sent Events per terminal session. On connect the buffered chunks
- * are replayed, then every new chunk (stdout/stderr, seq-numbered), every
- * cwd/exit-code marker and every lifecycle change (running/exited/stopped/
- * failed — §41) is pushed as it happens. A heartbeat keeps intermediaries
- * from closing the stream. The runtime never polls and the process never
- * buffers until exit — output arrives while the command runs.
+ * are replayed, then every new chunk (stdout/stderr/echo/meta, seq-numbered),
+ * every cwd change and every status/exit event is pushed as it happens.
+ * A heartbeat keeps intermediaries from closing the stream. Output arrives
+ * while the command runs — the runtime never polls.
  */
 import { fail } from '@/lib/nexool/api-helpers';
-import { getTerminalSession, replayChunks, subscribe, type TerminalEvent } from '@/lib/nexool/inspector/terminal-sessions';
+import { getTerminalSession, replayChunks, subscribeSession, type TerminalEvent } from '@/lib/nexool/inspector/terminal-sessions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,8 +38,8 @@ export async function GET(req: Request) {
 
       // replay the buffered output first, then subscribe live
       for (const chunk of replayChunks(session)) send({ type: 'chunk', sessionId: session.id, chunk });
-      send({ type: 'hello', sessionId: session.id, pid: session.pid, cwd: session.cwd, status: session.status });
-      unsubscribe = subscribe(session, (ev: TerminalEvent) => send(ev));
+      send({ type: 'hello', sessionId: session.id, cwd: session.cwd, status: session.status });
+      unsubscribe = subscribeSession(session, (ev: TerminalEvent) => send(ev));
 
       heartbeat = setInterval(() => {
         try {

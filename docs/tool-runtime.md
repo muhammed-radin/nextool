@@ -255,6 +255,25 @@ virtual child_process ceilings. See
 In Live Mode there is no retry machinery: failed cycles are logged and the next tick or
 event wake tries again.
 
+## Task-owned child processes (v1.1.0)
+
+A REAL host process spawned on behalf of a task is registered in the per-task process
+registry (`src/lib/nexool/main/task-processes.ts`) at spawn time:
+
+- **`fs.cmd`** registers every bash child (`fs.cmd:<pid>`) it spawns, together with a
+  release function that removes the entry when the command finishes.
+- **Force-stop integration** — `stopTask` calls `terminateTaskProcesses(taskId)`:
+  every registered entry receives SIGTERM, stragglers are escalated to SIGKILL after
+  1.5 s (detached children are killed as whole process groups), and the stop path
+  emits "Force-stop terminated N task-owned child process(es)." — so no background
+  child keeps working after the task stopped merely because the HTTP request
+  returned.
+- **Scope** — only task-owned processes are tracked and killed. The standalone FS
+  Inspector terminal is NOT task-owned: it is controlled through its own session
+  actions and is never terminated by a task stop. Unrelated host processes are never
+  touched.
+- `countTaskProcesses(taskId)` exposes the current ownership count for diagnostics.
+
 ## After every execution (finalize)
 
 - **Stats** — `completed | failed | timeout` increment the tool's counters and

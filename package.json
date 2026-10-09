@@ -1,6 +1,6 @@
 {
   "name": "nextool-q1",
-  "version": "1.0.16",
+  "version": "1.1.0",
   "description": "NexTool Q1 v1.0.16 \u2014 FAST HANDS, SHARP MIND: v1.0.5 trained classifier generation (expanded coding curriculum + error/debugging) exported to model-checkpoints/v1.0.5 (model.zip + model.nextool), approval-based task safety-limit continuation (60s backend-enforced window, resumable budget extension), genuine interactive xterm.js real-FS terminal over PTY-backed sessions, Task Preview incremental 40-item loading, faster planning with reduced avoidable heuristic-fallback, fixed current-model export and the portable SKILL.md Skills system.",
   "private": true,
   "scripts": {

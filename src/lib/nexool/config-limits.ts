@@ -28,7 +28,7 @@ import path from 'node:path';
 
 // ---------- types ----------
 
-export type LimitType = 'integer' | 'number' | 'boolean' | 'string' | 'enum';
+export type LimitType = 'integer' | 'number' | 'boolean' | 'string' | 'enum' | 'array';
 
 /** Metadata for ONE configurable property (spec §7.2/§7.3). */
 export interface LimitProperty {
@@ -49,6 +49,8 @@ export interface LimitProperty {
   step?: number;
   /** Allowed values for type "enum". */
   enum?: string[];
+  /** For type "array": the item type ("string" today). Defaults to "string". */
+  items?: 'string';
   /** Grouping hint ("network" | "vfs" | "execution" | "child-process" | "task"). */
   category?: string;
   /** Optional grouping marker for future migrations. */
@@ -120,6 +122,52 @@ export interface ResolvedRuntimeLimits {
     /** v1.0.11 — maximum recovery attempts per failed pre-plan step
      *  (default 4, allowed range 2..4). */
     recoveryMaxAttempts: number;
+  };
+  /** v1.1.0 — CoreModule LLM deadline + live-output buffering.
+   *  `llmTimeoutMs === null` means NO application-level CoreModule timeout:
+   *  the call runs until the provider itself answers or fails. */
+  coreModule: {
+    llmTimeoutMs: number | null;
+    liveOutputBufferBytes: number;
+  };
+  /** v1.1.0 — Planner/Observer LLM deadlines (null = unlimited), separate
+   *  from the CoreModule timeout, the task timeout and tool timeouts. */
+  planner: {
+    llmTimeoutMs: number | null;
+    verifyTimeoutMs: number | null;
+    recoveryMaxPlanSteps: number;
+  };
+  /** v1.1.0 — inspector terminal session limits. */
+  terminal: {
+    maxSessions: number;
+    execTimeoutMs: number | null;
+    maxOutputBytes: number;
+    historyLimit: number;
+  };
+  /** v1.1.0 — VFS shell command policy. `allowedCommands === null` means
+   *  every IMPLEMENTED VFS-shell command is permitted; an array restricts
+   *  the shell to exactly those commands. This is a CAP list, never a path
+   *  out of the VFS root — confinement stays enforced in code. */
+  vfsTerminal: {
+    allowedCommands: string[] | null;
+  };
+  /** v1.1.0 — Skills progressive-loading caps. */
+  skills: {
+    maxLoadedPerTask: number;
+    maxInstructionChars: number;
+    maxResourceBytes: number;
+    maxZipBytes: number;
+  };
+  /** v1.1.0 — event bus retention + payload caps. */
+  events: {
+    recentRingSize: number;
+    maxDataBytes: number;
+  };
+  /** v1.1.0 — Continue Task / fork-from-recent context seeding caps. */
+  continuity: {
+    maxContextChars: number;
+    maxExecutionRows: number;
+    maxObservations: number;
   };
   /** v1.0.11 — freedom-node escape gate (vfs vs fs semantics).
    *  `fs` governs the UNRESTRICTED freedom-node filesystem mode; the separate
@@ -252,6 +300,32 @@ export function getResolvedLimits(): ResolvedRuntimeLimits {
     }
     return prop.default;
   };
+  /** nullable numeric — a validated null default is returned as null (unlimited). */
+  const numOrNull = (section: string, key: string): number | null => {
+    const prop = (raw[section] as LimitSection | undefined)?.[key];
+    if (!prop) throw new ConfigurationLimitsError([`missing property ${section}.${key}`]);
+    if (prop.default === null) {
+      if (!prop.nullable) throw new ConfigurationLimitsError([`${section}.${key}: null default requires nullable: true`]);
+      return null;
+    }
+    if (typeof prop.default !== 'number') {
+      throw new ConfigurationLimitsError([`missing numeric property ${section}.${key}`]);
+    }
+    return prop.default;
+  };
+  /** nullable string-array — null means "unrestricted" for list caps. */
+  const strArray = (section: string, key: string): string[] | null => {
+    const prop = (raw[section] as LimitSection | undefined)?.[key];
+    if (!prop) throw new ConfigurationLimitsError([`missing property ${section}.${key}`]);
+    if (prop.default === null) {
+      if (!prop.nullable) throw new ConfigurationLimitsError([`${section}.${key}: null default requires nullable: true`]);
+      return null;
+    }
+    if (!Array.isArray(prop.default) || !prop.default.every((v) => typeof v === 'string')) {
+      throw new ConfigurationLimitsError([`${section}.${key}: default must be an array of strings or null`]);
+    }
+    return prop.default as string[];
+  };
   return {
     version: raw.version as number,
     network: {
@@ -297,6 +371,39 @@ export function getResolvedLimits(): ResolvedRuntimeLimits {
       eventQueueCap: num('task', 'eventQueueCap'),
       prePlanMaxSteps: num('task', 'prePlanMaxSteps'),
       recoveryMaxAttempts: num('task', 'recoveryMaxAttempts'),
+    },
+    coreModule: {
+      llmTimeoutMs: numOrNull('coreModule', 'llmTimeoutMs'),
+      liveOutputBufferBytes: num('coreModule', 'liveOutputBufferBytes'),
+    },
+    planner: {
+      llmTimeoutMs: numOrNull('planner', 'llmTimeoutMs'),
+      verifyTimeoutMs: numOrNull('planner', 'verifyTimeoutMs'),
+      recoveryMaxPlanSteps: num('planner', 'recoveryMaxPlanSteps'),
+    },
+    terminal: {
+      maxSessions: num('terminal', 'maxSessions'),
+      execTimeoutMs: numOrNull('terminal', 'execTimeoutMs'),
+      maxOutputBytes: num('terminal', 'maxOutputBytes'),
+      historyLimit: num('terminal', 'historyLimit'),
+    },
+    vfsTerminal: {
+      allowedCommands: strArray('vfsTerminal', 'allowedCommands'),
+    },
+    skills: {
+      maxLoadedPerTask: num('skills', 'maxLoadedPerTask'),
+      maxInstructionChars: num('skills', 'maxInstructionChars'),
+      maxResourceBytes: num('skills', 'maxResourceBytes'),
+      maxZipBytes: num('skills', 'maxZipBytes'),
+    },
+    events: {
+      recentRingSize: num('events', 'recentRingSize'),
+      maxDataBytes: num('events', 'maxDataBytes'),
+    },
+    continuity: {
+      maxContextChars: num('continuity', 'maxContextChars'),
+      maxExecutionRows: num('continuity', 'maxExecutionRows'),
+      maxObservations: num('continuity', 'maxObservations'),
     },
     fs: {
       enabled: bool('fs', 'enabled'),
@@ -346,7 +453,7 @@ export function clampToLimit(section: string, key: string, value: unknown): numb
 
 // ---------- validation (§7.7/§7.8/§22) ----------
 
-const VALID_TYPES: LimitType[] = ['integer', 'number', 'boolean', 'string', 'enum'];
+const VALID_TYPES: LimitType[] = ['integer', 'number', 'boolean', 'string', 'enum', 'array'];
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -394,6 +501,13 @@ export function validateLimitsObject(raw: unknown): string[] {
       }
       if (type === 'integer' || type === 'number') {
         const d = prop.default;
+        if (d === null) {
+          // nullable numeric — null is a documented "unlimited" value
+          if (!prop.nullable) {
+            issues.push(`${path}: null default requires nullable: true`);
+          }
+          continue;
+        }
         if (typeof d !== 'number' || !Number.isFinite(d)) {
           issues.push(`${path}: default must be a finite number (got ${JSON.stringify(d)})`);
           continue;
@@ -417,6 +531,19 @@ export function validateLimitsObject(raw: unknown): string[] {
         }
         if (typeof max === 'number' && d > max) {
           issues.push(`${path}: default (${d}) must be <= max (${max})`);
+        }
+      } else if (type === 'array') {
+        const d = prop.default;
+        if (d === null) {
+          if (!prop.nullable) {
+            issues.push(`${path}: null default requires nullable: true`);
+          }
+        } else if (!Array.isArray(d)) {
+          issues.push(`${path}: default must be an array (or null when nullable)`);
+        } else if ((prop.items ?? 'string') !== 'string') {
+          issues.push(`${path}: items must be "string"`);
+        } else if (!d.every((v) => typeof v === 'string')) {
+          issues.push(`${path}: every array item must be a string`);
         }
       } else if (type === 'boolean') {
         if (typeof prop.default !== 'boolean') {

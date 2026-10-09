@@ -64,6 +64,16 @@ const FsTerminal = dynamic(() => import('../fs-terminal').then((m) => m.FsTermin
     </p>
   ),
 });
+// v1.1.0 §6.6 — the VFS terminal shares the SAME xterm.js shell UI (distinct
+// amber sandbox theme); execution is SERVER-SIDE (vfs-shell, allowedCommands).
+const VfsTerminal = dynamic(() => import('../vfs-terminal').then((m) => m.VfsTerminal), {
+  ssr: false,
+  loading: () => (
+    <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground">
+      <Loader2 className="size-3.5 animate-spin" aria-hidden /> loading VFS shell…
+    </p>
+  ),
+});
 import {
   Copy, CornerLeftUp, Download, File as FileIcon, FilePlus2, Folder, FolderPlus, FolderTree, FolderOpen,
   HardDrive, Info, Link2, Loader2, Pencil, Plus, RefreshCw, Save, Scissors, Search, ShieldCheck,
@@ -1371,153 +1381,7 @@ function EditorsTab({ mode, editRequest }: { mode: FsMode; editRequest: { seq: n
 // sandboxed virtual shell)
 // =====================================================================
 
-const MAX_TERMINAL_LINES = 1000;
-
-function appendCapped(lines: TerminalLine[], add: TerminalLine[]): TerminalLine[] {
-  const next = [...lines, ...add];
-  return next.length > MAX_TERMINAL_LINES ? next.splice(next.length - MAX_TERMINAL_LINES) : next;
-}
-
-// ---------------------------------------------------------------------
-// VFS mode — sandboxed virtual shell (unchanged boundary: VFS API only).
-// ---------------------------------------------------------------------
-function VfsTerminal() {
-  const [vfsSession, setVfsSession] = useState<TerminalSession>({ id: 'vfs_shell', cwd: '/', lines: [{ kind: 'meta', text: 'VFS sandboxed shell — every command maps onto the VFS API; host paths are unreachable. Type "help".' }], running: false });
-  const [input, setInput] = useState('');
-  const [vfsCwd, setVfsCwd] = useState('/');
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
-
-  useEffect(() => {
-    if (autoScroll) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [vfsSession.lines.length, autoScroll]);
-
-  const appendLines = (lines: TerminalLine[]) => {
-    setVfsSession((prev) => ({ ...prev, lines: appendCapped(prev.lines, lines) }));
-  };
-
-  const runVfsCommand = async (command: string) => {
-    const trimmed = command.trim();
-    const out: TerminalLine[] = [{ kind: 'cmd', text: `${vfsCwd} $ ${command}` }];
-    const failLine = (message: string): TerminalLine => ({ kind: 'err', text: message });
-    const resolve = (p: string): string => {
-      const t = p.trim();
-      if (!t || t === '.') return vfsCwd;
-      if (t.startsWith('/')) return normalizeInput('vfs', t);
-      return childVfs(vfsCwd, t);
-    };
-    try {
-      if (trimmed === 'pwd') out.push({ kind: 'out', text: vfsCwd });
-      else if (trimmed === 'help') {
-        out.push({ kind: 'out', text: 'sandboxed VFS shell — commands: pwd · ls [path] · cd <path> · cat <file> · mkdir <dir> · touch <file> · rm <path> · cp <a> <b> · mv <a> <b> · echo <text> [> file] · find <query> · clear · help' });
-      } else if (trimmed === 'clear') {
-        setVfsSession((prev) => ({ ...prev, lines: [] }));
-        return;
-      } else if (trimmed.startsWith('ls')) {
-        const target = resolve(trimmed.slice(2));
-        const data = await inspectorGet<ListResponse>('vfs', `op=list&path=${encodeURIComponent(target)}`);
-        out.push({ kind: 'out', text: data.entries.length === 0 ? '(empty)' : data.entries.map((e) => (e.kind === 'dir' ? `${e.name}/` : e.name)).join('  ') });
-      } else if (trimmed.startsWith('cd')) {
-        const target = trimmed.slice(2).trim() ? resolve(trimmed.slice(2)) : '/';
-        const st = await inspectorPost<{ entry: InfoEntry }>('vfs', { op: 'info', path: target });
-        if (st.entry.kind !== 'dir') out.push(failLine(`cd: not a directory: ${target}`));
-        else setVfsCwd(st.entry.name === '/' ? '/' : target);
-      } else if (trimmed.startsWith('cat ')) {
-        const data = await inspectorGet<ReadResponse>('vfs', `op=read&path=${encodeURIComponent(resolve(trimmed.slice(4)))}`);
-        out.push({ kind: 'out', text: data.encoding === 'text' ? data.content : '(binary content)' });
-      } else if (trimmed.startsWith('mkdir ')) {
-        await inspectorPost('vfs', { op: 'mkdir', path: resolve(trimmed.slice(6)) });
-      } else if (trimmed.startsWith('touch ')) {
-        await inspectorPost('vfs', { op: 'write', path: resolve(trimmed.slice(6)), content: '' });
-      } else if (trimmed.startsWith('rm ')) {
-        await inspectorPost('vfs', { op: 'delete', paths: [resolve(trimmed.slice(3))] });
-      } else if (trimmed.startsWith('cp ')) {
-        const [, a, b] = trimmed.split(/\s+/);
-        if (!a || !b) throw new Error('usage: cp <src> <dest>');
-        await inspectorPost('vfs', { op: 'copy', paths: [resolve(a)], dest: parentVfs(resolve(b)) });
-      } else if (trimmed.startsWith('mv ')) {
-        const [, a, b] = trimmed.split(/\s+/);
-        if (!a || !b) throw new Error('usage: mv <src> <dest>');
-        await inspectorPost('vfs', { op: 'move', paths: [resolve(a)], dest: parentVfs(resolve(b)) });
-      } else if (trimmed.startsWith('find ')) {
-        const q = trimmed.slice(5).trim();
-        const res = await inspectorPost<{ matches: SearchMatch[] }>('vfs', { op: 'search', path: vfsCwd, query: q, depth: 3 });
-        out.push({ kind: 'out', text: res.matches.length === 0 ? '(no matches)' : res.matches.map((m) => m.path).join('\n') });
-      } else if (trimmed.startsWith('echo ')) {
-        const m = /\>\s*([^\s]+)\s*$/.exec(trimmed);
-        if (m) {
-          const text = trimmed.slice(5, trimmed.length - m[0].length).replace(/^["']|["']$/g, '');
-          await inspectorPost('vfs', { op: 'write', path: resolve(m[1]), content: `${text}\n` });
-        } else {
-          out.push({ kind: 'out', text: trimmed.slice(5).replace(/^["']|["']$/g, '') });
-        }
-      } else {
-        out.push(failLine(`command not found: ${trimmed.split(/\s+/)[0]} — type "help"`));
-      }
-    } catch (e) {
-      out.push(failLine(fmtError(e)));
-    }
-    appendLines(out);
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-tech text-[10px] uppercase tracking-wider text-muted-foreground">terminal sessions</span>
-        <Badge variant="outline" className="border-sky-400/30 bg-sky-400/10 font-mono text-[10px] text-sky-300">VFS sandbox — virtual shell (cannot escape)</Badge>
-      </div>
-      <div className="glass-card rounded-lg border border-white/[0.06]">
-        <div
-          ref={scrollRef}
-          onScroll={() => {
-            const el = scrollRef.current;
-            if (el) setAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 48);
-          }}
-          className="nextool-scroll h-[50vh] overflow-y-auto p-3 font-mono text-[11px] leading-relaxed md:h-[360px]"
-        >
-          {vfsSession.lines.map((line, i) => (
-            <p
-              key={i}
-              className={cn(
-                'whitespace-pre-wrap break-all',
-                line.kind === 'cmd' && 'text-sky-300',
-                line.kind === 'out' && 'text-slate-200',
-                line.kind === 'err' && 'text-rose-300',
-                line.kind === 'meta' && 'text-muted-foreground',
-              )}
-            >
-              {line.text}
-            </p>
-          ))}
-        </div>
-        <div className="flex items-center gap-2 border-t border-white/[0.06] p-2">
-          <span className="shrink-0 font-mono text-[11px] text-sky-300">{vfsCwd} $</span>
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && input.trim()) {
-                e.preventDefault();
-                const cmd = input;
-                setInput('');
-                void runVfsCommand(cmd);
-              }
-            }}
-            placeholder="ls · cat · mkdir · echo hi > file.txt … (help)"
-            className="h-9 min-w-0 flex-1 border-white/[0.09] bg-white/[0.04] font-mono text-xs"
-            aria-label="VFS terminal command"
-            autoComplete="off"
-          />
-        </div>
-      </div>
-      <p className="text-[10px] text-muted-foreground">
-        The VFS terminal is a sandboxed interpreter: each command maps onto the same secure VFS API the restricted tool runtimes use — MCP and virtual tools can never reach the real host filesystem (spec §4.3/§19).
-      </p>
-    </div>
-  );
-}
-
-/** v1.0.15 §37 — the Terminal tab: REAL FS sessions vs the VFS sandbox. */
+/** v1.1.0 §6 — the Terminal tab: REAL FS (child-process) vs the VFS sandbox — one shared shell UI. */
 function TerminalTab({ mode, initialCwd }: { mode: FsMode; initialCwd: string }) {
   return mode === 'fs' ? <FsTerminal initialCwd={initialCwd} /> : <VfsTerminal />;
 }

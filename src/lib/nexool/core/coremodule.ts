@@ -1,20 +1,38 @@
 /**
  * NexTool CoreModule — LLM-powered tool matching + parameter generation.
  * Falls back to the deterministic heuristic matcher on any SDK error.
+ *
+ * v1.1.0 (§1/§11): the hidden 25-second CORE_TIMEOUT_MS is GONE — the
+ * deadline is the configurable `coreModule.llmTimeoutMs` central limit
+ * (default 5 minutes, `null` = no application-level timeout). When the
+ * provider supports it the decision call now genuinely STREAMS (`stream:
+ * true`): deltas are forwarded to the CoreModule Live Output registry and
+ * broadcast over the dedicated /api/core/stream SSE channel while the full
+ * answer is still parsed/validated by the same pipeline as before.
  */
 import ZAI from 'z-ai-web-dev-sdk';
 import type { CoreModuleOutput, ToolDefinition } from '../types';
-import { recordCoreDecision } from '../eventbus';
+import { emitEvent, recordCoreDecision } from '../eventbus';
+import { getResolvedLimits } from '../config-limits';
 import { heuristicDecide } from './heuristic';
 import { coerceParams } from '../tools/executor';
+// v1.1.0 — shared provider-call layer (configurable timeout, abort, streaming).
+import { callLlm, LlmCallCancelledError } from './llm-call';
+// v1.1.0 — CoreModule Live Output registry (§1).
+import {
+  appendCoreOutput,
+  cancelCoreOutput,
+  completeCoreOutput,
+  failCoreOutput,
+  startCoreOutput,
+  type CoreOutputRecord,
+} from './live-output';
 // v1.0.12 Phase 7 — custom task instructions (delimited user block).
 import { appendInstructionsBlock } from '../instructions';
 // v1.0.15 — the ACTIVE TRAINED CHECKPOINT (model v1.0.4) participates in
 // every decision: as a hint inside the LLM prompt and as the FIRST fallback
 // when the LLM call fails (the heuristic matcher stays last).
 import { suggestToolFromTrainedModel } from '../training/current-model';
-
-const CORE_TIMEOUT_MS = 25_000;
 
 export interface CoreContextBundle {
   memory?: Record<string, unknown>[];
@@ -45,6 +63,15 @@ export interface DecideInput {
    *  learned classifier thinks BEFORE deciding; consumed directly on
    *  LLM failure as the structured fallback. */
   classifierHint?: { tool: string; confidence: number; modelVersion: string } | null;
+  /** v1.1.0 — owning task id for the CoreModule Live Output channel and
+   *  persisted core.output.* lifecycle events. */
+  taskId?: string;
+  /** v1.1.0 — cancellation signal (task force-stop). When fired mid-call
+   *  the decision is abandoned with failureStage 'cancelled'. */
+  signal?: AbortSignal;
+  /** v1.1.0 — disable Live Output streaming for this call (rare internal
+   *  callers that must stay silent). Streaming remains available by default. */
+  liveOutputDisabled?: boolean;
 }
 
 function buildSystemPrompt(): string {
@@ -262,6 +289,35 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
   let output: CoreModuleOutput | null = null;
   const toolCandidateCount = input.toolDefs.length;
 
+  // v1.1.0 §11.1 — the deadline comes from the central configuration
+  // (coreModule.llmTimeoutMs; null = no application-level timeout). The
+  // configured value is reported in diagnostics, and a reached deadline is
+  // recorded honestly as 'provider timeout (configured deadline)' — slow
+  // generation is never silently relabeled as an unrelated model error.
+  let configuredTimeoutMs: number | null = 300_000;
+  try {
+    configuredTimeoutMs = getResolvedLimits().coreModule.llmTimeoutMs;
+  } catch {
+    /* limits file problem — keep the documented 5-minute default */
+  }
+
+  // v1.1.0 §1 — one Live Output record per LLM pass. The record accumulates
+  // REAL provider deltas (when streaming is available) and is announced on
+  // the /api/core/stream SSE channel; lifecycle events are persisted.
+  const startLive = (label: string): CoreOutputRecord | null => {
+    if (input.liveOutputDisabled || !input.taskId) return null;
+    const rec = startCoreOutput({ taskId: input.taskId, label });
+    void emitEvent({
+      taskId: input.taskId,
+      type: 'core.output.started',
+      source: 'core',
+      message: `CoreModule LLM request ${rec.requestId} started (${label})`,
+      data: { requestId: rec.requestId, label, requestedEngine: rec.requestedEngine, configuredTimeoutMs },
+      priority: 6,
+    });
+    return rec;
+  };
+
   // v1.0.16 §6.3/§7.1 — the trained-checkpoint hint now runs CONCURRENTLY
   // with the LLM call instead of blocking every decision before it (the old
   // serial await added its full latency to the happy path). The hint is
@@ -276,36 +332,57 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
     return null;
   })();
 
+  const buildMessages = () => [
+    { role: 'assistant' as const, content: getSystemPrompt() },
+    { role: 'user' as const, content: buildUserMessage(input) },
+  ];
+
   let failureStage = 'unknown';
   try {
-    const zai = await getZai();
-    // v1.0.16 — the hint no longer travels inside the prompt payload (it was
-    // advisory noise for the primary decider); the LLM decides from the
-    // request + full tool metadata, the checkpoint covers failures.
-    const messages = [
-      { role: 'assistant' as const, content: getSystemPrompt() },
-      { role: 'user' as const, content: buildUserMessage(input) },
-    ];
-
-    let content: string | undefined;
-    const callOnce = async (): Promise<string | undefined> => {
-      const res = await Promise.race([
-        zai.chat.completions.create({ messages, thinking: { type: 'disabled' } }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('CoreModule LLM call timed out')), CORE_TIMEOUT_MS),
-        ),
-      ]);
-      return res?.choices?.[0]?.message?.content ?? undefined;
+    // One streaming pass. Deltas flow into the Live Output registry as they
+    // arrive from the provider; the returned content is the same full text
+    // the non-streaming path would have produced (the pipeline is unchanged).
+    const runPass = async (label: string): Promise<string | undefined> => {
+      const rec = startLive(label);
+      try {
+        const result = await callLlm({
+          messages: buildMessages(),
+          timeoutMs: configuredTimeoutMs,
+          signal: input.signal,
+          ...(rec
+            ? {
+                onDelta: (delta: string) => appendCoreOutput(rec, delta),
+                onNonStreamed: () => {
+                  // The provider answered without a stream body — report
+                  // honestly instead of fabricating a token stream (§1.3).
+                  rec.streaming = false;
+                },
+              }
+            : {}),
+        });
+        if (rec) {
+          completeCoreOutput(rec, { streamed: result.streamed, configuredTimeoutMs });
+        }
+        return result.content;
+      } catch (err) {
+        if (err instanceof LlmCallCancelledError || input.signal?.aborted) {
+          if (rec) cancelCoreOutput(rec);
+        } else if (rec) {
+          failCoreOutput(rec, err instanceof Error ? err.message : String(err), { configuredTimeoutMs });
+        }
+        throw err;
+      }
     };
 
-    content = await callOnce();
+    let content = await runPass('decision');
     let raw = content ? extractJson(content) : null;
     if (!raw) {
       failureStage = 'invalid structured output (first pass)';
-      // one retry with a stricter instruction
-      content = await callOnce().catch(() => undefined);
-      const retryContent = content ? `${content}\nReturn ONLY the JSON object.` : '';
-      raw = extractJson(retryContent);
+      // one retry with a stricter instruction — a second REAL LLM pass with
+      // its own Live Output record (never a fabricated continuation).
+      const retryContent = await runPass('decision (strict retry)').catch(() => undefined);
+      const retry = retryContent ? `${retryContent}\nReturn ONLY the JSON object.` : '';
+      raw = extractJson(retry);
       if (!raw) failureStage = 'invalid structured output (strict retry too)';
       else failureStage = 'unknown';
     }
@@ -314,8 +391,15 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
       if (!output) failureStage = 'validation rejected the structured result';
     }
   } catch (err) {
-    failureStage = err instanceof Error && err.message.includes('timed out') ? 'provider timeout' : 'provider failure';
-    console.error('[coremodule] LLM decision failed, using fallback ladder:', err);
+    if (err instanceof LlmCallCancelledError || input.signal?.aborted) {
+      failureStage = 'cancelled';
+    } else {
+      failureStage =
+        err instanceof Error && err.message.includes('timed out')
+          ? 'provider timeout (configured deadline reached)'
+          : 'provider failure';
+      console.error('[coremodule] LLM decision failed, using fallback ladder:', err);
+    }
   }
 
   if (!output) {
@@ -380,6 +464,9 @@ export async function decide(input: DecideInput): Promise<CoreModuleOutput> {
   }
   output.toolCandidateCount ??= toolCandidateCount;
   output.latencyMs = Date.now() - started;
+  // v1.1.0 — surface the configured deadline + failure stage in diagnostics.
+  output.coreTimeoutMs = configuredTimeoutMs;
+  output.failureStage = failureStage;
   recordCoreDecision(output.latencyMs);
   return output;
 }

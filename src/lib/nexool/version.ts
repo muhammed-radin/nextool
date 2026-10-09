@@ -4,7 +4,9 @@
  * and runtime branding. Documentation, UI badges and /api/system all read this.
  *
  * Version concepts are intentionally kept SEPARATE:
- * - Application Version: bumped per release (currently 1.0.16).
+ * - Application Version: bumped per release (currently 1.1.0 — the first
+ *                        minor-batch promotion after the completed v1.0.x
+ *                        series, not v1.0.17).
  * - Model Version:       version of the LOCALLY TRAINED tool-selection
  *                        classifier checkpoints. v1.0.16 (FAST HANDS, SHARP
  *                        MIND) trained the v1.0.5 generation on the expanded
@@ -32,9 +34,9 @@
  */
 
 export const APP_NAME = 'NexTool Q1';
-export const APP_VERSION = '1.0.16';
+export const APP_VERSION = '1.1.0';
 export const RELEASE_NAME =
-  'FAST HANDS, SHARP MIND — v1.0.5 trained classifier generation on the expanded coding curriculum (HTML, CSS, JavaScript, TypeScript, JSX/TSX, Python, Markdown, JSON, C, C++, SQL, Shell/Bash) plus error/stack-trace interpretation, debugging and recovery on top of the retained v1.0.4 domains, exported to model-checkpoints/v1.0.5 (TFJS model.zip + model.nextool), approval-based task safety-limit continuation with a backend-enforced 60-second response window and resumable budget extension (timeout, iterations, tool calls, subtool calls), genuine interactive xterm.js real-FS terminal over PTY-backed sessions with deterministic lifecycle and mobile layout, Task Preview incremental 40-item loading with cursor pagination, faster pre-plan/one-by-one planning with cached tool metadata and concurrent classifier hints, reduced avoidable heuristic-fallback with recorded fallback reasons, a fixed current-model export path (UI + API + CLI) and the portable SKILL.md Skills system with progressive loading and the built-in web-search skill.';
+  'First minor-batch promotion (v1.0.13 – v1.0.16 → v1.1.0): real-time CoreModule Live Output — actual provider token streaming over a dedicated SSE channel rendered in ~10-word batches in Task Preview — plus Continue Task (new linked follow-up tasks with seeded prior context), fork-from-recent-task in Task Console, four new file-editing tools (fs.apply_edits, fs.find_replace, fs.insert_text, fs.append_text), the Our Products showcase, a rebuilt real-FS terminal on plain node:child_process spawn-per-command execution with a shared xterm.js shell UI (bold block cursor, distinct VFS theme, server-side VFS shell), fully centralized application limits (core/planner LLM timeouts, terminal, skills, events, VFS allowed commands) with Standard and Complete Unrestricted presets, multi-skill selection in Task Console, reliable force-stop with provider-call and child-process cancellation, the executeAllPlannedSteps pre-plan option, and the removal of the hidden 25-second CoreModule timeout in favor of configurable, diagnostics-reported deadlines.';
 
 export const CORE_MODULE_NAME = 'llm-core';
 /** CoreModule decision-unit version — llm-core is a provider-served model and

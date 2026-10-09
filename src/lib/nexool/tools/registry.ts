@@ -44,6 +44,8 @@ import {
   fsUpload,
   fsWriteFile,
 } from './fs-tools';
+// v1.1.0 §4 — file-editing tools (apply_edits / find_replace / insert_text / append_text).
+import { FS_EDIT_TOOL_DEFINITIONS, fsAppendText, fsApplyEdits, fsFindReplace, fsInsertText } from './fs-edit-tools';
 import { createNetworkAccounting } from './sandbox-net';
 import { createSandboxToolsApi } from './subtool';
 import { makeMcpHandler } from './mcp-runner';
@@ -234,6 +236,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
   // host fs). environment 'builtin' → toolExportClass 'builtin' → never
   // exportable (§2.2).
   ...FS_TOOL_DEFINITIONS,
+  ...FS_EDIT_TOOL_DEFINITIONS,
   // v1.0.14 §15 — AskSelf: NexTool generates/derives content itself.
   {
     name: 'ask.self',
@@ -344,6 +347,11 @@ export function resolveHandler(def: ToolDefinition): ToolHandler | undefined {
     'fs.cmd': fsCmd,
     'fs.download': fsDownload,
     'fs.upload': fsUpload,
+    // v1.1.0 §4 — file-editing tools
+    'fs.apply_edits': fsApplyEdits,
+    'fs.find_replace': fsFindReplace,
+    'fs.insert_text': fsInsertText,
+    'fs.append_text': fsAppendText,
     // v1.0.14 §15/§16 — AskSelf + AskForUser
     'ask.self': askSelf,
     'ask.user': askUser,

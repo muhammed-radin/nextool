@@ -18,12 +18,11 @@
  */
 import type { MainState, PlanStep, PlannerType, TaskMode, ToolDefinition } from '../types';
 import { emitEvent } from '../eventbus';
-// v1.0.11 §50 — shared cached client (one init per process).
-import { getZai } from '../core/coremodule';
+// v1.1.0 — shared provider-call layer (configurable planner.llmTimeoutMs, abort).
+import { callLlm } from '../core/llm-call';
+import { getResolvedLimits } from '../config-limits';
 // v1.0.12 Phase 7 — custom task instructions (delimited user block).
 import { appendInstructionsBlock } from '../instructions';
-
-const PLANNER_TIMEOUT_MS = 25_000;
 
 // ---------- strategy resolution (§12/§13) ----------
 
@@ -264,29 +263,30 @@ export async function planOneByOneStep(
   ctx: OneByOneContext,
   toolDefs: ToolDefinition[],
   taskId?: string,
+  signal?: AbortSignal,
 ): Promise<PlanNextResult> {
   const started = Date.now();
   const nextIndex = Math.max(ctx.state.plan.length, 0);
+  let configuredTimeoutMs: number | null = 60_000;
+  try {
+    configuredTimeoutMs = getResolvedLimits().planner.llmTimeoutMs;
+  } catch {
+    /* limits file problem — keep the documented 60-second default */
+  }
 
   try {
-    const zai = await getZai();
     const { system, user } = buildOneByOneMessages(ctx, toolDefs);
 
-    const res = await Promise.race([
-      zai.chat.completions.create({
-        messages: [
-          { role: 'assistant' as const, content: system },
-          { role: 'user' as const, content: user },
-        ],
-        thinking: { type: 'disabled' },
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('One-by-one planner LLM call timed out')), PLANNER_TIMEOUT_MS),
-      ),
-    ]);
+    const { content } = await callLlm({
+      messages: [
+        { role: 'assistant', content: system },
+        { role: 'user', content: user },
+      ],
+      timeoutMs: configuredTimeoutMs,
+      signal,
+    });
 
-    const content = res?.choices?.[0]?.message?.content ?? '';
-    const cleaned = content.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+    const cleaned = (content ?? '').replace(/```json\s*/gi, '').replace(/```/g, '').trim();
     const startIdx = cleaned.indexOf('{');
     const endIdx = cleaned.lastIndexOf('}');
     if (startIdx !== -1 && endIdx > startIdx) {

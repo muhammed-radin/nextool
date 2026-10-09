@@ -21,7 +21,9 @@ definitions (name/description/category only — no handlers leak into the prompt
 reasoning level, and the task id for event attribution.
 
 **Model call**: `z-ai-web-dev-sdk` chat completion, `thinking: { type: 'disabled' }`,
-hard timeout **25 000 ms** (`PLANNER_TIMEOUT_MS`) via `Promise.race`. The system prompt
+deadline **`planner.llmTimeoutMs`** (v1.1.0 — default 60 000 ms; `null` = no
+application-level timeout; the former hard-coded 25 s `PLANNER_TIMEOUT_MS` is removed).
+The system prompt
 instructs:
 
 - Decompose into minimal ordered steps, each one concrete operational action.
@@ -257,7 +259,7 @@ MAIN PLAN FROZEN — step n+1 never runs first; later steps never overtake it
 OBSERVE FAILURE → recovery subgoal created (subgoal.created)
      ↓
 RECOVERY PRE-PLAN — the SAME buildPlan strategy, bounded
-                     RECOVERY_PLAN_MAX_STEPS = 4 steps
+                     planner.recoveryMaxPlanSteps steps (default 4, v1.1.0)
      ↓
 EXECUTE recovery steps sequentially (normal decide/execute/approval gate)
      ↓
@@ -315,7 +317,7 @@ or honest exhausted message) — never hidden in the generic event list (see
 | --- | --- | --- |
 | `src/lib/nexool/main/planner.ts` | pre-plan (unchanged semantics) | `buildPlan` — the multi-step LLM decomposition + `sanitizeSteps` + fallback plan; `maxSteps` now resolved from `prePlanMaxSteps`. |
 | `src/lib/nexool/main/planner-strategy.ts` | one-by-one (new in v1.0.10) | `resolvePlannerType` (precedence), `buildOneByOneContext` (state bundle), `planOneByOneStep` (single LLM call + events), `sanitizeOneStepResponse` / `sanitizeSingleStep` (single-step contract), `buildOneByOneFallbackStep` (deterministic fallback). |
-| `src/lib/nexool/main/recovery.ts` | pre-plan recovery (**v1.0.11**) | the bounded recovery state machine: frozen main plan, recovery subgoal + own pre-plan (`RECOVERY_PLAN_MAX_STEPS = 4`), sequential execution through the normal gates, Observer `assessRecovery` verification, state-aware resume (mark-completed vs re-queue-at-position), per-failed-step attempt counting, exhaustion/unrecoverable/blocked outcomes. |
+| `src/lib/nexool/main/recovery.ts` | pre-plan recovery (**v1.0.11**) | the bounded recovery state machine: frozen main plan, recovery subgoal + own pre-plan (`planner.recoveryMaxPlanSteps` steps, default 4 — v1.1.0 configurable), sequential execution through the normal gates, Observer `assessRecovery` verification, state-aware resume (mark-completed vs re-queue-at-position), per-failed-step attempt counting, exhaustion/unrecoverable/blocked outcomes. |
 
 ### Worked event timeline (verified acceptance run)
 
@@ -340,3 +342,31 @@ task.completed                   (goal verified after exactly one planned step)
 `planner.plan` (1-step) fired alongside each `one_by_one_step_planned` so the Task
 Preview plan checklist stayed in sync. Pre-plan tasks emit the familiar
 `planner.plan_built` → `planner.plan` pair instead.
+
+## v1.1.0 — configurable timeouts, execute-all gate, signal-aware planning
+
+- **`planner.llmTimeoutMs`** (default 60 000 ms, `null` = unlimited) replaces the
+  removed 25 s `PLANNER_TIMEOUT_MS` — it governs `buildPlan` (pre-plan),
+  `planOneByOneStep` (one-by-one) and subgoal proposals (`proposeNextSubgoal`).
+  Intentionally separate from `coreModule.llmTimeoutMs`, `task.taskTimeoutMs` and tool
+  timeouts.
+- **`planner.verifyTimeoutMs`** (default 6 000 ms, `null` = unlimited) replaces the
+  removed 6 s `VERIFY_TIMEOUT_MS` for the goal-verification LLM call
+  (`checkGoalComplete`) and recovery assessment (`assessRecovery`). When the deadline
+  fires, verification falls back to the deterministic heuristic — it never aborts the
+  task.
+- **`planner.recoveryMaxPlanSteps`** (default 4, range 1–16) replaces the hard-coded
+  `RECOVERY_PLAN_MAX_STEPS = 4` as the recovery pre-plan step cap.
+- **`executeAllPlannedSteps` gate** — the pre-plan loop's goal-verification early stops
+  now go through one `resolveGoalVerification` gate: when the goal IS verified but
+  `config.executeAllPlannedSteps` is enabled and pending plan steps remain, the runtime
+  emits `planner.execute_all_continue` ONCE and continues executing the remaining
+  steps in order (decision-level terminal outcomes — clarification, cannot_execute,
+  no_tool, stop, approval timeout — are NOT affected; stop, approvals and safety
+  limits stay enforced). Disabled (default) keeps normal early completion.
+- **Signal-aware planning** — every planner/observer LLM call receives the task's
+  AbortSignal through the shared `callLlm` layer, so a force-stop unblocks an
+  in-flight planning/verification call immediately instead of waiting for its
+  deadline.
+
+See the [v1.1.0 release page](release-1.1.0.md) for the full change list.

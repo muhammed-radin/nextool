@@ -8,7 +8,9 @@ import { getSettings } from '../settings';
 import { getEnabledToolDefs } from '../tools/registry';
 import { executeTool, executeParallelBatch } from '../tools/executor';
 import { clampNetworkTimeoutMs } from '../tools/network-timeout';
-import { decide, getZai } from '../core/coremodule';
+import { decide } from '../core/coremodule';
+// v1.1.0 — shared provider-call layer for the subgoal proposal (planner deadline + abort).
+import { callLlm } from '../core/llm-call';
 import { buildPlan, DEFAULT_PRE_PLAN_MAX_STEPS } from './planner';
 import {
   buildOneByOneContext, buildOneByOneFallbackStep, planOneByOneStep,
@@ -19,9 +21,11 @@ import { runPrePlanRecovery } from './recovery';
 import { listServers } from '../environment';
 import { resolveAutoExecution, requestApproval, FORCE_APPROVAL_TOOLS } from '../approval';
 import { requestLimitContinuation } from '../limit-continuation';
+// v1.1.0 §2/§3 — prior-task context for Continue Task / fork-from-recent.
+import { buildPriorContext } from './task-continuity';
 // v1.0.16 §10 — Skills: progressive loading (metadata discovery → selection →
 // full instructions on demand). Untrusted content stays a user-level block.
-import { listSkillSummaries, loadSkillInstructions, selectSkillsForTask, renderSkillsBlock } from '../skills/registry';
+import { listSkills, listSkillSummaries, loadSkillInstructions, selectSkillsForTask, renderSkillsBlock } from '../skills/registry';
 import { clampToLimit, getResolvedLimits } from '../config-limits';
 // v1.0.12 Phase 7 — custom task instructions (sanitize when loading from DB).
 import { sanitizeInstructionsSource, MAX_COMBINED_INSTRUCTIONS_CHARS } from '../instructions';
@@ -163,6 +167,15 @@ export interface ResolvedTaskConfig extends TaskConfig {
   /** v1.0.13 — budget granted to BOTH limits per granted continuation
    *  (clamped into the central task.limitContinuationExtra bounds, shipped 25). */
   limitContinuationExtra: number;
+  /** v1.1.0 §2/§3 — continuity identity + context seeding options. */
+  continuationOfTaskId?: string;
+  forkedFromTaskId?: string;
+  contextOptions?: TaskConfig['contextOptions'];
+  /** v1.1.0 §8 — manual skill selection + mode. */
+  skills?: string[];
+  skillsMode?: 'auto' | 'manual' | 'auto+manual';
+  /** v1.1.0 §10 — pre-plan execute-all flag. */
+  executeAllPlannedSteps?: boolean;
 }
 
 function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<typeof getSettings>>): ResolvedTaskConfig {
@@ -219,6 +232,14 @@ function mergeConfig(stored: Partial<TaskConfig>, settings: Awaited<ReturnType<t
     limitContinuationExtra: clampLimit('task', 'limitContinuationExtra', settings.safetyLimitContinuationExtra, 25),
     sessionId: stored.sessionId,
     context: stored.context,
+    // v1.1.0 — the continuity/skills/execute-all fields survive the merge
+    // (they are persisted at creation and consumed by runTask).
+    continuationOfTaskId: stored.continuationOfTaskId,
+    forkedFromTaskId: stored.forkedFromTaskId,
+    contextOptions: stored.contextOptions,
+    skills: Array.isArray(stored.skills) ? stored.skills.map(String).slice(0, 12) : undefined,
+    skillsMode: stored.skillsMode === 'manual' || stored.skillsMode === 'auto+manual' ? stored.skillsMode : stored.skillsMode === 'auto' ? 'auto' : undefined,
+    executeAllPlannedSteps: stored.executeAllPlannedSteps === true,
   };
 }
 
@@ -228,6 +249,20 @@ function subgoalId(i: number): string {
 
 async function persistTask(taskId: string, data: Record<string, unknown>): Promise<void> {
   try {
+    // v1.1.0 §9.2 — a terminal row is never overwritten by a late write: a
+    // parallel-batch execution completing after a force-stop must not flip
+    // the task back to completed/failed. Non-status fields still persist.
+    if (typeof data.status === 'string') {
+      const current = await db.task.findUnique({ where: { id: taskId }, select: { status: true } });
+      const TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled']);
+      if (current && TERMINAL.has(current.status)) {
+        delete data.status;
+        delete data.statusDetail;
+        delete data.completedAt;
+        console.warn(`[loop] persist: task ${taskId} already terminal (${current.status}) — status fields dropped from a late write.`);
+        if (Object.keys(data).length === 0) return;
+      }
+    }
     await db.task.update({ where: { id: taskId }, data });
   } catch (err) {
     console.error(`[loop] persist failed for task ${taskId}:`, err);
@@ -275,6 +310,12 @@ interface RunContext {
    *  (result: not complete). Repeated verification with UNCHANGED state is
    *  skipped — the same input cannot produce a different verdict. */
   lastVerifiedObservation?: string;
+  /** v1.1.0 §10 — goal already verified while executeAllPlannedSteps keeps
+   *  the remaining plan steps running; further verification is skipped. */
+  goalVerified?: boolean;
+  /** v1.1.0 §10 — set when the execute-all continuation first fired (the
+   *  final summary mentions it honestly). */
+  executeAllContinued?: boolean;
 }
 
 // ---------- pause (v1.0.6 §11) ----------
@@ -656,6 +697,8 @@ async function decideAndExecute(
 ): Promise<{ decision: Awaited<ReturnType<typeof decide>>; result?: ActionResult }> {
   const bundle = { ...(await buildContextBundle(ctx, trigger)), ...contextBundleOverride };
 
+  // v1.1.0 — the decision carries the task id (CoreModule Live Output) and
+  // the task's AbortSignal so a force-stop unblocks an in-flight LLM call.
   const decision = await decide({
     objective,
     request: ctx.request,
@@ -668,7 +711,15 @@ async function decideAndExecute(
     reasoningLevel: ctx.config.reasoningLevel,
     allowedTools: ctx.config.enabledTools,
     instructions: ctx.instructions,
+    taskId: ctx.taskId,
+    signal: ctx.handle.abortController.signal,
   });
+
+  // v1.1.0 §9.2 — prevent late execution: if the task was stopped while the
+  // LLM call was in flight, the (valid) result must NOT trigger a tool run.
+  if (ctx.handle.stopFlag.stopped || ctx.handle.abortController.signal.aborted) {
+    return { decision };
+  }
 
   void emitEvent({
     taskId: ctx.taskId,
@@ -762,34 +813,38 @@ async function persistState(ctx: RunContext): Promise<void> {
 async function proposeNextSubgoal(
   ctx: RunContext,
 ): Promise<{ done: true } | { done: false; title: string; reason: string }> {
+  // v1.1.0 §11.5 — the subgoal proposal shares the PLANNER deadline (it is a
+  // planner inference), separate from the CoreModule timeout, and honors the
+  // task's AbortSignal.
+  let plannerTimeoutMs: number | null = 10_000;
   try {
-    // v1.0.11 §50 — shared cached client (one init per process).
-    const zai = await getZai();
-    const res = await Promise.race([
-      zai.chat.completions.create({
-        messages: [
-          {
-            role: 'assistant' as const,
-            content: [
-              'You are the Planner of NexTool. Given the goal and recent observations, determine the next dynamic subgoal.',
-              'Output STRICT JSON only, either {"done":true} when nothing further is needed, or {"title":"next subgoal","reason":"one sentence"}.',
-            ].join('\n'),
-          },
-          {
-            role: 'user' as const,
-            content: JSON.stringify({
-              goal: ctx.goal,
-              observations: ctx.state.observations.slice(-4),
-              planStatuses: ctx.state.plan.map((s) => `${s.title}:${s.status}`),
-            }),
-          },
-        ],
-        thinking: { type: 'disabled' },
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 10_000)),
-    ]);
-    const content = res?.choices?.[0]?.message?.content ?? '';
-    const cleaned = content.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+    plannerTimeoutMs = getResolvedLimits().planner.llmTimeoutMs;
+  } catch {
+    /* limits file problem — keep the documented 10-second default */
+  }
+  try {
+    const { content } = await callLlm({
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            'You are the Planner of NexTool. Given the goal and recent observations, determine the next dynamic subgoal.',
+            'Output STRICT JSON only, either {"done":true} when nothing further is needed, or {"title":"next subgoal","reason":"one sentence"}.',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            goal: ctx.goal,
+            observations: ctx.state.observations.slice(-4),
+            planStatuses: ctx.state.plan.map((s) => `${s.title}:${s.status}`),
+          }),
+        },
+      ],
+      timeoutMs: plannerTimeoutMs,
+      signal: ctx.handle.abortController.signal,
+    });
+    const cleaned = (content ?? '').replace(/```json\s*/gi, '').replace(/```/g, '').trim();
     const start = cleaned.indexOf('{');
     const end = cleaned.lastIndexOf('}');
     if (start !== -1 && end > start) {
@@ -807,6 +862,43 @@ async function proposeNextSubgoal(
 
 // ---------- goal completion check ----------
 
+/**
+ * v1.1.0 §10 — the shared goal-verification gate for runGoalMode.
+ *  - 'complete'  → normal early completion (executeAllPlannedSteps off, or
+ *                  no pending plan steps left, or one-by-one planner).
+ *  - 'continue'  → the goal IS verified but executeAllPlannedSteps is on and
+ *                  pending pre-plan steps remain: the remaining steps still
+ *                  execute (stop, approvals, safety limits and boundaries
+ *                  stay enforced — this flag never bypasses them).
+ * Guardrails (§10.3): decision-level terminal outcomes (clarification,
+ * cannot_execute, no_tool, stop, approval timeout) are NOT affected.
+ */
+async function resolveGoalVerification(ctx: RunContext): Promise<'complete' | 'continue'> {
+  if (ctx.goalVerified) {
+    // already verified — execute-all is mid-flight, skip re-verification
+    return 'continue';
+  }
+  if (await verifyGoal(ctx)) {
+    ctx.goalVerified = true;
+    const pendingLeft = firstPendingIndex(ctx.state.plan) !== -1;
+    if (ctx.config.plannerType === 'pre-plan' && ctx.config.executeAllPlannedSteps === true && pendingLeft) {
+      const pendingCount = ctx.state.plan.filter((s) => s.status === 'pending').length;
+      if (!ctx.executeAllContinued) {
+        ctx.executeAllContinued = true;
+        void emitEvent({
+          taskId: ctx.taskId, type: 'planner.execute_all_continue', source: 'planner',
+          message: `Goal verified — executeAllPlannedSteps is enabled: the remaining ${pendingCount} planned step(s) still execute (stop, approvals and safety limits remain enforced).`,
+          data: { plannerType: 'pre-plan', executeAllPlannedSteps: true, pendingSteps: pendingCount, goal: ctx.goal },
+          priority: 4,
+        });
+      }
+      return 'continue';
+    }
+    return 'complete';
+  }
+  return 'continue';
+}
+
 async function verifyGoal(ctx: RunContext): Promise<boolean> {
   const observation = ctx.state.lastObservation ?? 'No observation yet.';
   // v1.0.16 §6.3 — repeated verification when NO relevant state changed is
@@ -816,7 +908,7 @@ async function verifyGoal(ctx: RunContext): Promise<boolean> {
   if (ctx.lastVerifiedObservation === observation && observation !== 'No observation yet.') {
     return false;
   }
-  const check = await checkGoalComplete(ctx.goal, observation, ctx.config.reasoningLevel, ctx.taskId, ctx.instructions);
+  const check = await checkGoalComplete(ctx.goal, observation, ctx.config.reasoningLevel, ctx.taskId, ctx.instructions, ctx.handle.abortController.signal);
   ctx.lastVerifiedObservation = observation;
   if (check.complete) {
     void emitEvent({
@@ -873,7 +965,7 @@ function oneByOnePlannerInputs(ctx: RunContext, note?: string) {
  */
 async function planAndTrackOneByOneStep(ctx: RunContext, note?: string): Promise<PlanStep> {
   const plannerCtx = oneByOnePlannerInputs(ctx, note);
-  let planned = await planOneByOneStep(plannerCtx, ctx.toolDefs, ctx.taskId);
+  let planned = await planOneByOneStep(plannerCtx, ctx.toolDefs, ctx.taskId, ctx.handle.abortController.signal);
 
   const key = planned.step.title.trim().toLowerCase();
   if (ctx.lastFailedStepKey && key === ctx.lastFailedStepKey && ctx.identicalFailureStreak >= 2) {
@@ -1311,7 +1403,8 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
           });
         }
         await persistState(ctx);
-        if (await verifyGoal(ctx)) {
+        const verdict = await resolveGoalVerification(ctx);
+        if (verdict === 'complete') {
           return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Goal verified.' };
         }
         continue;
@@ -1427,6 +1520,8 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
         recoveryMaxAttempts: config.recoveryMaxAttempts,
         state: ctx.state,
         recoveryAttempts: ctx.recoveryAttemptsByStep,
+        // v1.1.0 — recovery assessments inherit the task's AbortSignal.
+        signal: ctx.handle.abortController.signal,
         decideAndExecute: (objective: string, overrides?: { lastObservation?: string }) =>
           decideAndExecute(ctx, objective, overrides),
         recordExecution: (tool: string, r: { execution: ToolExecution; observation: string }) =>
@@ -1484,7 +1579,8 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
     }
     await persistState(ctx);
 
-    if (await verifyGoal(ctx)) {
+    const verdict = await resolveGoalVerification(ctx);
+    if (verdict === 'complete') {
       // v1.0.10 §9 — the goal verifier ran BEFORE requesting another plan;
       // one-by-one emits its dedicated goal event and completes without
       // generating any further step.
@@ -1496,7 +1592,11 @@ async function runGoalMode(ctx: RunContext): Promise<Termination> {
           priority: 4,
         });
       }
-      return { finalStatus: 'completed', taskStatus: 'completed', summary: ctx.state.lastObservation ?? 'Goal verified.' };
+      return {
+        finalStatus: 'completed', taskStatus: 'completed',
+        statusDetail: ctx.executeAllContinued ? 'Goal verified — all planned steps executed (executeAllPlannedSteps).' : undefined,
+        summary: ctx.state.lastObservation ?? 'Goal verified.',
+      };
     }
   }
 }
@@ -1511,6 +1611,8 @@ async function decideForStep(ctx: RunContext, step: PlanStep): Promise<Awaited<R
     reasoningLevel: ctx.config.reasoningLevel,
     allowedTools: ctx.config.enabledTools,
     instructions: ctx.instructions,
+    taskId: ctx.taskId,
+    signal: ctx.handle.abortController.signal,
   });
 }
 
@@ -1651,9 +1753,16 @@ async function liveObserveCycle(ctx: RunContext, objective: string, trigger?: Li
 // ---------- live event queue (v1.0.6 §10) ----------
 
 /** §10.9 — configurable, deterministic queue limits. v1.0.8 §9.2 — the queue
- *  cap is resolved from the CENTRAL configuration (task.eventQueueCap);
- *  the 16 KiB payload guard is a fixed data-shape policy, not a tunable limit. */
-const MAX_EVENT_DATA_BYTES = 16 * 1024;
+ *  cap is resolved from the CENTRAL configuration (task.eventQueueCap).
+ *  v1.1.0 §7 — the per-event payload cap is ALSO central now
+ *  (events.maxDataBytes, previously the hard-coded 16 KiB). */
+function maxEventDataBytes(): number {
+  try {
+    return getResolvedLimits().events.maxDataBytes;
+  } catch {
+    return 16 * 1024; // shipped default; the loader fails clearly on invalid files
+  }
+}
 
 function maxQueuedEvents(): number {
   try {
@@ -1675,7 +1784,7 @@ function enqueueLiveEvent(ctx: RunContext, event: NexToolEvent): QueuedLiveEvent
   const queue = stateQueue(ctx);
   // payload guard
   let data = event.data;
-  if (data && JSON.stringify(data).length > MAX_EVENT_DATA_BYTES) {
+  if (data && JSON.stringify(data).length > maxEventDataBytes()) {
     data = { truncated: true, note: 'Event payload exceeded the 16 KiB queue limit and was reduced to metadata.' };
   }
   const queued: QueuedLiveEvent = {
@@ -2141,21 +2250,88 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
   // first safe point; paused flag is mirrored into the persisted state.
   if (handle.pauseFlag.paused) state.paused = true;
 
-  // v1.0.16 §10.3 — SKILLS, progressive loading: discover → metadata only →
-  // select relevant skills for THIS request → load FULL instructions for the
-  // selection only. The block travels as a delimited USER section (same
-  // hierarchy as task instructions — it can never override system
-  // constraints, environment boundaries or approval rules, §10.6).
+  // v1.1.0 §2/§3 — PRIOR-TASK CONTEXT (Continue Task / fork-from-recent):
+  // a bounded, relevance-selected block from the source task travels as a
+  // delimited instructions section (never the unbounded raw history, never
+  // replayed tool calls).
+  const sourceTaskId = config.continuationOfTaskId ?? config.forkedFromTaskId;
+  if (sourceTaskId) {
+    const prior = await buildPriorContext(sourceTaskId, config.contextOptions ?? {});
+    if (prior) {
+      const relation = config.continuationOfTaskId ? 'continuation of' : 'forked from';
+      ctx.instructions = [prior.block, ctx.instructions].filter(Boolean).join('\n\n');
+      void emitEvent({
+        taskId, type: 'task.context_seeded', source: 'runtime',
+        message: `Prior task context attached (${relation} ${prior.sourceTaskId}, status ${prior.sourceStatus})${prior.truncated ? ' — truncated to the configured limit' : ''}.`,
+        data: {
+          relation,
+          sourceTaskId: prior.sourceTaskId,
+          sourceStatus: prior.sourceStatus,
+          truncated: prior.truncated,
+          inheritedSkills: config.contextOptions?.skills === false ? [] : prior.selectedSkills,
+        },
+        priority: 6,
+      });
+      // §12.3 — inherit the source skill selection by default when the new
+      // task did not specify its own skills.
+      if (!config.skills && prior.selectedSkills.length > 0) {
+        config.skills = prior.selectedSkills;
+        config.skillsMode = 'manual';
+      }
+    } else {
+      void emitEvent({
+        taskId, type: 'task.context_seeded', source: 'runtime',
+        message: `Prior task ${sourceTaskId} could not be read — no context was attached.`,
+        data: { sourceTaskId },
+        priority: 7,
+      });
+    }
+  }
+
+  // v1.0.16 §10.3 / v1.1.0 §8 — SKILLS, progressive loading with the new
+  // SELECTION MODES: manual (operator picks from the Task Console), auto
+  // (deterministic selection — v1.0.16 behavior), auto+manual (both, capped).
+  // Disabled/invalid skills are excluded WITH an explanation; the selection is
+  // recorded in the persisted skills.selected event so Task Preview can show
+  // which skills influenced the task and continuations can inherit it.
   const skillSummaries = listSkillSummaries();
+  const skillMetas = listSkills(); // full metadata (enabled + valid) for the manual path
   if (skillSummaries.length > 0) {
-    const selected = selectSkillsForTask(request, skillSummaries);
-    const loaded = loadSkillInstructions(selected);
+    const mode = config.skillsMode ?? 'auto';
+    const manual = (config.skills ?? []).filter(Boolean);
+    const validManual = manual
+      .map((name) => skillMetas.find((s) => s.name === name))
+      .filter((s): s is NonNullable<typeof s> => Boolean(s && s.enabled && s.valid));
+    const excluded = manual.filter((name) => !validManual.some((s) => s.name === name));
+    let names: string[] = [];
+    if (mode === 'manual') {
+      names = validManual.map((s) => s.name);
+    } else if (mode === 'auto+manual') {
+      const autoSelected = selectSkillsForTask(request, skillSummaries);
+      names = [...new Set([...validManual.map((s) => s.name), ...autoSelected])];
+    } else {
+      names = selectSkillsForTask(request, skillSummaries);
+    }
+    const loaded = loadSkillInstructions(names);
     if (loaded.length > 0) {
       ctx.instructions = [ctx.instructions, renderSkillsBlock(loaded)].filter(Boolean).join('\n\n');
       void emitEvent({
         taskId, type: 'skills.selected', source: 'runtime',
-        message: `Skills selected for this task: ${loaded.map((s) => s.name).join(', ')} (${skillSummaries.length} installed, metadata-only discovery).`,
-        data: { selected: loaded.map((s) => s.name), installed: skillSummaries.map((s) => s.name) },
+        message: `Skills selected for this task (${mode}): ${loaded.map((s) => s.name).join(', ')}.${excluded.length > 0 ? ` Excluded (disabled/invalid/unknown): ${excluded.join(', ')}.` : ''}`,
+        data: {
+          selected: loaded.map((s) => s.name),
+          installed: skillSummaries.map((s) => s.name),
+          mode,
+          manual: validManual.map((s) => s.name),
+          ...(excluded.length > 0 ? { excluded } : {}),
+        },
+        priority: 6,
+      });
+    } else if (excluded.length > 0) {
+      void emitEvent({
+        taskId, type: 'skills.selected', source: 'runtime',
+        message: `No skills loaded — requested selection could not be applied (excluded: ${excluded.join(', ')}).`,
+        data: { selected: [], installed: skillSummaries.map((s) => s.name), mode, excluded },
         priority: 6,
       });
     }
@@ -2193,7 +2369,7 @@ export async function runTask(taskId: string, handle: TaskRunHandle): Promise<vo
     } else {
       // v1.0.10 §16 — pre-plan with the configurable step limit (default 10,
       // hard max 122; task value resolved against the global setting).
-      const plan = await buildPlan(request, state.goal, ctx.toolDefs, config.reasoningLevel, taskId, config.prePlanMaxSteps, ctx.instructions);
+      const plan = await buildPlan(request, state.goal, ctx.toolDefs, config.reasoningLevel, taskId, config.prePlanMaxSteps, ctx.instructions, handle.abortController.signal);
       state.plan = plan.steps;
       state.goal = plan.goal;
       ctx.goal = plan.goal;
@@ -2269,6 +2445,17 @@ async function finalize(ctx: RunContext, term: Termination): Promise<void> {
     durationMs,
     completedAt,
   });
+
+  // v1.1.0 §9.4 — the run handle is released once the task is terminal: no
+  // stale entry lingers in the registry (a later stop finalizes through the
+  // no-handle path instead of signaling a dead runner). Same globalThis
+  // registry nexool.ts owns — accessed directly to avoid an import cycle.
+  try {
+    const g = globalThis as unknown as { __nextoolRuntime?: { handles?: Map<string, unknown> } };
+    g.__nextoolRuntime?.handles?.delete(ctx.taskId);
+  } catch {
+    /* registry missing — nothing to release */
+  }
 
   void emitEvent({
     taskId: ctx.taskId,

@@ -255,6 +255,14 @@ export interface CoreModuleOutput {
   requestedEngine?: 'llm-core';
   /** v1.0.16 §7.4 — how many enabled tools were visible to the decision. */
   toolCandidateCount?: number;
+  /** v1.1.0 §11 — the configured CoreModule LLM deadline in ms for this
+   *  decision (coreModule.llmTimeoutMs; null = no application-level timeout).
+   *  Reported with every decision so the effective deadline is observable. */
+  coreTimeoutMs?: number | null;
+  /** v1.1.0 §11 — where the LLM pass ended when the decision did not come
+   *  from llm-core ('provider timeout (configured deadline reached)',
+   *  'provider failure', 'invalid structured output …', 'cancelled'). */
+  failureStage?: string;
 }
 
 // ---------- Planning / State ----------
@@ -410,6 +418,29 @@ export interface TaskConfig {
   limitContinuations?: number;
   sessionId?: string;
   context?: Record<string, unknown>;
+  /** v1.1.0 §2 — Continue Task: the follow-up task's link to the ORIGINAL
+   *  terminal task (which is never mutated). */
+  continuationOfTaskId?: string;
+  /** v1.1.0 §3 — fork-from-recent: the SOURCE task of this new independent
+   *  task. Old tool calls are never replayed automatically. */
+  forkedFromTaskId?: string;
+  /** v1.1.0 §3.2 — which context classes to reuse from the source task. */
+  contextOptions?: {
+    result?: boolean;
+    plan?: boolean;
+    executions?: boolean;
+    memory?: boolean;
+    skills?: boolean;
+  };
+  /** v1.1.0 §8 — explicit skill selection + mode (auto | manual | auto+manual).
+   *  Manual selections must be enabled+valid; they replace/augment the
+   *  automatic deterministic selection at runtime. */
+  skills?: string[];
+  skillsMode?: 'auto' | 'manual' | 'auto+manual';
+  /** v1.1.0 §10 — pre-plan only: when true, the runtime keeps executing the
+   *  remaining planned steps after the goal is verified (stop, approvals,
+   *  safety limits and boundaries still apply). Default false. */
+  executeAllPlannedSteps?: boolean;
 }
 
 export interface TaskSummary {

@@ -42,6 +42,8 @@ import { ToolFailure } from './handler';
 import { normalizeVirtualPath, openGlobalVfs, VirtualFsError } from './vfs';
 import { registerVfsDownload } from './fs-downloads';
 import { requestFileFromUser } from './file-requests';
+// v1.1.0 §9.3 — task-owned child-process registry (force-stop termination).
+import { registerTaskProcess } from '../main/task-processes';
 import { requestApproval } from '../approval';
 
 function p(
@@ -412,7 +414,7 @@ function resolveCmdCwd(cwdRel: string): string {
 }
 
 /** Spawn bash -lc <command> confined to the runtime working directory. */
-function runHostCommand(command: string, cwdRel: string, timeoutMs: number): Promise<{
+function runHostCommand(command: string, cwdRel: string, timeoutMs: number, taskId?: string): Promise<{
   stdout: string; stderr: string; code: number | null; signal: string | null;
   truncated: boolean; timedOut: boolean; cwd: string;
 }> {
@@ -422,12 +424,23 @@ function runHostCommand(command: string, cwdRel: string, timeoutMs: number): Pro
     try {
       child = spawn('/bin/bash', ['-lc', command], {
         cwd,
-        env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: cwd, TERM: 'dumb', LANG: 'C.UTF-8' },
+        env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: cwd, TERM: 'dumb', LANG: 'C.UTF-8', NODE_ENV: process.env.NODE_ENV ?? 'development' },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
       reject(new ToolFailure(`fs.cmd failed to spawn the shell: ${err instanceof Error ? err.message : 'unknown error'}`, 'FS_CMD_SPAWN_FAILED'));
       return;
+    }
+
+    // v1.1.0 §9.3 — a task-owned host process is registered so a force-stop
+    // terminates it (SIGTERM → SIGKILL) even when the tool result is discarded.
+    let release: (() => void) | null = null;
+    if (taskId) {
+      release = registerTaskProcess(taskId, `fs.cmd:${child.pid ?? 'unknown'}`, {
+        label: 'fs.cmd',
+        pid: child.pid,
+        kill: (signal) => child.kill(signal ?? 'SIGTERM'),
+      });
     }
 
     let stdout = '';
@@ -451,10 +464,12 @@ function runHostCommand(command: string, cwdRel: string, timeoutMs: number): Pro
     child.stderr?.on('data', (c: Buffer) => { const r = capChunk(stderr, c); stderr = r.text; truncated = truncated || r.truncated; });
     child.on('error', (err: Error) => {
       clearTimeout(timer);
+      release?.();
       reject(new ToolFailure(`fs.cmd shell error: ${err.message}`, 'FS_CMD_ERROR'));
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
+      release?.();
       resolve({ stdout, stderr, code, signal: signal ?? null, truncated, timedOut, cwd });
     });
   });
@@ -504,7 +519,7 @@ export const fsCmd: ToolHandler = async (params, ctx) => {
 
   let result: Awaited<ReturnType<typeof runHostCommand>>;
   try {
-    result = await runHostCommand(command, cwd, requestedTimeout);
+    result = await runHostCommand(command, cwd, requestedTimeout, ctx?.taskId);
   } catch (err) {
     throw toToolFailure(err);
   }

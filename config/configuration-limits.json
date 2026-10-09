@@ -6,8 +6,10 @@
     "notes": [
       "null means 'no explicit limit' ONLY for properties explicitly marked nullable — each nullable property documents exactly what null does. null is never interpreted as unlimited automatically.",
       "The security boundaries (virtual filesystem isolation, network host policy, sandbox escapes) are NOT controlled by this file and can never be weakened by raising a limit.",
-      "Timeouts are intentionally separate properties: execution.timeoutMs governs the whole tool execution; network.timeoutMs governs one network request; childProcess.timeoutMs is the per-command default ceiling (the effective tool execution timeout raises it); task.toolTimeoutMs is the global tool default; task.taskTimeoutMs governs the whole task. Tool approval (300000 ms) and interactive prompts (120000 ms) are fixed runtime semantics, not configurable here.",
-      "COMPLETE UNRESTRICTED preset (v1.0.14): every numeric limit is at its shipped maximum and capability booleans are fully open. This removes runtime safety margins — use ONLY intentionally in a trusted self-hosted environment."
+      "Timeouts are intentionally separate properties: execution.timeoutMs governs the whole tool execution; network.timeoutMs governs one network request; childProcess.timeoutMs is the per-command default ceiling (the effective tool execution timeout raises it); task.toolTimeoutMs is the global tool default; task.taskTimeoutMs governs the whole task; coreModule.llmTimeoutMs governs one CoreModule LLM call; planner.llmTimeoutMs governs one Planner/Observer LLM call; terminal.execTimeoutMs governs one real-FS terminal command. Tool approval (300000 ms) and interactive prompts (120000 ms) are fixed runtime semantics, not configurable here.",
+      "v1.1.0 additions (coreModule, planner, terminal, vfsTerminal, skills, events, continuity) shipped at their STANDARD defaults even when this file was previously saved with the Complete Unrestricted preset — press 'Complete Unrestricted' in the Limitations page to raise them to their maximums/unlimited semantics as well.",
+      "vfsTerminal.allowedCommands is a CAP list for the VFS shell only. null = every IMPLEMENTED VFS-shell command is permitted; an array = exactly those commands. It never weakens the VFS root boundary, which is code-enforced.",
+      "COMPLETE UNRESTRICTED preset (v1.0.14): every numeric limit is at its shipped maximum, nullable limits become null (unlimited), list allowlists become null (unrestricted) and capability booleans are fully open. This removes runtime safety margins — use ONLY intentionally in a trusted self-hosted environment."
     ]
   },
   "network": {
@@ -388,6 +390,208 @@
       "default": false,
       "category": "freedom-node",
       "description": "v1.0.11 — Marks the freedom-node filesystem mode as restricted or not. false (default) = freedom-node uses the REAL host filesystem and is never redirected into the restricted tool VFS; true would re-enable restrictions. Distinct from the vfs.* section, which governs the restricted virtual filesystem used by js-function/nodejs tools."
+    }
+  },
+  "coreModule": {
+    "llmTimeoutMs": {
+      "type": "integer",
+      "nullable": true,
+      "default": 300000,
+      "min": 1000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "core-module",
+      "description": "v1.1.0 — Deadline for ONE CoreModule LLM decision call (default 5 minutes, replacing the removed hard-coded 25-second timeout). null = NO application-level timeout: the call runs until the provider answers or fails on its own. The configured deadline is reported in core diagnostics; slow generation is never treated as a provider failure before this deadline."
+    },
+    "liveOutputBufferBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 65536,
+      "min": 4096,
+      "max": 1048576,
+      "unit": "bytes",
+      "category": "core-module",
+      "description": "v1.1.0 — Maximum retained bytes of streamed CoreModule Live Output per request (default 64 KiB). The buffer powers SSE replay after reconnect; older bytes past the cap are dropped from the replay window only — the final parsed decision is unaffected."
+    }
+  },
+  "planner": {
+    "llmTimeoutMs": {
+      "type": "integer",
+      "nullable": true,
+      "default": 60000,
+      "min": 1000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "planner",
+      "description": "v1.1.0 — Deadline for ONE Planner LLM call (pre-plan plan build or one-by-one step), replacing the removed hard-coded 25-second timeout. Intentionally separate from coreModule.llmTimeoutMs, task.taskTimeoutMs and tool timeouts. null = no application-level timeout."
+    },
+    "verifyTimeoutMs": {
+      "type": "integer",
+      "nullable": true,
+      "default": 6000,
+      "min": 500,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "planner",
+      "description": "v1.1.0 — Deadline for the goal-verification LLM call (previously the hard-coded 6-second VERIFY_TIMEOUT_MS). null = no application-level timeout. When the deadline fires, verification falls back to the deterministic heuristic — it never aborts the task."
+    },
+    "recoveryMaxPlanSteps": {
+      "type": "integer",
+      "nullable": false,
+      "default": 4,
+      "min": 1,
+      "max": 16,
+      "unit": "count",
+      "category": "planner",
+      "description": "v1.1.0 — Maximum steps in one recovery pre-plan (previously the hard-coded RECOVERY_PLAN_MAX_STEPS = 4)."
+    }
+  },
+  "terminal": {
+    "maxSessions": {
+      "type": "integer",
+      "nullable": false,
+      "default": 4,
+      "min": 1,
+      "max": 16,
+      "unit": "count",
+      "category": "terminal",
+      "description": "v1.1.0 — Maximum concurrent real-FS terminal sessions (previously the hard-coded MAX_SESSIONS = 4)."
+    },
+    "execTimeoutMs": {
+      "type": "integer",
+      "nullable": true,
+      "default": 300000,
+      "min": 1000,
+      "max": 3600000,
+      "unit": "ms",
+      "category": "terminal",
+      "description": "v1.1.0 — Default timeout for ONE real-FS terminal command (default 5 minutes). null = no automatic timeout: commands run until they exit or the operator interrupts them. A timed-out command is terminated SIGTERM-first, then SIGKILL."
+    },
+    "maxOutputBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 1048576,
+      "min": 65536,
+      "max": 33554432,
+      "unit": "bytes",
+      "category": "terminal",
+      "description": "v1.1.0 — Maximum combined stdout+stderr bytes retained per terminal command (default 1 MiB). Excess output is discarded and flagged in the command result — the process itself keeps running."
+    },
+    "historyLimit": {
+      "type": "integer",
+      "nullable": false,
+      "default": 100,
+      "min": 10,
+      "max": 1000,
+      "unit": "count",
+      "category": "terminal",
+      "description": "v1.1.0 — Maximum retained command-history entries per terminal session (navigable with Up/Down)."
+    }
+  },
+  "vfsTerminal": {
+    "allowedCommands": {
+      "type": "array",
+      "items": "string",
+      "nullable": true,
+      "default": ["pwd", "help", "clear", "ls", "cd", "cat", "mkdir", "touch", "rm", "cp", "mv", "find", "echo"],
+      "category": "vfs",
+      "description": "v1.1.0 — Commands the VFS shell accepts (enforced SERVER-SIDE against this list on every execution). null = every IMPLEMENTED VFS-shell command is permitted; an array = exactly those commands (unknown commands are rejected with a clear configuration error). This is an application cap for the shell UX — it never weakens the VFS root boundary, symlink refusal or path normalization, which are code-enforced."
+    }
+  },
+  "skills": {
+    "maxLoadedPerTask": {
+      "type": "integer",
+      "nullable": false,
+      "default": 4,
+      "min": 0,
+      "max": 12,
+      "unit": "count",
+      "category": "skills",
+      "description": "v1.1.0 — Maximum skills whose full instructions are loaded into one task prompt (previously the hard-coded cap of 4; 0 disables skill loading entirely)."
+    },
+    "maxInstructionChars": {
+      "type": "integer",
+      "nullable": false,
+      "default": 6000,
+      "min": 500,
+      "max": 100000,
+      "unit": "chars",
+      "category": "skills",
+      "description": "v1.1.0 — Maximum characters of one skill's instructions injected into a task prompt (previously the hard-coded 6000). Longer bodies are truncated with a visible marker."
+    },
+    "maxResourceBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 262144,
+      "min": 1024,
+      "max": 10485760,
+      "unit": "bytes",
+      "category": "skills",
+      "description": "v1.1.0 — Maximum size of one skill resource file that may be read through the confined resource path (previously the hard-coded 256 KiB)."
+    },
+    "maxZipBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 8388608,
+      "min": 10240,
+      "max": 52428800,
+      "unit": "bytes",
+      "category": "skills",
+      "description": "v1.1.0 — Maximum size of an uploaded skill ZIP import (previously the hard-coded 8 MiB)."
+    }
+  },
+  "events": {
+    "recentRingSize": {
+      "type": "integer",
+      "nullable": false,
+      "default": 500,
+      "min": 50,
+      "max": 5000,
+      "unit": "count",
+      "category": "events",
+      "description": "v1.1.0 — Size of the in-memory recent-events ring used for SSE replay after reconnect (previously the hard-coded 500)."
+    },
+    "maxDataBytes": {
+      "type": "integer",
+      "nullable": false,
+      "default": 16384,
+      "min": 1024,
+      "max": 1048576,
+      "unit": "bytes",
+      "category": "events",
+      "description": "v1.1.0 — Maximum serialized JSON payload of one event's data field (previously the hard-coded 16 KiB cap in the task loop). Larger payloads are trimmed with an explicit marker."
+    }
+  },
+  "continuity": {
+    "maxContextChars": {
+      "type": "integer",
+      "nullable": false,
+      "default": 12000,
+      "min": 2000,
+      "max": 200000,
+      "unit": "chars",
+      "category": "continuity",
+      "description": "v1.1.0 — Maximum characters of the prior-task context block injected into a Continue Task or forked task prompt. The block is built from the source task's result, observations, plan and history — never the unbounded raw history."
+    },
+    "maxExecutionRows": {
+      "type": "integer",
+      "nullable": false,
+      "default": 12,
+      "min": 0,
+      "max": 100,
+      "unit": "count",
+      "category": "continuity",
+      "description": "v1.1.0 — Maximum recent tool-execution rows summarized into a continuation/fork context block."
+    },
+    "maxObservations": {
+      "type": "integer",
+      "nullable": false,
+      "default": 8,
+      "min": 0,
+      "max": 50,
+      "unit": "count",
+      "category": "continuity",
+      "description": "v1.1.0 — Maximum recent observations carried into a continuation/fork context block."
     }
   }
 }

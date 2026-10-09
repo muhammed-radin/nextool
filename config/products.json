@@ -1,0 +1,38 @@
+{
+  "$meta": {
+    "name": "NexTool Our Products registry",
+    "description": "Showcase entries for the Our Products page (v1.1.0 §5). A self-hosted operator maintains THIS file — add or update products by editing the JSON (no rebuild needed; the page reads it through /api/products). Only REAL products with TRUTHFUL links/status belong here: never invent deployment URLs or claim a project is live when it is not.",
+    "fields": {
+      "id": "stable slug",
+      "name": "product name",
+      "description": "one-paragraph description",
+      "category": "free-form category label",
+      "technologies": "array of technology names",
+      "status": "live | demo | in-development",
+      "url": "optional REAL external URL (omit when none exists)",
+      "demoView": "optional internal console view id for an embedded demo (e.g. 'assistant')",
+      "screenshot": "optional asset path under /public (e.g. '/products/console.png')"
+    }
+  },
+  "products": [
+    {
+      "id": "nextool-q1",
+      "name": "NexTool Q1",
+      "description": "The local-first AI task-automation platform you are looking at: requests become plans, plans drive a dynamic tool registry, executions are observed and verified against goals — with a real-FS terminal, FS Inspector, Skills system and a live operations console. This deployment is the product itself.",
+      "category": "AI task automation platform",
+      "technologies": ["Next.js 16", "TypeScript", "Prisma (SQLite)", "Tailwind CSS 4", "TensorFlow.js", "SSE"],
+      "status": "demo",
+      "demoView": "dashboard",
+      "screenshot": "/products/console.png"
+    },
+    {
+      "id": "nextool-assistant",
+      "name": "NexTool Assistant",
+      "description": "The conversational NexTool experience: a production chat interface where every reply is a real task execution — the assistant plans, runs safe tools (math, text analysis, memory, time, filesystem queries) and reports what actually happened. Open the demo to talk to it.",
+      "category": "AI assistant demo",
+      "technologies": ["Next.js 16", "Live Mode task runtime", "safe toolset", "SSE"],
+      "status": "demo",
+      "demoView": "assistant"
+    }
+  ]
+}

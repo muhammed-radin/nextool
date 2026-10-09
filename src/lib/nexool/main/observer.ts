@@ -1,14 +1,19 @@
 /**
  * NexTool Observer — interprets tool executions and checks goal completion.
+ *
+ * v1.1.0 (§11.5): the hard-coded 6-second VERIFY_TIMEOUT_MS is GONE — the
+ * deadline is the configurable `planner.verifyTimeoutMs` central limit
+ * (null = no application-level timeout). Verification calls accept the
+ * task's AbortSignal so a force-stop unblocks them. A reached deadline
+ * falls back to the deterministic heuristic — it never aborts the task.
  */
 import type { ToolExecution } from '../types';
 import { emitEvent } from '../eventbus';
-// v1.0.11 §50 — the shared cached client (one init per process, every path).
-import { getZai } from '../core/coremodule';
+// v1.1.0 — shared provider-call layer (configurable timeout, abort).
+import { callLlm, LlmCallCancelledError } from '../core/llm-call';
+import { getResolvedLimits } from '../config-limits';
 // v1.0.12 Phase 7 — custom task instructions (delimited user block).
 import { appendInstructionsBlock } from '../instructions';
-
-const VERIFY_TIMEOUT_MS = 6_000;
 
 /** Produce a concise operational observation from a tool execution. */
 export function interpret(
@@ -112,6 +117,7 @@ export async function checkGoalComplete(
   reasoningLevel: number,
   taskId?: string,
   instructions?: string | null,
+  signal?: AbortSignal,
 ): Promise<GoalCheck> {
   if (reasoningLevel <= 2) {
     const obsLower = observation.toLowerCase();
@@ -126,23 +132,23 @@ export async function checkGoalComplete(
     };
   }
 
+  let verifyTimeoutMs: number | null = 6_000;
   try {
-    const zai = await getZai();
+    verifyTimeoutMs = getResolvedLimits().planner.verifyTimeoutMs;
+  } catch {
+    /* limits file problem — keep the documented 6-second default */
+  }
+  try {
     const { system, user } = buildGoalCheckMessages(goal, observation, instructions);
-    const res = await Promise.race([
-      zai.chat.completions.create({
-        messages: [
-          { role: 'assistant' as const, content: system },
-          { role: 'user' as const, content: user },
-        ],
-        thinking: { type: 'disabled' },
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Observer verify timed out')), VERIFY_TIMEOUT_MS),
-      ),
-    ]);
-    const content = res?.choices?.[0]?.message?.content ?? '';
-    const cleaned = content.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+    const { content } = await callLlm({
+      messages: [
+        { role: 'assistant', content: system },
+        { role: 'user', content: user },
+      ],
+      timeoutMs: verifyTimeoutMs,
+      signal,
+    });
+    const cleaned = (content ?? '').replace(/```json\s*/gi, '').replace(/```/g, '').trim();
     const start = cleaned.indexOf('{');
     const end = cleaned.lastIndexOf('}');
     if (start !== -1 && end > start) {
@@ -152,6 +158,10 @@ export async function checkGoalComplete(
       return { complete, reason, engine: 'llm-core' };
     }
   } catch (err) {
+    // v1.1.0 — a force-stop cancellation is not a verification failure.
+    if (err instanceof LlmCallCancelledError || signal?.aborted) {
+      return { complete: false, reason: 'Verification cancelled — the task is stopping.', engine: 'heuristic-fallback' };
+    }
     console.error('[observer] LLM verify failed, falling back to heuristic:', err);
     void emitEvent({
       taskId,
@@ -197,33 +207,34 @@ export async function assessRecovery(
   },
   reasoningLevel: number,
   taskId?: string,
+  signal?: AbortSignal,
 ): Promise<RecoveryAssessment> {
   if (reasoningLevel > 2) {
+    let verifyTimeoutMs: number | null = 6_000;
     try {
-      const zai = await getZai();
-      const res = await Promise.race([
-        zai.chat.completions.create({
-          messages: [
-            {
-              role: 'assistant' as const,
-              content: [
-                'You are the Observer of NexTool, assessing a FAILED plan step after a recovery attempt.',
-                'Decide:',
-                '- "resolved": the failed condition is now resolved (the step objective is satisfied by the recovery actions, or the blocking condition was removed).',
-                '- "recoverable": the main goal can safely continue. Use false ONLY when the situation clearly cannot proceed (required capability missing, unrecoverable environment).',
-                'Output STRICT JSON only: {"resolved": true|false, "recoverable": true|false, "reason": "one concise sentence"}',
-              ].join('\n'),
-            },
-            { role: 'user' as const, content: JSON.stringify(input) },
-          ],
-          thinking: { type: 'disabled' },
-        }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Recovery assessment timed out')), VERIFY_TIMEOUT_MS),
-        ),
-      ]);
-      const content = res?.choices?.[0]?.message?.content ?? '';
-      const cleaned = content.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+      verifyTimeoutMs = getResolvedLimits().planner.verifyTimeoutMs;
+    } catch {
+      /* limits file problem — keep the documented 6-second default */
+    }
+    try {
+      const { content } = await callLlm({
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              'You are the Observer of NexTool, assessing a FAILED plan step after a recovery attempt.',
+              'Decide:',
+              '- "resolved": the failed condition is now resolved (the step objective is satisfied by the recovery actions, or the blocking condition was removed).',
+              '- "recoverable": the main goal can safely continue. Use false ONLY when the situation clearly cannot proceed (required capability missing, unrecoverable environment).',
+              'Output STRICT JSON only: {"resolved": true|false, "recoverable": true|false, "reason": "one concise sentence"}',
+            ].join('\n'),
+          },
+          { role: 'user', content: JSON.stringify(input) },
+        ],
+        timeoutMs: verifyTimeoutMs,
+        signal,
+      });
+      const cleaned = (content ?? '').replace(/```json\s*/gi, '').replace(/```/g, '').trim();
       const start = cleaned.indexOf('{');
       const end = cleaned.lastIndexOf('}');
       if (start !== -1 && end > start) {
@@ -237,6 +248,10 @@ export async function assessRecovery(
         };
       }
     } catch (err) {
+      // v1.1.0 — a force-stop cancellation is not an assessment failure.
+      if (err instanceof LlmCallCancelledError || signal?.aborted) {
+        return { resolved: false, recoverable: false, reason: 'Recovery assessment cancelled — the task is stopping.', engine: 'heuristic-fallback' };
+      }
       console.error('[observer] recovery assessment failed, conservative fallback:', err);
       void emitEvent({
         taskId,

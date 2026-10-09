@@ -90,8 +90,13 @@ Status semantics in the loop:
 
 - Backend: `z-ai-web-dev-sdk` chat completions, server-side, `thinking: { type:
   'disabled' }`, system prompt sent with role `assistant` (sandbox requirement).
-- Hard timeout 25 s (`CORE_TIMEOUT_MS`). One automatic retry with a stricter "Return ONLY
-  the JSON object" suffix if the first response contains no parseable JSON object.
+- **v1.1.0 deadline**: the hard-coded 25 s `CORE_TIMEOUT_MS` is REMOVED. The deadline
+  is the configurable `coreModule.llmTimeoutMs` central limit (default 300 000 ms =
+  5 minutes; `null` = no application-level timeout) via the shared `callLlm` layer —
+  see [Streaming, Live Output and diagnostics (v1.1.0)](#streaming-live-output-and-diagnostics-v110).
+  One automatic retry with a stricter "Return ONLY
+  the JSON object" suffix if the first response contains no parseable JSON object
+  (the retry is a second REAL LLM pass with its own Live Output record).
 - Output validation: status must be one of the five; confidence clamped 0–1; reason
   capped 300 chars; `tool_call` requires a known tool name (else → fallback engine).
 - Latency is measured end-to-end (`Date.now()` around the whole decide call, including
@@ -107,6 +112,44 @@ Status semantics in the loop:
   `candidates` with scores; naive parameter extraction covers server ids (`api|web|db-\d`),
   numbers, quoted strings, `#tags`, math expressions, enums.
 - Unfilled required params → `clarification_required` listing them.
+
+## Streaming, Live Output and diagnostics (v1.1.0)
+
+### Real streaming + Live Output
+
+When the provider supports it, decision requests run with `stream: true` through the
+shared provider layer (`core/llm-call.ts`): provider deltas are forwarded AS THEY
+ARRIVE into the Live Output registry (`core/live-output.ts`, one bounded record per
+LLM pass — `"decision"` and `"decision (strict retry)"` each get their own record) and
+reach Task Preview through the dedicated SSE channel `GET /api/core/stream`
+(`core.started / core.chunk / core.completed / core.failed / core.cancelled`, dedup by
+`(requestId, seq)`, bounded snapshot replay on reconnect). The UI renders the stream in
+~10-word display batches — a render-pacing buffer only; the text itself is untouched.
+If the provider answers without a stream body, the response is used as-is and the
+record reports `streamed: false` honestly — never fabricated chunks. Only the
+lifecycle events (`core.output.started/completed/failed`) are persisted as task events;
+token chunks stay in the bounded buffer (`coreModule.liveOutputBufferBytes`, default
+64 KiB — older bytes are dropped from the replay window only, the parsed decision is
+unaffected). The channel is observability-only: its frames are never executed, and it
+carries exactly what the model generated — no credentials, no hidden reasoning.
+
+### Configurable deadline + honest failure stages
+
+- The deadline comes from `coreModule.llmTimeoutMs` (default 5 minutes; `null` = the
+  call runs until the provider answers or fails on its own). Slow generation is never
+  treated as a provider failure before the configured deadline.
+- The fallback ladder (trained-classifier hint → heuristic) runs ONLY on genuine
+  failures — provider error, reached deadline, or unparseable/invalid output. A valid
+  `no_tool` from llm-core is still not a fallback.
+- **Diagnostics fields on every CoreModuleOutput** (and in every `core.decision` event):
+
+| Field | Meaning |
+| --- | --- |
+| `coreTimeoutMs` | The configured deadline for this decision (`null` = unlimited). |
+| `failureStage` | WHY the LLM path did not produce the final decision: `invalid structured output (first pass)`, `invalid structured output (strict retry too)`, `validation rejected the structured result`, `provider timeout (configured deadline reached)`, `provider failure`, `cancelled` (task stopped mid-call) or `unknown`. |
+
+  These join the v1.0.16 fields (`fallbackReason`, `requestedEngine`,
+  `toolCandidateCount`) on every non-llm-core decision.
 
 ## Latency
 

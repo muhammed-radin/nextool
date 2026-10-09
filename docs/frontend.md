@@ -46,14 +46,14 @@ package — the same package that feeds the favicon:
 
 ## The views
 
-`ConsoleView` union in `console-store.ts` — 20 views, each a file in `views/`
-(v1.0.14 adds `limitations.tsx` and `assistant.tsx`; see the
-[v1.0.14 section](#v1014-frontend-changes) below):
+`ConsoleView` union in `console-store.ts` — 21 views (v1.0.14 adds `limitations.tsx`
+and `assistant.tsx`; v1.1.0 adds `products.tsx`; see the
+[v1.1.0 section](#v110-frontend-changes) below):
 
 | View | File | Purpose |
 | --- | --- | --- |
 | Dashboard | `dashboard.tsx` | Metric cards, latency area chart, recent tasks → preview, recent events. |
-| Task Console | `task-console.tsx` | Create tasks: request, mode + live opt-in, L1–6, memory switch, limits (incl. v1.0.3 "Parallel tool calls" toggle + "Max parallel calls" in Execution limits), tool multi-select — **required** since v1.0.4 ("Tool selection *" label, amber "required — select at least 1" hint, submit blocked with "Select at least one tool before running the task."); compact quick-fill examples on their own wrapping row (v1.0.4); v1.0.6 per-task toggles: **Auto-Execute Tools** (shield icon) and **Allow Multiple Events at Same Time** ("Read & Act All Events"). v1.0.10: a planner select (`Pre-plan` / `One-by-one`, default from Settings) plus a "Pre-plan max steps" input (1–122) — the max-steps input shows for the pre-plan strategy only; one-by-one renders an honest "no pre-generated step list" note instead of a step-count field. **v1.0.11: the Auto-Execute switch is labeled "Task — lowest priority" (hierarchy badge) and shows "Controlled by global auto-execution setting — this task preference cannot override it." whenever the global switch is ON.** |
+| Task Console | `task-console.tsx` | Create tasks: request, mode + live opt-in, L1–6, memory switch, limits (incl. v1.0.3 "Parallel tool calls" toggle + "Max parallel calls" in Execution limits), tool multi-select — **required** since v1.0.4 ("Tool selection *" label, amber "required — select at least 1" hint, submit blocked with "Select at least one tool before running the task."); compact quick-fill examples on their own wrapping row (v1.0.4); v1.0.6 per-task toggles: **Auto-Execute Tools** (shield icon) and **Allow Multiple Events at Same Time** ("Read & Act All Events"). v1.0.10: a planner select (`Pre-plan` / `One-by-one`, default from Settings) plus a "Pre-plan max steps" input (1–122) — the max-steps input shows for the pre-plan strategy only; one-by-one renders an honest "no pre-generated step list" note instead of a step-count field. **v1.0.11: the Auto-Execute switch is labeled "Task — lowest priority" (hierarchy badge) and shows "Controlled by global auto-execution setting — this task preference cannot override it." whenever the global switch is ON. v1.1.0: a collapsible "Start from a recent task (optional)" fork picker, a collapsible Skills selector (Automatic / Manual / Auto + selected) and — for the pre-plan planner — the "Execute every planned step, even after the goal is achieved" switch (details below).** |
 | Task Preview | `task-preview.tsx` | Dedicated per-task screen: badges, stop/send-event/feedback dialogs, live checklist/timeline **while the task is active** (removed + replaced by *Final task output* on terminal states — v1.0.3), plan-as-checklist, parallel-batch grouping, executions, MainState JSON, 5 context panels, events timeline, runtime terminal (+ *Preview as Terminal* toggle); v1.0.6: **Pause/Resume** buttons, pending-**approval cards** (tool / purpose / params / subgoal + Allow/Deny + optional deny feedback), **prompt cards** (answer/cancel) and the **event-queue panel**; `paused` renders sky-blue, `awaiting_approval` amber. v1.0.10: the Plan section renders a "Planner: Pre-plan" badge (the resolved strategy), and one-by-one tasks get a dedicated "One-by-one Planner" panel — Current Subgoal → / Previous ✓ / Next: Waiting for observation… — fed by the new planner events. **v1.0.11: a dedicated Recovery panel for pre-plan recovery (never hidden in the generic event list) — the failed step + failure reason, the recovery pre-plan steps with live status glyphs, the attempt counter (`Recovering n/m` → `Main plan resumed (n/m)` or an honest `Recovery failed n/m` message), and the resume note when the main plan continues.** |
 | Live Monitor | `live-monitor.tsx` | Live tasks (3 s polls), fleet with injections, filtered event terminal, terminal preview toggle; v1.0.6: per-task **Pause/Resume**, pending-**approval cards** (Allow/Deny + feedback), **prompt cards** (answer/cancel) and the **event-queue panel** (from `state.eventQueue`). |
 | Tools | `tools.tsx` | Registry grid, enable switches, stats, schema accordions, register dialog; grid actions (New Tool / Edit / Duplicate / Test / Enable/Disable / Delete); v1.0.4 per-tool **Export** + dropdown **Export all tools (JSON)**; **v1.0.91: Import tools (JSON)… accepts a single tool object OR a JSON array (bulk) — per-item validation preview, per-row Replace/Import-as-copy/Skip conflict resolution, progress bar + final Imported/Skipped/Failed summary**; v1.0.7 responsive **"Search tools..."** filter (live, no reload — matches name/description/category/environment/handler kind/metadata; "N of M tools match" counter; honest "No tools found" empty state with **Clear search**) — see [Tools](../tools/tools.md). |
@@ -385,3 +385,54 @@ Typed helpers cover the whole endpoint surface (`getSystemStats`, `createTask`,
 - **Tool IDE**: the execution-timeout input's ceiling, the js-result caption and the
   nodejs reference rows (VFS / child_process / network) all read the live central limits
   via `GET /api/tools/environments`.
+
+## v1.1.0 frontend changes
+
+- **CoreModule Live Output (Task Preview)** — a collapsible **CoreModule Live Output**
+  section (`core-live-output.tsx`) fed by the dedicated SSE channel
+  `GET /api/core/stream`. Incoming provider deltas land in a ref buffer and a 120 ms
+  ticker flushes **~10 words at a time** to the visible transcript — batching paces the
+  RENDER only; whitespace and order are preserved exactly. Per-request status chips
+  (Streaming / Completed / Failed / Cancelled), elapsed time, word count, seq-based
+  dedup, bounded snapshot replay on reconnect, auto-scroll with pause/resume, copy and
+  save. Debug metadata (requested vs actual engine, `streamed` flag, configured
+  deadline, fallback reason) is shown — never credentials. Late frames for cancelled
+  requests are ignored by the renderer.
+- **Continue Task dialog** — terminal tasks (completed/stopped/failed) gain a
+  **Continue Task** header action (mobile tabs + desktop grid) opening
+  `continue-task-dialog.tsx`: it asks for the NEXT prompt, shows the context classes
+  that will carry over, and creates a NEW linked task
+  (`config.continuationOfTaskId`) — the original task is never mutated.
+- **Task Console fork control** — the collapsible **"Start from a recent task
+  (optional)"** picker (between Instructions and the reasoning area): the 20 most
+  recent completed/stopped/failed tasks (client-side filter, text filter past 8
+  items), per-source detail line (status chip, completion time, tool-execution count)
+  and a **"Context to reuse"** checkbox grid mapping `contextOptions` — result, plan,
+  executions, memory, skills — all default CHECKED. Submit sends
+  `forkedFromTaskId` + the chosen `contextOptions` only when a source is selected;
+  the fork selection (and only it) is cleared after a successful submit.
+- **Task Console skills selector** — a collapsible **Skills** section after Tool
+  selection, fed by `GET /api/skills` (enabled + valid only, sorted by name — never a
+  hard-coded list). Mode select **Automatic / Manual / Auto + selected**; checkbox
+  grid with a `n/12 selected` counter (extra checkboxes disabled at the cap; a
+  defensive validate() guard). Collapsed header shows a minimal summary
+  ("automatic selection" or "n/12 selected · manual"). `skillsMode` is sent only when
+  it is not `auto`; `skills` only when the mode is not `auto` and the selection is
+  non-empty.
+- **Task Console execute-all switch** — a **"Execute every planned step, even after
+  the goal is achieved"** switch rendered only for the pre-plan planner; submits
+  `executeAllPlannedSteps: true` only when enabled.
+- **Our Products page** — the new `products.tsx` view (nav entry **Our Products**,
+  Rocket icon): responsive cards from `GET /api/products` with category, technology
+  chips, honest status badges (`live | demo | in-development`), optional external
+  link and screenshot; `demoView` entries open the demo INSIDE the console (the
+  Assistant chat and the Dashboard are the shipped demo entries). Honest loading,
+  empty and error states.
+- **Shared ShellTerminal** — one xterm.js shell component (`shell-terminal.tsx`)
+  renders BOTH the real-FS terminal (`fs-terminal.tsx` adapter) and the VFS terminal
+  (`vfs-terminal.tsx` adapter, distinct amber accent theme) in line mode: local echo,
+  Up/Down command history, Ctrl+C/Ctrl+L, replay-with-prompt fidelity on reconnect and
+  an explicitly configured **bold block cursor** (`cursorStyle: 'block'`, blink,
+  bright cursorAccent — never a default theme). Session tabs, New/Restart/Clear/Copy/
+  interrupt controls and the mobile layout are preserved; Enter now submits the
+  command as a real child process (see [Terminal](terminal.md)).

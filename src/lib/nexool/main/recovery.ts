@@ -36,11 +36,24 @@
 import { emitEvent } from '../eventbus';
 import { buildPlan } from './planner';
 import { assessRecovery } from './observer';
+import { getResolvedLimits } from '../config-limits';
 import type { MainState, PlanStep, TaskRecoveryState, ToolDefinition, ToolExecution } from '../types';
 
 /** v1.0.11 — a recovery pre-plan is deliberately SMALL: the goal is to unblock
- *  the failed step, not to re-accomplish the whole task. Bounded at 4 steps. */
+ *  the failed step, not to re-accomplish the whole task.
+ *  v1.1.0 — the cap is the configurable `planner.recoveryMaxPlanSteps`
+ *  central limit (previously the hard-coded 4); the export keeps the legacy
+ *  name as the documented fallback when the limits file is unreadable. */
 export const RECOVERY_PLAN_MAX_STEPS = 4;
+
+/** v1.1.0 — resolve the recovery plan cap from the central limits. */
+export function recoveryPlanMaxSteps(): number {
+  try {
+    return getResolvedLimits().planner.recoveryMaxPlanSteps;
+  } catch {
+    return RECOVERY_PLAN_MAX_STEPS;
+  }
+}
 
 export interface RecoveryFailureInput {
   /** Main-plan step id (undefined when a dynamic-subgoal action failed). */
@@ -71,6 +84,9 @@ export interface RecoveryHost {
   /** v1.0.11 — central task.recoveryMaxAttempts limit resolved for this task
    *  (2..4, default 4). Never hard-coded at the call site (spec §8). */
   recoveryMaxAttempts: number;
+  /** v1.1.0 — the task's AbortSignal: a force-stop unblocks the recovery
+   *  assessment LLM call instead of leaving it dangling. */
+  signal?: AbortSignal;
   state: MainState;
   /** Completed recovery cycles per failed-step key (§9 attempt counting) —
    *  in-memory on the task run, persists across separate recovery entries. */
@@ -206,18 +222,18 @@ export async function runPrePlanRecovery(
       `Main goal: ${host.goal}`,
       `Failed step: "${truncate(failure.failedStepTitle, 200)}"${failure.failedStepDetail ? ` (${truncate(failure.failedStepDetail, 300)})` : ''}`,
       `Failure: ${reason}`,
-      `Plan the MINIMAL recovery actions: inspect the current state, apply an alternate path, verify the result. At most ${RECOVERY_PLAN_MAX_STEPS} steps.`,
+      `Plan the MINIMAL recovery actions: inspect the current state, apply an alternate path, verify the result. At most ${recoveryPlanMaxSteps()} steps.`,
     ].join('\n');
 
     const plan = host.planRecovery
-      ? await host.planRecovery(recoveryRequest, subgoal.title, host.toolDefs, host.reasoningLevel, host.taskId, RECOVERY_PLAN_MAX_STEPS)
+      ? await host.planRecovery(recoveryRequest, subgoal.title, host.toolDefs, host.reasoningLevel, host.taskId, recoveryPlanMaxSteps())
       : await buildPlan(
         recoveryRequest,
         subgoal.title,
         host.toolDefs,
         host.reasoningLevel,
         host.taskId,
-        RECOVERY_PLAN_MAX_STEPS,
+        recoveryPlanMaxSteps(),
       );
     const recoverySteps: PlanStep[] = plan.steps.map((s, i) => ({
       ...s,
@@ -390,6 +406,7 @@ export async function runPrePlanRecovery(
       },
       host.reasoningLevel,
       host.taskId,
+      host.signal,
     );
 
     if (!assessment.recoverable) {

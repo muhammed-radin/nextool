@@ -24,10 +24,10 @@ The engine powers four decision points, all with strict JSON output and timeouts
 
 | Consumer | Module | Timeout |
 | --- | --- | --- |
-| Tool matching + parameter generation | `core/coremodule.ts` | 25 s (+1 retry) |
-| Plan decomposition + goal refinement | `main/planner.ts` | 25 s |
-| Goal-completion verification | `main/observer.ts` | 6 s |
-| Dynamic subgoal proposal & feedback revision | `main/loop.ts` | 10 s each |
+| Tool matching + parameter generation | `core/coremodule.ts` | `coreModule.llmTimeoutMs` — v1.1.0, default 5 min, `null` = unlimited (the removed hard-coded value was 25 s) (+1 stricter re-ask) |
+| Plan decomposition + goal refinement | `main/planner.ts` | `planner.llmTimeoutMs` — v1.1.0, default 60 s, `null` = unlimited (was 25 s) |
+| Goal-completion verification | `main/observer.ts` | `planner.verifyTimeoutMs` — v1.1.0, default 6 s, `null` = unlimited (was 6 s) |
+| Dynamic subgoal proposal & feedback revision | `main/loop.ts` | `planner.llmTimeoutMs` for the subgoal LLM call (v1.1.0; previously a separate 10 s race) |
 
 The fallback engine `heuristic-fallback` is a deterministic token-overlap matcher — not a
 model, but part of the AI core's resilience story (see

@@ -52,6 +52,13 @@ const SECTION_LABELS: Record<string, string> = {
   execution: 'Execution limits (sandbox)',
   childProcess: 'Terminal / child-process limits',
   task: 'Task & Live Mode limits',
+  coreModule: 'CoreModule LLM limits (v1.1.0)',
+  planner: 'Planner / Observer LLM limits (v1.1.0)',
+  terminal: 'Inspector terminal limits (v1.1.0)',
+  vfsTerminal: 'VFS shell allowed commands (v1.1.0)',
+  skills: 'Skills loading limits (v1.1.0)',
+  events: 'Event bus limits (v1.1.0)',
+  continuity: 'Task continuity limits (v1.1.0)',
   fs: 'Freedom-node (real fs) gate',
 };
 
@@ -330,20 +337,64 @@ export default function LimitationsView() {
                           >
                             {(prop.enum ?? []).map((v) => <option key={v} value={v}>{v}</option>)}
                           </select>
+                        ) : prop.type === 'array' ? (
+                          /* v1.1.0 §7.3 — dynamic control for array limits (e.g.
+                             vfsTerminal.allowedCommands): one command per line;
+                             an empty textarea + the nullable toggle maps to null
+                             (unrestricted = every implemented command). */
+                          <div className="w-full sm:w-56">
+                            {prop.nullable ? (
+                              <label className="mb-1 flex items-center justify-end gap-1.5 font-mono text-[10px] text-muted-foreground">
+                                unrestricted (null)
+                                <input
+                                  type="checkbox"
+                                  checked={prop.default === null}
+                                  onChange={(e) => setPropDefault(section, key, e.target.checked ? null : [])}
+                                  aria-label={`${section}.${key} unrestricted`}
+                                />
+                              </label>
+                            ) : null}
+                            {prop.default !== null ? (
+                              <Textarea
+                                value={Array.isArray(prop.default) ? (prop.default as string[]).join('\n') : ''}
+                                onChange={(e) => setPropDefault(section, key, e.target.value.split('\n').map((s) => s.trim()).filter(Boolean))}
+                                rows={4}
+                                className="border-white/[0.09] bg-white/[0.04] font-mono text-[11px]"
+                                aria-label={`${section}.${key} (one entry per line)`}
+                                placeholder="one entry per line"
+                              />
+                            ) : (
+                              <p className="text-right font-mono text-[10px] text-amber-300">null = every implemented command</p>
+                            )}
+                          </div>
                         ) : numeric ? (
-                          <Input
-                            type="number"
-                            value={String(prop.default ?? '')}
-                            min={prop.min}
-                            max={prop.max}
-                            step={prop.step ?? (prop.type === 'integer' ? 1 : 'any')}
-                            onChange={(e) => {
-                              const n = Number(e.target.value);
-                              if (Number.isFinite(n)) setPropDefault(section, key, prop.type === 'integer' ? Math.round(n) : n);
-                            }}
-                            className="h-9 w-full border-white/[0.09] bg-white/[0.04] font-mono text-xs sm:w-44"
-                            aria-label={`${section}.${key} value`}
-                          />
+                          <div className="w-full sm:w-44">
+                            {prop.nullable ? (
+                              <label className="mb-1 flex items-center justify-end gap-1.5 font-mono text-[10px] text-muted-foreground">
+                                unlimited (null)
+                                <input
+                                  type="checkbox"
+                                  checked={prop.default === null}
+                                  onChange={(e) => setPropDefault(section, key, e.target.checked ? null : (prop.min ?? 0))}
+                                  aria-label={`${section}.${key} unlimited`}
+                                />
+                              </label>
+                            ) : null}
+                            <Input
+                              type="number"
+                              value={prop.default === null ? '' : String(prop.default ?? '')}
+                              disabled={prop.default === null}
+                              min={prop.min}
+                              max={prop.max}
+                              step={prop.step ?? (prop.type === 'integer' ? 1 : 'any')}
+                              onChange={(e) => {
+                                const n = Number(e.target.value);
+                                if (Number.isFinite(n)) setPropDefault(section, key, prop.type === 'integer' ? Math.round(n) : n);
+                              }}
+                              className="h-9 w-full border-white/[0.09] bg-white/[0.04] font-mono text-xs"
+                              aria-label={`${section}.${key} value`}
+                            />
+                          </div>
                         ) : (
                           <Input
                             type="text"

@@ -268,3 +268,36 @@ and nothing else. Raising a limit never grants host-level privileges:
 - The executor timeout watchdog is interaction-aware: while a tool waits for a user
   answer (confirm/prompt) the watchdog defers and restores the full budget afterwards;
   confirmations resolve `false` on cancellation/expiry — never `true`.
+
+## v1.1.0 additions — boundaries unchanged
+
+v1.1.0 adds capabilities but changes NO security boundary:
+
+- **The VFS shell's `vfsTerminal.allowedCommands` is a CAP, not an escape.** The
+  server-side VFS shell (`/api/inspector/vfs/shell`) enforces the configured command
+  list on every execution — but the list only narrows the shell UX. The VFS root
+  boundary itself (path normalization, symlink refusal, `VFS_ACCESS` on escape) stays
+  code-enforced for EVERY command including the allowed ones; setting
+  `allowedCommands: null` (unrestricted) permits every IMPLEMENTED command — it does
+  not, and cannot, turn the VFS shell into a host shell. Chaining/piping
+  metacharacters are rejected; `echo … > file` redirection writes inside the VFS only.
+- **The four file-editing tools stay VFS-confined.** `fs.apply_edits`, `fs.find_replace`,
+  `fs.insert_text` and `fs.append_text` operate exclusively through the shared
+  directory-backed VFS (`openGlobalVfs → normalizeVirtualPath → resolveSecure` +
+  symlink refusal) — the same boundary as `fs.readfile`/`fs.writefile`. Host paths,
+  traversal and symlink escapes fail with `FS_ACCESS`; oversized files fail with
+  `FS_TOO_LARGE`. Their validation semantics (all-or-nothing edit sets, bounded
+  regex, honest zero-match) are correctness guarantees, not security exemptions.
+- **Force-stop kills ONLY task-owned processes.** The per-task registry
+  (`main/task-processes.ts`) tracks real host processes spawned on a task's behalf
+  (today: `fs.cmd` bash children). Stop terminates exactly those (SIGTERM → SIGKILL,
+  group kills for detached children) — never the standalone FS Inspector terminal, and
+  never unrelated host processes. The Late-write guard means a stopped task cannot be
+  resurrected by a completing parallel batch, and the decision-level guard means a
+  decision that resolved during stop never executes.
+- **The real-FS terminal remains an operator surface, not a tool surface.** It is the
+  documented REAL-filesystem console (like the read-only FS Inspector, but
+  interactive); MCP/restricted tool environments still have no route to it, and it is
+  never reachable from task tool code (`fs.cmd` remains the only task-driven host
+  command path, behind its double confirmation gate). A task force-stop deliberately
+  does not touch operator-opened terminal sessions.

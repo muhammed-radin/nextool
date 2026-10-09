@@ -382,6 +382,42 @@ examples, a writable zip in `exports/`, and a real Parquet import/export round-t
   Inherit keeps approval-required unless a higher layer enables; `tool.approval.*`
   flows are unchanged.
 
+## v1.1.0 verification workflows
+
+- **File-editing tools (32/32)** — `bun scripts/test-fs-edit-tools.ts` runs
+  real-behavior tests against `fs.apply_edits` / `fs.find_replace` / `fs.insert_text` /
+  `fs.append_text` in the shared VFS: multilingual text, empty files, 1–50 edit sets,
+  overlap rejection (`FS_EDITS_OVERLAP`), line/column + offset units, anchors with
+  occurrence selection, regions, `maxReplacements` caps, honest zero-match, newline
+  fixup, createIfMissing and the VFS boundary (traversal refused). Expected output:
+  32 ✓ / 0 ✗.
+- **Real-FS terminal acceptance (via API)** — against the rebuilt spawn-per-command
+  backend: `pwd`/`ls`/`echo`/`node`/`git` stream stdout/stderr live over
+  `/api/inspector/terminal/stream`; a missing binary reports the real bash exit code
+  127 + stderr; `cd` tracking follows the wrapper cwd marker; interrupt kills the
+  process group (~724 ms measured); a concurrent `exec` is refused with 409
+  `FS_TERMINAL_BUSY`; sessions are never stuck in `starting` (the v1.0.16 409-race
+  class is gone).
+- **VFS shell acceptance (via API)** — commands execute server-side inside the VFS;
+  a command outside `vfsTerminal.allowedCommands` exits 126 with the configuration
+  message; escape attempts are refused (`VFS_ACCESS`); chaining/piping metacharacters
+  are rejected (exit 2).
+- **CoreModule Live Output streaming (via API)** — start a task and open
+  `GET /api/core/stream`: real `core.chunk` deltas arrive while the provider
+  generates, the assembled text parses into the decision (`core.decision`), and the
+  task completes (with an approval gate). Reconnects replay bounded snapshots; the
+  `streamed` flag honestly reports a non-streaming provider answer.
+- **Continuation / fork / manual skills (via API)** — create a task with
+  `config.continuationOfTaskId` (or `forkedFromTaskId`) + `contextOptions` + manual
+  `skills`/`skillsMode`: the runtime emits `task.context_seeded` (lineage, bounded
+  block, inherited skills), the `skills.selected` event records mode/selected/excluded
+  with explanations, the config round-trips through `GET /api/tasks/{id}`, and the
+  source task is untouched.
+- **Configurable deadlines** — set `coreModule.llmTimeoutMs` /
+  `planner.llmTimeoutMs` / `planner.verifyTimeoutMs` on the Limitations page (including
+  `null` = unlimited via the "unlimited (null)" checkbox) and observe the hot-reload
+  (≤ 2 s) plus the `coreTimeoutMs`/`failureStage` diagnostics in `core.decision` events.
+
 ## Known gaps (by design)
 
 - `loop.ts` state machines, the training/benchmark engines and task-level

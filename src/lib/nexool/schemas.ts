@@ -126,6 +126,31 @@ export const taskConfigSchema = z
     limitContinuations: intLimit('limitContinuations', 0, 5).optional(),
     sessionId: z.string().trim().max(200).optional(),
     context: jsonObject.optional(),
+    // v1.1.0 §2 — Continue Task: the NEW task's id relationship to the
+    // ORIGINAL terminal task (never mutated). Stored in config so the
+    // Task Preview can show the lineage.
+    continuationOfTaskId: z.string().trim().regex(/^task_[a-z0-9]+$/).optional(),
+    // v1.1.0 §3 — fork-from-recent: the SOURCE task a new independent task
+    // was branched from (old tool calls are never replayed).
+    forkedFromTaskId: z.string().trim().regex(/^task_[a-z0-9]+$/).optional(),
+    // v1.1.0 §3.2 — which context classes to reuse from the source task.
+    contextOptions: z
+      .object({
+        result: z.boolean().optional(),
+        plan: z.boolean().optional(),
+        executions: z.boolean().optional(),
+        memory: z.boolean().optional(),
+        skills: z.boolean().optional(),
+      })
+      .partial()
+      .strict()
+      .optional(),
+    // v1.1.0 §8 — manual skill selection + selection mode.
+    skills: z.array(z.string().trim().min(1).max(64)).max(12).optional(),
+    skillsMode: z.enum(['auto', 'manual', 'auto+manual']).optional(),
+    // v1.1.0 §10 — pre-plan only: keep executing remaining planned steps
+    // after the goal is verified (default false = normal early completion).
+    executeAllPlannedSteps: z.boolean().optional(),
   })
   .partial()
   .strict();

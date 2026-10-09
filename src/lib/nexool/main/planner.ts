@@ -1,15 +1,20 @@
 /**
  * NexTool Planner — decomposes a request into ordered, minimal steps.
  * LLM-driven with a deterministic fallback plan.
+ *
+ * v1.1.0 (§11.5): the hidden 25-second PLANNER_TIMEOUT_MS is GONE — the
+ * deadline is the separate, configurable `planner.llmTimeoutMs` central
+ * limit (null = no application-level timeout), intentionally distinct from
+ * coreModule.llmTimeoutMs / task.taskTimeoutMs / tool timeouts. Planner
+ * calls accept the task's AbortSignal so a force-stop unblocks them.
  */
 import type { PlanStep, ToolDefinition } from '../types';
 import { emitEvent } from '../eventbus';
-// v1.0.11 §50 — shared cached client (one init per process).
-import { getZai } from '../core/coremodule';
+// v1.1.0 — shared provider-call layer (configurable timeout, abort).
+import { callLlm } from '../core/llm-call';
+import { getResolvedLimits } from '../config-limits';
 // v1.0.12 Phase 7 — custom task instructions (delimited user block).
 import { appendInstructionsBlock } from '../instructions';
-
-const PLANNER_TIMEOUT_MS = 25_000;
 /**
  * v1.0.10 §16 — the pre-plan maximum is now CONFIGURABLE (central limits
  * task.prePlanMaxSteps: default 10, hard maximum 122) instead of the old
@@ -118,28 +123,29 @@ export async function buildPlan(
   taskId?: string,
   maxSteps: number = DEFAULT_PRE_PLAN_MAX_STEPS,
   instructions?: string | null,
+  signal?: AbortSignal,
 ): Promise<Plan> {
   const effectiveMaxSteps = Math.min(Math.max(Math.round(Number(maxSteps) || DEFAULT_PRE_PLAN_MAX_STEPS), 1), 122);
   const started = Date.now();
+  let configuredTimeoutMs: number | null = 60_000;
   try {
-    const zai = await getZai();
+    configuredTimeoutMs = getResolvedLimits().planner.llmTimeoutMs;
+  } catch {
+    /* limits file problem — keep the documented 60-second default */
+  }
+  try {
     const { system, user } = buildPlannerMessages(request, goal, toolDefs, reasoningLevel, effectiveMaxSteps, instructions);
 
-    const res = await Promise.race([
-      zai.chat.completions.create({
-        messages: [
-          { role: 'assistant' as const, content: system },
-          { role: 'user' as const, content: user },
-        ],
-        thinking: { type: 'disabled' },
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Planner LLM call timed out')), PLANNER_TIMEOUT_MS),
-      ),
-    ]);
+    const { content } = await callLlm({
+      messages: [
+        { role: 'assistant', content: system },
+        { role: 'user', content: user },
+      ],
+      timeoutMs: configuredTimeoutMs,
+      signal,
+    });
 
-    const content = res?.choices?.[0]?.message?.content ?? '';
-    const cleaned = content.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
+    const cleaned = (content ?? '').replace(/```json\s*/gi, '').replace(/```/g, '').trim();
     const startIdx = cleaned.indexOf('{');
     const endIdx = cleaned.lastIndexOf('}');
     if (startIdx !== -1 && endIdx > startIdx) {

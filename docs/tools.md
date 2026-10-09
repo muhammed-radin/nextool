@@ -461,8 +461,41 @@ Native filesystem tools (built-in, operate only on the shared VFS):
 | `fs.find` | **v1.0.13** Name search with configurable depth (0 = start dir only), files-only/folders-only, case sensitivity; result-capped |
 | `fs.copy` | **v1.0.13** Copy a file or a whole folder (recursive) inside the VFS |
 | `fs.move` | **v1.0.13** Move/rename a file or folder inside the VFS |
-| `fs.cmd` | **v1.0.13** Execute a terminal command on the host (bash, confined to the runtime working directory). ALWAYS requires explicit user confirmation — it is on the `FORCE_APPROVAL_TOOLS` list and carries a second handler-level gate for subtool/test contexts. 30 s default / 120 s max timeout, 256 KiB output caps |
+| `fs.apply_edits` | **v1.1.0** Apply 1–50 validated, non-overlapping line/column or character-offset edits (`op: replace_range\|insert_at\|remove_range`) as ONE atomic write — the whole set is validated first, overlapping edits abort the call (`FS_EDITS_OVERLAP`) |
+| `fs.find_replace` | **v1.1.0** Literal or safely-bounded regex replacement: case toggle, optional line region, `maxReplacements` cap, `matchCount`/`replacementCount` in the result, honest zero-match (`changed: false`) |
+| `fs.insert_text` | **v1.1.0** Insert at `{ line, column }` or before/after a matched anchor (with occurrence selection) |
+| `fs.append_text` | **v1.1.0** End-of-file append with newline fixup (`ensureNewline`) and optional creation (`createIfMissing`) |
+| `fs.cmd` | **v1.0.13** Execute a terminal command on the host (bash, confined to the runtime working directory). ALWAYS requires explicit user confirmation — it is on the `FORCE_APPROVAL_TOOLS` list and carries a second handler-level gate for subtool/test contexts. 30 s default / 120 s max timeout, 256 KiB output caps. **v1.1.0: every spawned child is registered in the task-owned process registry, so a force-stop terminates it (see [Tool Runtime](tool-runtime.md) and [Security](security.md))** |
 | `fs.download` | **v1.0.13** Register a VFS file for download → short-lived console URL `/api/fsdownloads/<token>` (10 min TTL, re-verifies the VFS boundary per request) |
 | `fs.upload` | **v1.0.13** Ask the operator for a file ("Upload a file — [Choose file] [Cancel]") and store it in the shared VFS; bounded 120 s wait window, honest `FILE_REQUEST_TIMEOUT` on expiry |
+
+### File-editing tools — schemas and semantics (v1.1.0 §4)
+
+`fs.apply_edits`, `fs.find_replace`, `fs.insert_text` and `fs.append_text`
+(`src/lib/nexool/tools/fs-edit-tools.ts`) are precise text-editing tools for the
+shared VFS. Shared conventions:
+
+- **VFS-confined** — they read and write exclusively through
+  `openGlobalVfs → normalizeVirtualPath → resolveSecure` + symlink refusal, exactly
+  like every `fs.*` sibling; traversal/escape attempts fail with `FS_ACCESS`, missing
+  files with `FS_NOT_FOUND`, oversized text/files with `FS_TOO_LARGE` (files above
+  ~4 M chars are refused for text editing).
+- **Durable write-then-report** — the file is written once and the structured result
+  (`success/path/operation/changed/editCount|matchCount/replacementCount/beforeSize/
+  afterSize`) is returned only after the write returned. Destructive usage flows the
+  standard approval hierarchy (`autoExecuteTools` resolution) like `fs.writefile`.
+
+| Tool | Schema (essential params) | Validation semantics |
+| --- | --- | --- |
+| `fs.apply_edits` | `path` (required), `edits[]` 1–50 × `{ op, unit?, startLine?, startColumn?, endLine?, endColumn?, offset?, length?, text? }` | `op` is `replace_range \| insert_at \| remove_range`; `unit` is `line` (1-based lines, 0-based columns; `endColumn` omitted = end of line) or `offset` (integer ranges within the file). The ENTIRE set is validated BEFORE anything is written; overlapping/conflicting ranges reject the whole call with `FS_EDITS_OVERLAP` (all-or-nothing — never a partial patch). Result lists every applied range. |
+| `fs.find_replace` | `path`, `find` (required), `replace?`, `regex?`, `caseSensitive?` (default true), `maxReplacements?`, `region? { startLine, endLine }` | Regex mode is SAFELY BOUNDED: patterns > 500 chars are refused, a pattern exceeding 200 000 match steps fails with `REGEX_RISK` (it cannot pin the runtime), invalid patterns → `REGEX_INVALID`. An explicit zero-match returns `success: true, changed: false, matchCount: 0` with the message "No occurrences found — the file was NOT modified" — never a disguised success. `maxReplacements` keeps the remaining matches intact and says so. |
+| `fs.insert_text` | `path`, `text` (required), exactly ONE of `at { line, column? }` or `anchor { find, occurrence?, position? }` | `at.line` is 1-based, `column` 0-based; a line beyond EOF is rejected with an append hint. `anchor.position` is `before` (default) / `after`; `occurrence` selects among multiple matches; a missing anchor fails with `FS_ANCHOR_NOT_FOUND`. The rest of the file is preserved byte-for-byte. |
+| `fs.append_text` | `path`, `text` (required), `ensureNewline?` (default true), `createIfMissing?` (default false) | `ensureNewline` inserts a leading newline when the file does not end with one (no glued lines); without `createIfMissing` a missing file fails with `FS_NOT_FOUND` (with it, the file is created and the result reports `created`). |
+
+Verified by `bun scripts/test-fs-edit-tools.ts` — **32/32** real-behavior tests
+(multilingual text, empty files, overlap rejection, anchors, regions, occurrence caps,
+honest zero-match, VFS boundary). See
+[Testing](testing.md#v110-verification-workflows) and the
+[v1.1.0 release page](release-1.1.0.md).
 
 Built-in tools are visible but **not exportable** — only custom tools can be exported (§2.2).

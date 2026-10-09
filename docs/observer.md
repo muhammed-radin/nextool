@@ -56,10 +56,13 @@ success markers (`healthy`, `completed successfully`, `generated and saved`, `se
 `nothing`). Complete only if a positive marker is present and no negative one. Engine is
 `heuristic-fallback`.
 
-**LLM path (levels 3–6)** — chat completion with a 6 000 ms timeout
-(`VERIFY_TIMEOUT_MS`) asking for strict JSON `{"complete": true|false, "reason": "…"}`
-based on the goal and the latest observation. Parsed `reason` is capped at 300 chars;
-engine `llm-core`.
+**LLM path (levels 3–6)** — chat completion with the configurable
+`planner.verifyTimeoutMs` deadline (v1.1.0 — default 6 000 ms; the former hard-coded
+`VERIFY_TIMEOUT_MS` is removed; `null` = no application-level timeout) asking for strict
+JSON `{"complete": true|false, "reason": "…"}` based on the goal and the latest
+observation. Parsed `reason` is capped at 300 chars;
+engine `llm-core`. The task's AbortSignal is honored — a force-stop unblocks the
+verification call immediately.
 
 **Degradation** — if the LLM call fails or returns garbage, an
 `observer.verify_fallback` event (priority 8) is emitted and the check conservatively
